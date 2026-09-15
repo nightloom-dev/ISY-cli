@@ -1,0 +1,60 @@
+{
+  "name": "@nightloom/isy",
+  "version": "1.0.0",
+  "description": "CLI for ISY: uploads AI coding-agent sessions so the process behind a pull request gets reviewed, not just the diff.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "isy": "dist/index.js"
+  },
+  "//": "The server runs the same stage 0 as `isy analyze`, so the parser and the detectors are exported from here instead of copied into it.",
+  "exports": {
+    "./package.json": "./package.json",
+    "./parser": "./dist/parser.js",
+    "./mask-paths": "./dist/mask-paths.js",
+    "./stage0": "./dist/stage0.js",
+    "./types": "./dist/types.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/test"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nightloom-dev/ISY-cli.git"
+  },
+  "homepage": "https://iseeyaai.com",
+  "bugs": {
+    "url": "https://github.com/nightloom-dev/ISY-cli/issues"
+  },
+  "keywords": [
+    "cli",
+    "code-review",
+    "claude-code",
+    "codex",
+    "kimi",
+    "ai-agents",
+    "git-hooks",
+    "pull-request"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "test": "node --import tsx --test src/test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build",
+    "calibrate:corpus": "tsx src/index.ts analyze \"$HOME/.claude/projects\""
+  },
+  "devDependencies": {
+    "@types/node": "^26",
+    "tsx": "^4",
+    "typescript": "^7.0.2"
+  }
+}

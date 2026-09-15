@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "sourceMap": true,
+    // TypeScript 7 does not auto-include @types hoisted next to the package.
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "src",
+    // The server imports `isy/stage0`, which needs the types alongside the JS.
+    "declaration": true
+  },
+  "include": ["src"]
+}

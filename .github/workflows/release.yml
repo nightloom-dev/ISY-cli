@@ -1,0 +1,41 @@
+name: Release
+
+# Tag it, and the tarball comes from a commit anyone can read:
+#   npm version minor && git push --follow-tags
+#
+# Published to `next`, never straight to `latest`. The stage 0 fixtures live in
+# the server repository, so a detector change is calibrated against the
+# published build before it becomes the version every install pulls:
+#   npm dist-tag add @nightloom/isy@<version> latest
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Trusted publishing: npm exchanges this token for the right to publish, so
+  # there is no NPM_TOKEN in this repository. It has to be configured once on
+  # npmjs.com (package → Settings → Trusted publisher: this repo, this file),
+  # which needs the package to exist — so the first version is published by
+  # hand and every one after it comes from here.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # `prepack` builds, so dist is whatever this commit compiles to.
+      - run: npm publish --provenance --access public --tag next
