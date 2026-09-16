@@ -11,7 +11,13 @@ import {
 import { looksAbsolute, maskPath } from "./mask-paths.js";
 import type { Candidate, ParsedSession, SignalCategory } from "./types.js";
 
-export const MIN_ASSISTANT_RECORDS = 20;
+/**
+ * Length is counted in tool calls, not transcript records: Claude Code writes
+ * each block of one reply as its own record, while Codex packs several calls
+ * into one harness script, so the same work was 20+ records in one log and 15
+ * in the other.
+ */
+export const MIN_TOOL_USES = 3;
 
 export type IneligibleReason = "too-short" | "no-file-edits";
 
@@ -25,8 +31,9 @@ export interface Stage0Result {
 }
 
 export function eligibility(session: ParsedSession): IneligibleReason | undefined {
-  if (session.meta.assistantRecords < MIN_ASSISTANT_RECORDS) return "too-short";
+  // Edits first: a session that never wrote is that, however short it was.
   if (!session.meta.hasFileEdits) return "no-file-edits";
+  if (session.toolUses.length < MIN_TOOL_USES) return "too-short";
   return undefined;
 }
 

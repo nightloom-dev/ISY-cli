@@ -12,7 +12,7 @@ import {
   packageName,
 } from "../detectors.js";
 import { parseLines } from "../parser.js";
-import { MIN_ASSISTANT_RECORDS, runStage0 } from "../stage0.js";
+import { MIN_TOOL_USES, runStage0 } from "../stage0.js";
 import {
   analyzeFiles,
   buildReport,
@@ -42,13 +42,22 @@ function assistant(uuid: string, parentUuid: string | null, content: unknown[]):
   };
 }
 
+/** Twenty records ending in `pad19`, the first of them path-less Globs enough to pass the length gate. */
+function filler(): unknown[] {
+  const records: unknown[] = [];
+  for (let i = 0; i < 20; i += 1) {
+    const content =
+      i < MIN_TOOL_USES
+        ? [{ type: "tool_use", id: `pad-t${i}`, name: "Glob", input: { pattern: "*" } }]
+        : [{ type: "text", text: "x" }];
+    records.push(assistant(`pad${i}`, i === 0 ? null : `pad${i - 1}`, content));
+  }
+  return records;
+}
+
 function padded(records: unknown[]): ParsedSession {
   clock = 0;
-  const filler: unknown[] = [];
-  for (let i = 0; i < MIN_ASSISTANT_RECORDS; i += 1) {
-    filler.push(assistant(`pad${i}`, i === 0 ? null : `pad${i - 1}`, [{ type: "text", text: "x" }]));
-  }
-  return parseLines([...filler, ...records].map((record) => JSON.stringify(record)));
+  return parseLines([...filler(), ...records].map((record) => JSON.stringify(record)));
 }
 
 test("recognises dependency manifests by filename", () => {
@@ -334,12 +343,9 @@ test("stage 0 reports whether known_gap is even reachable", () => {
 
 async function fixture(): Promise<{ dir: string; file: string }> {
   const dir = await mkdtemp(join(tmpdir(), "isy-analyze-"));
-  const records: unknown[] = [];
-  for (let i = 0; i < MIN_ASSISTANT_RECORDS; i += 1) {
-    records.push(assistant(`pad${i}`, i === 0 ? null : `pad${i - 1}`, [{ type: "text", text: "x" }]));
-  }
+  const records = filler();
   records.push(
-    assistant("dep", `pad${MIN_ASSISTANT_RECORDS - 1}`, [
+    assistant("dep", "pad19", [
       {
         type: "tool_use",
         id: "t1",

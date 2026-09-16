@@ -20,6 +20,8 @@ const HARNESS_CALL = /tools\.(exec_command|apply_patch)\s*\(/g;
 const CMD_ARGUMENT = /^\s*\{[^}]*?(?:\bcmd|"cmd")\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]/s;
 /** `("*** Begin Patch…")` — one string literal and nothing glued onto it. */
 const PATCH_ARGUMENT = /^\s*("(?:[^"\\]|\\.)*")\s*[,)]/s;
+/** `(patch)` — a bare name, which Codex 0.154 binds to the patch one line earlier. */
+const NAME_ARGUMENT = /^\s*([A-Za-z_$][\w$]*)\s*[,)]/;
 /** Any call into the harness, to tell a script that only looks from one that may write. */
 const ANY_HARNESS_CALL = /tools\.([A-Za-z0-9_]+)\s*\(/g;
 /** Harness tools that fetch or look and never touch the working tree. */
@@ -99,12 +101,11 @@ export function parseApplyPatch(patch: string): PatchEdit[] {
   const closeHunk = (): void => {
     if (!update?.open) return;
     // A section with no `+`/`-` at all is context Codex emitted for position only.
-    if (update.open.old.length > 0 || update.open.new.length > 0) {
-      update.hunks.push({
-        old_string: update.open.old.join("\n"),
-        new_string: update.open.new.join("\n"),
-      });
-    }
+    // Context lands on both sides, so such a section is old === new: kept, it
+    // changes nothing, and the same section in a later patch reads as a revert.
+    const old_string = update.open.old.join("\n");
+    const new_string = update.open.new.join("\n");
+    if (old_string !== new_string) update.hunks.push({ old_string, new_string });
     update.open = undefined;
   };
 
@@ -196,17 +197,35 @@ function literalText(literal: string): string | undefined {
 }
 
 /**
+ * The patch literal an `apply_patch` call passes: written in place, or through
+ * a name the script binds with `const` exactly once. `const` because nothing can
+ * reassign it between the binding and the call; a name bound twice (shadowed in
+ * a nested block) or with `let` may not hold that literal, so it stays unread.
+ */
+function patchLiteral(script: string, rest: string): string | undefined {
+  const literal = PATCH_ARGUMENT.exec(rest)?.[1];
+  if (literal !== undefined) return literal;
+  const name = NAME_ARGUMENT.exec(rest)?.[1];
+  if (name === undefined) return undefined;
+  const binding = new RegExp(`\\bconst\\s+${name.replace(/\$/g, "\\$")}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")\\s*;`, "g");
+  const bound = [...script.matchAll(binding)];
+  return bound.length === 1 ? bound[0]![1] : undefined;
+}
+
+/**
  * Every tool call an `exec` harness script makes, in order: each
  * `tools.exec_command` as a Bash call and each `tools.apply_patch` as the edits
  * it applies. Newer Codex builds route nearly everything through this harness,
  * so reading only its first command left their edits invisible to stage 0.
  *
  * `opaque` says a call was there whose argument is not one plain literal —
- * `{cmd: "sed -n '" + range + "p' a.ts"}`, a variable, a patch that parsed to
- * nothing. Half a command would lie to the shell detectors, so such a call is
- * left out, and the script keeps its own name beside what was read.
+ * `{cmd: "sed -n '" + range + "p' a.ts"}`, a name bound to anything but one
+ * `const` literal, a patch that parsed to nothing. Half a command would lie to
+ * the shell detectors, so such a call is left out, and the script keeps its own
+ * name beside what was read.
  *
- * ponytail: literal arguments only; reading the rest means running the snippet.
+ * ponytail: literal arguments and `const`-bound patches only; reading the rest
+ * means running the snippet.
  */
 function harnessCalls(script: string): { calls: PatchEdit[]; opaque: boolean } {
   const calls: PatchEdit[] = [];
@@ -215,7 +234,7 @@ function harnessCalls(script: string): { calls: PatchEdit[]; opaque: boolean } {
   for (const match of script.matchAll(HARNESS_CALL)) {
     const rest = script.slice(match.index + match[0].length);
     const shell = match[1] === "exec_command";
-    const literal = (shell ? CMD_ARGUMENT : PATCH_ARGUMENT).exec(rest)?.[1];
+    const literal = shell ? CMD_ARGUMENT.exec(rest)?.[1] : patchLiteral(script, rest);
     const text = literal === undefined ? undefined : literalText(literal);
     const read: PatchEdit[] =
       text === undefined ? [] : shell ? [{ tool: "Bash", input: { command: text } }] : parseApplyPatch(text);

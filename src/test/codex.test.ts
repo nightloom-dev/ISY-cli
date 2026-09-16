@@ -7,6 +7,7 @@ import { detectAgent } from "../agents/index.js";
 import { codexAgent, codexHooksPath, codexSessionsDir } from "../agents/codex.js";
 import { isCodexTranscript, parseApplyPatch, toClaudeRecords } from "../agents/codex-records.js";
 import { collectStatus, formatStatus } from "../commands/status.js";
+import { detectAbandonedApproach } from "../detectors.js";
 import { parseLines } from "../parser.js";
 import { pendingAlertPath } from "../paths.js";
 
@@ -146,6 +147,48 @@ test("reads every call an exec harness script makes, edits included", () => {
   const edits = [...session.fileEdits.entries()].find(([path]) => path.endsWith("src/cache.ts"))?.[1];
   assert.equal(edits?.[0]?.newString, "const ttl = 60;");
   assert.equal(session.meta.hasFileEdits, true);
+});
+
+test("reads a patch the script binds to a const before applying it", () => {
+  // The shape Codex 0.154 writes: the patch on one line, the call on the next.
+  const patch = "*** Begin Patch\n*** Update File: src/cache.ts\n@@\n-const ttl = 1;\n+const ttl = 60;\n*** End Patch\n";
+  const script = `const patch = ${JSON.stringify(patch)};\ntext(await tools.apply_patch(patch));\n`;
+  const session = convert([
+    META,
+    item({ type: "custom_tool_call", name: "exec", call_id: "call-1", input: script }),
+  ]);
+
+  assert.deepEqual(session.toolUses.map((use) => use.name), ["MultiEdit"]);
+  assert.equal(session.meta.editToolUses, 1);
+});
+
+test("a patch section holding only context is no edit, so repeating it is no revert", () => {
+  const patch =
+    "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-const a = 1;\n+const a = 2;\n@@\n export function set() {\n*** End Patch\n";
+  const session = convert([
+    META,
+    item({ type: "custom_tool_call", name: "apply_patch", call_id: "call-1", input: patch }),
+    item({ type: "custom_tool_call", name: "apply_patch", call_id: "call-2", input: patch }),
+  ]);
+
+  const edits = [...session.fileEdits.values()].flat();
+  assert.equal(edits.length, 2);
+  assert.ok(edits.every((edit) => edit.oldString !== edit.newString));
+  assert.deepEqual(detectAbandonedApproach(session), []);
+});
+
+test("leaves a patch name unread when the script binds it with let or twice", () => {
+  const patch = JSON.stringify("*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch\n");
+  for (const script of [
+    `let patch = ${patch};\nawait tools.apply_patch(patch);`,
+    `const patch = ${patch};\n{ const patch = ${patch}; }\nawait tools.apply_patch(patch);`,
+  ]) {
+    const session = convert([
+      META,
+      item({ type: "custom_tool_call", name: "exec", call_id: "call-1", input: script }),
+    ]);
+    assert.deepEqual(session.toolUses.map((use) => use.name), ["exec"], script);
+  }
 });
 
 test("keeps the harness in view when a call's argument cannot be read", () => {

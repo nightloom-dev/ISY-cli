@@ -12,7 +12,7 @@ import {
   isTestFile,
   weakensTest,
 } from "../detectors.js";
-import { MIN_ASSISTANT_RECORDS, eligibility, runStage0 } from "../stage0.js";
+import { MIN_TOOL_USES, eligibility, runStage0 } from "../stage0.js";
 import type { ParsedSession } from "../types.js";
 
 let clock = 0;
@@ -50,15 +50,22 @@ function build(records: unknown[]): ParsedSession {
   return parseLines(records.map((record) => JSON.stringify(record)));
 }
 
+/** A path-less Glob: a tool call that reads no file and trips no detector. */
+function lookup(i: number): unknown {
+  return { type: "tool_use", id: `pad-t${i}`, name: "Glob", input: { pattern: "*" } };
+}
+
+/** Twenty records ending in `pad19`, the first of them tool calls enough to pass the length gate. */
 function padded(records: unknown[]): ParsedSession {
   const filler: unknown[] = [];
-  for (let i = 0; i < MIN_ASSISTANT_RECORDS; i += 1) {
-    filler.push(assistant(`pad${i}`, i === 0 ? null : `pad${i - 1}`, [{ type: "text", text: "x" }]));
+  for (let i = 0; i < 20; i += 1) {
+    const content = i < MIN_TOOL_USES ? [lookup(i)] : [{ type: "text", text: "x" }];
+    filler.push(assistant(`pad${i}`, i === 0 ? null : `pad${i - 1}`, content));
   }
   return build([...filler, ...records]);
 }
 
-test("rejects a session with too few assistant records", () => {
+test("rejects a session with too few tool calls", () => {
   const session = build([
     assistant("a", null, [
       { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/r/a.ts", old_string: "x", new_string: "y" } },
@@ -66,6 +73,23 @@ test("rejects a session with too few assistant records", () => {
   ]);
   assert.equal(eligibility(session), "too-short");
   assert.deepEqual(runStage0(session).candidates, []);
+});
+
+test("counts length in tool calls, so a few records holding several calls pass", () => {
+  // Codex packs several calls into one harness script: few records, real work.
+  const session = build([
+    assistant("a", null, [
+      lookup(0),
+      { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/r/a.ts", old_string: "x", new_string: "y" } },
+      { type: "tool_use", id: "t2", name: "Bash", input: { command: "npm test" } },
+    ]),
+  ]);
+  assert.equal(eligibility(session), undefined);
+});
+
+test("a short session that never edited is told apart from a short one that did", () => {
+  const session = build([assistant("a", null, [lookup(0)])]);
+  assert.equal(eligibility(session), "no-file-edits");
 });
 
 test("rejects a long session that never edited a file", () => {
