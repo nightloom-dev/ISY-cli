@@ -54,9 +54,9 @@ database or to a model.
   way up. It is not a TODO; do not "fix" it blind.
 - **Stage 0 has no fixtures here.** The induced corpus and the snapshots it is
   calibrated against live with the server, so a detector change is verified by
-  publishing to `next` and calibrating there before `latest` moves.
-  `npm run calibrate:corpus` runs the detectors over the real sessions on your
-  own machine and uploads nothing.
+  publishing a prerelease (`1.2.0-next.0` lands on `next`) and calibrating
+  there before `latest` moves. `npm run calibrate:corpus` runs the detectors
+  over the real sessions on your own machine and uploads nothing.
 
 ## 5. Conventions
 
@@ -79,6 +79,10 @@ npm run typecheck
 npm link          # puts this checkout on PATH as `isy`
 ```
 
-Releases: `npm version <patch|minor|major> && git push --follow-tags` publishes
-to the `next` tag from CI; `npm dist-tag add @nightloom/isy@<version> latest`
-promotes it.
+Releases are continuous from `main` (`.github/workflows/release.yml`): every
+push checks the registry, and a version that is not there yet is built, tested,
+published and tagged `v<version>`. So a release is one commit that bumps the
+version — `npm version <patch|minor|major> --no-git-tag-version` — and nothing
+else has to be done. A plain version goes to `latest`; a prerelease
+(`npm version prerelease --preid next`) goes to `next`, and
+`npm dist-tag add @nightloom/isy@<version> latest` promotes it.
