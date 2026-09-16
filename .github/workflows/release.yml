@@ -1,29 +1,92 @@
 name: Release
 
-# Tag it, and the tarball comes from a commit anyone can read:
-#   npm version minor && git push --follow-tags
+# Continuous delivery from main. Every push is checked against the registry:
+# when the version in package.json is not published yet, this commit is built,
+# tested and published, then tagged `v<version>` with a GitHub release. When it
+# is already there, the run ends without doing anything — so a push that only
+# touches code, docs or tests is a no-op, and a release is exactly one commit
+# that bumps the version (`npm version <patch|minor|major> --no-git-tag-version`
+# in the pull request, or on main directly).
 #
-# Published to `next`, never straight to `latest`. The stage 0 fixtures live in
-# the server repository, so a detector change is calibrated against the
-# published build before it becomes the version every install pulls:
-#   npm dist-tag add @nightloom/isy@<version> latest
+# Which dist-tag it lands on follows from the version itself:
+#   1.2.0         → `latest`, the version every install pulls
+#   1.2.0-next.0  → `next`, for calibrating a detector change against the
+#                   stage 0 fixtures in the server repository before it is
+#                   promoted: npm dist-tag add @nightloom/isy@<version> latest
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
+
+# Two pushes in a row must not race for the same version: the second waits for
+# the first, sees the version on the registry, and stops.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
   contents: read
-  # Trusted publishing: npm exchanges this token for the right to publish, so
-  # there is no NPM_TOKEN in this repository. It has to be configured once on
-  # npmjs.com (package → Settings → Trusted publisher: this repo, this file),
-  # which needs the package to exist — so the first version is published by
-  # hand and every one after it comes from here.
-  id-token: write
 
 jobs:
-  publish:
+  version:
+    name: Is this version published?
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+      name: ${{ steps.check.outputs.name }}
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="$(node -p 'require("./package.json").name')"
+          version="$(node -p 'require("./package.json").version')"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # A hyphen in the version is a semver prerelease (1.2.0-next.0).
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # `npm view` exits 0 when the exact version exists and E404 when it
+          # does not. Anything else (network, registry down) is a failure, not
+          # a reason to publish.
+          err="$RUNNER_TEMP/npm-view.err"
+          if npm view "$name@$version" version >/dev/null 2>"$err"; then
+            echo "$name@$version is already on the registry — nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          elif grep -q 'E404' "$err"; then
+            echo "$name@$version is not published yet."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            cat "$err"
+            exit 1
+          fi
+
+  publish:
+    name: Publish ${{ needs.version.outputs.name }}@${{ needs.version.outputs.version }}
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      # The tag and the GitHub release are created from here after publishing.
+      contents: write
+      # Trusted publishing: npm exchanges this token for the right to publish,
+      # so there is no NPM_TOKEN in this repository. It is configured once on
+      # npmjs.com (package → Settings → Trusted publisher: this repository,
+      # this workflow file).
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -33,9 +96,29 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
+      # Trusted publishing needs npm 11.5.1 or newer, and the npm bundled with
+      # Node 22 is a 10.x.
+      - run: npm install -g npm@latest
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
 
       # `prepack` builds, so dist is whatever this commit compiles to.
-      - run: npm publish --provenance --access public --tag next
+      - name: Publish to npm
+        run: npm publish --provenance --access public --tag "$TAG"
+        env:
+          TAG: ${{ needs.version.outputs.prerelease == 'true' && 'next' || 'latest' }}
+
+      - name: Tag and release on GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(--target "$GITHUB_SHA" --generate-notes --title "v$VERSION")
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "v$VERSION" "${args[@]}"
