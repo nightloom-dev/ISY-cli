@@ -75,7 +75,7 @@ jobs:
           fi
 
   publish:
-    name: Publish ${{ needs.version.outputs.name }}@${{ needs.version.outputs.version }}
+    name: Publish to npm
     needs: version
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
