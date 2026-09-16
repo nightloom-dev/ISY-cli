@@ -1,6 +1,6 @@
 {
   "name": "@nightloom/isy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI for ISY: uploads AI coding-agent sessions so the process behind a pull request gets reviewed, not just the diff.",
   "license": "MIT",
   "type": "module",
