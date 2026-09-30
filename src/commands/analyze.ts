@@ -1,13 +1,15 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { codexAgent, kimiAgent } from "../agents/index.js";
 import { isCodexTranscript } from "../agents/codex-records.js";
+import { isKimiCliWire } from "../agents/kimi-cli-wire.js";
 import { isKimiTranscript } from "../agents/kimi-records.js";
 import { isKimiWireTranscript } from "../agents/kimi-wire.js";
 import { readConfig } from "../config.js";
 import { parseLines } from "../parser.js";
-import { firstLine, packageVersion } from "../paths.js";
-import { redactTranscriptFile } from "../redact.js";
+import { firstLine, firstLines, packageVersion } from "../paths.js";
+import { redactLineStream } from "../redact.js";
+import { isSubagentTranscript, sessionLines } from "../subagents.js";
 import { countByCategory, runStage0 } from "../stage0.js";
 import type { IneligibleReason, Stage0Result } from "../stage0.js";
 import type { Candidate, SignalCategory } from "../types.js";
@@ -21,6 +23,8 @@ export interface AnalyzedSession {
   assistantRecords: number;
   editToolUses: number;
   thinkingBlocks: number;
+  /** Reasoning recorded with its text left out: why `known_gap` can be out of reach. */
+  hiddenThinkingBlocks: number;
   eligible: boolean;
   reason?: IneligibleReason;
   knownGapReachable: boolean;
@@ -63,7 +67,52 @@ export async function expandInputs(inputs: readonly string[]): Promise<string[]>
     files.push(input);
   }
 
-  return [...new Set(files)].sort();
+  // One file however it was named: `./a/s.jsonl` beside `a/s.jsonl`, or a
+  // directory walked with the platform's separator beside a path typed with `/`.
+  const unique = new Map<string, string>();
+  for (const file of files) if (!unique.has(resolve(file))) unique.set(resolve(file), file);
+  const kept: string[] = [];
+  for (const [path, file] of unique) {
+    // A subagent is part of its session, which reads it in — Claude's from
+    // `subagents/` (`subagents.ts`), Kimi's from its own event log: analysed
+    // beside it, it would count twice, once as a session of its own. Asked
+    // about without its session, it is all there is to read.
+    if (owningSessions(path).some((session) => unique.has(session))) continue;
+    // Kimi CLI keeps one session twice: the event log and the model's context.
+    // The log is the session; the context beside it would be a second copy.
+    if (basename(file) === "context.jsonl" && (await isKimiCliSession(join(dirname(file), "wire.jsonl")))) continue;
+    kept.push(file);
+  }
+  return kept.sort();
+}
+
+/**
+ * The transcripts a subagent's file belongs to: Claude's
+ * `<session>/subagents/…/agent-<id>.jsonl` is `<session>.jsonl`'s, Kimi CLI's
+ * `<session>/subagents/<id>/wire.jsonl` is `<session>/wire.jsonl`'s, and Kimi
+ * Code's `<session>/agents/<id>/wire.jsonl` is `<session>/agents/main/wire.jsonl`'s.
+ */
+function owningSessions(file: string): string[] {
+  const agent = dirname(file);
+  if (basename(file) === "wire.jsonl" && basename(dirname(agent)) === "agents" && basename(agent) !== "main") {
+    return [join(dirname(agent), "main", "wire.jsonl")];
+  }
+  let subagents = dirname(file);
+  while (basename(subagents) !== "subagents") {
+    if (dirname(subagents) === subagents) return [];
+    subagents = dirname(subagents);
+  }
+  const session = dirname(subagents);
+  if (isSubagentTranscript(file)) return [`${session}.jsonl`];
+  return [join(session, "wire.jsonl"), join(session, "context.jsonl")];
+}
+
+async function isKimiCliSession(wire: string): Promise<boolean> {
+  try {
+    return isKimiCliWire(await firstLines(wire, 3));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -82,7 +131,8 @@ async function transcriptLines(
   }
   if (isCodexTranscript(head)) return codexAgent.redactedLines(file, { extraPatterns });
 
-  const { lines } = await redactTranscriptFile(file, { extraPatterns });
+  // Claude Code: the session with its subagents read in, as the upload sends it.
+  const { lines } = await redactLineStream(sessionLines(file), { extraPatterns });
   return lines;
 }
 
@@ -104,6 +154,7 @@ export async function analyzeFiles(
       assistantRecords: session.meta.assistantRecords,
       editToolUses: session.meta.editToolUses,
       thinkingBlocks: result.thinkingBlocks,
+      hiddenThinkingBlocks: session.meta.hiddenThinkingBlocks,
       eligible: result.eligible,
       reason: result.reason,
       knownGapReachable: result.knownGapReachable,
@@ -236,7 +287,12 @@ export function formatReport(report: AnalyzeReport, elapsedMs?: number): string 
       );
     }
     if (!session.knownGapReachable) {
-      lines.push("  note: no thinking blocks, known_gap is unreachable for this session");
+      lines.push(
+        session.hiddenThinkingBlocks > 0
+          ? `  note: ${session.hiddenThinkingBlocks} thinking block(s) recorded without their text, ` +
+              "known_gap is unreachable for this session"
+          : "  note: no thinking blocks, known_gap is unreachable for this session",
+      );
     }
     lines.push("");
   }

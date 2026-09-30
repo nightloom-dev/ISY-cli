@@ -159,25 +159,44 @@ export async function updateSession(
 }
 
 /**
- * Identity of one candidate across runs. A transcript is append-only, so a
- * record that exists keeps its index and uuid as the session grows — the same
- * finding produces the same key at every later commit.
+ * Identity of one candidate across runs: the call it points at, or else the
+ * record, both of which keep their ids as the session grows — the same finding
+ * produces the same key at every later commit. Not the record's index: a
+ * subagent is merged into its session by time (`subagents.ts`), so a background
+ * one that goes on writing puts records ahead of later ones and moves every
+ * index after them. A candidate that points at neither has only the index.
  */
 export function candidateKey(candidate: Candidate): string {
+  const anchor = candidate.toolUseId ?? candidate.uuid;
+  return [
+    candidate.category,
+    candidate.filePath ?? "",
+    anchor ?? "",
+    anchor === undefined ? candidate.recordIndex : "",
+    // Escaped, never a raw byte: a NUL in the source makes git treat the file as binary.
+  ].join("\x00");
+}
+
+/**
+ * The key isy 1.0 wrote, index and all. Still matched, so the first commit
+ * after an upgrade does not print again what the one before it printed.
+ */
+function keyWithIndex(candidate: Candidate): string {
   return [
     candidate.category,
     candidate.filePath ?? "",
     candidate.uuid ?? "",
     candidate.toolUseId ?? "",
     candidate.recordIndex,
-    // Escaped, never a raw byte: a NUL in the source makes git treat the file as binary.
   ].join("\x00");
 }
 
 /** Candidates this session has not printed before. */
 export function unseen(state: SessionState, candidates: readonly Candidate[]): Candidate[] {
   const shown = new Set(state.shown ?? []);
-  return candidates.filter((candidate) => !shown.has(candidateKey(candidate)));
+  return candidates.filter(
+    (candidate) => !shown.has(candidateKey(candidate)) && !shown.has(keyWithIndex(candidate)),
+  );
 }
 
 /**

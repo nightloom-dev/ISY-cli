@@ -1,4 +1,3 @@
-import { stat } from "node:fs/promises";
 import { detectAgent, presentAgents } from "../agents/index.js";
 import type { Agent, AgentId, HookInput } from "../agents/index.js";
 import { DEFAULT_API_BASE_URL, buildTranscriptFields, uploadSession } from "../api.js";
@@ -16,6 +15,7 @@ import { updateNotice } from "../update.js";
 import { planNotice } from "../plan.js";
 import type { PlanStatus } from "../plan.js";
 import { looksUnchanged, readState, updateSession } from "../state.js";
+import { sessionFingerprint } from "../subagents.js";
 import type { ClientState, CommitMark } from "../state.js";
 
 export const TOTAL_BUDGET_MS = 30_000;
@@ -258,13 +258,17 @@ async function sweptSessions(state: ClientState, report: UploadReport): Promise<
   return targets.sort((a, b) => a.file!.sizeBytes - b.file!.sizeBytes);
 }
 
-/** Size and mtime of a transcript, for the "did it change" check on the next run. */
+/**
+ * Size and mtime of a transcript, for the "did it change" check on the next run.
+ * The same measure a listing takes (`paths.ts`), subagents included, or the next
+ * scan would read every session a hook uploaded as changed.
+ */
 async function fingerprint(target: Target): Promise<{ sizeBytes: number; modifiedMs: number }> {
   if (target.file) {
     return { sizeBytes: target.file.sizeBytes, modifiedMs: target.file.modifiedAt.getTime() };
   }
-  const info = await stat(target.path);
-  return { sizeBytes: info.size, modifiedMs: info.mtime.getTime() };
+  const whole = await sessionFingerprint(target.path);
+  return { sizeBytes: whole.sizeBytes, modifiedMs: whole.modifiedAt.getTime() };
 }
 
 async function sendOne(

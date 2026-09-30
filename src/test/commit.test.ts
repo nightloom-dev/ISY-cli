@@ -499,9 +499,18 @@ test("a candidate keeps its identity as the session grows", () => {
 
   // Same finding, reported again after more of the session was appended.
   assert.equal(candidateKey(candidate), candidateKey({ ...candidate, detail: "reworded" }));
-  assert.notEqual(candidateKey(candidate), candidateKey({ ...candidate, recordIndex: 8 }));
+  // A background subagent merged in by time moved its record further down.
+  assert.equal(candidateKey(candidate), candidateKey({ ...candidate, recordIndex: 12 }));
+  assert.notEqual(candidateKey(candidate), candidateKey({ ...candidate, toolUseId: "t2" }));
+  // Pointing at nothing else, the index is all a candidate has.
+  const loose: Candidate = { category: "known_gap", recordIndex: 7, weight: 0.5, detail: "x" };
+  assert.notEqual(candidateKey(loose), candidateKey({ ...loose, recordIndex: 8 }));
+
   assert.deepEqual(unseen({ shown: [candidateKey(candidate)] }, [candidate]), []);
   assert.deepEqual(unseen({ shown: [] }, [candidate]), [candidate]);
+  // What isy 1.0 printed, under the key it wrote then, is not printed again.
+  const written = ["known_gap", "/repo/src/a.ts", "u1", "t1", 7].join("\x00");
+  assert.deepEqual(unseen({ shown: [written] }, [candidate]), []);
 });
 
 test("the session hook wires a repository's commit hook without isy init", async () => {

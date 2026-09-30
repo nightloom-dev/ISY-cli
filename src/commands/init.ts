@@ -117,6 +117,21 @@ export async function runInit(options: { token?: string }, cwd: string): Promise
   const authUrl = new URL("/auth/github", baseUrl).toString();
 
   let token = options.token;
+  let verified: Awaited<ReturnType<typeof verifyToken>> | undefined;
+
+  // A key this machine already holds, and the server still takes, is kept.
+  // `init` is also how hooks are refreshed and a CLI installed since is added,
+  // and pairing again for that issued a second key — which a plan with one key
+  // refuses until the reader revokes the key in use.
+  if (!token && config.token) {
+    const held = await verifyToken({ baseUrl, token: config.token });
+    if (held.ok) {
+      token = config.token;
+      verified = held;
+      console.log(`Using the key already in ${configPath()}. To sign in as someone else, run isy logout first.`);
+    }
+  }
+
   if (!token) {
     // Only when the pairing could not be opened at all — a server that predates
     // it, or one with no dashboard address. A pairing that was opened and then
@@ -140,11 +155,12 @@ export async function runInit(options: { token?: string }, cwd: string): Promise
     );
   }
 
-  const verified = await verifyToken({ baseUrl, token });
+  const kept = verified !== undefined;
+  verified ??= await verifyToken({ baseUrl, token });
   if (!verified.ok) throw new Error(verified.error);
 
   await writeConfig({ ...config, token, githubLogin: verified.githubLogin });
-  console.log(`Token stored in ${configPath()}`);
+  if (!kept) console.log(`Token stored in ${configPath()}`);
 
   // Hooks go into every CLI actually installed here, and none that is not.
   const agents = await presentAgents();

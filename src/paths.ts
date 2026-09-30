@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { sessionFingerprint } from "./subagents.js";
 import type { SessionFile } from "./types.js";
 
 export async function packageVersion(): Promise<string> {
@@ -80,11 +81,15 @@ async function sessionsInDir(dir: string): Promise<SessionFile[]> {
     try {
       const info = await stat(path);
       if (!info.isFile()) continue;
+      // Size and mtime of the session as a whole: its subagents write files of
+      // their own, and a sweep compares against these to decide what grew.
+      const whole = await sessionFingerprint(path);
       sessions.push({
         sessionId: basename(entry, ".jsonl"),
         path,
-        sizeBytes: info.size,
-        modifiedAt: info.mtime,
+        sizeBytes: whole.sizeBytes,
+        modifiedAt: whole.modifiedAt,
+        activeAt: info.mtime,
       });
     } catch {
       continue;
@@ -94,8 +99,13 @@ async function sessionsInDir(dir: string): Promise<SessionFile[]> {
   return sessions;
 }
 
+/** When a session itself last wrote (`SessionFile.activeAt`), for ordering sessions by recency. */
+export function lastActive(file: SessionFile): number {
+  return (file.activeAt ?? file.modifiedAt).getTime();
+}
+
 function newestFirst(sessions: SessionFile[]): SessionFile[] {
-  return sessions.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime());
+  return sessions.sort((a, b) => lastActive(b) - lastActive(a));
 }
 
 export async function findSessions(cwd: string): Promise<SessionFile[]> {
@@ -170,11 +180,20 @@ export async function firstCwd(path: string, limit = CWD_SCAN_LINES): Promise<st
 
 /** The first line of a file, without reading the rest: transcripts get large. */
 export async function firstLine(path: string): Promise<string> {
+  return (await firstLines(path, 1))[0] ?? "";
+}
+
+/** The first `count` lines of a file, without reading the rest. */
+export async function firstLines(path: string, count: number): Promise<string[]> {
   const input = createReadStream(path, { encoding: "utf8" });
   const reader = createInterface({ input, crlfDelay: Infinity });
+  const lines: string[] = [];
   try {
-    for await (const line of reader) return line;
-    return "";
+    for await (const line of reader) {
+      lines.push(line);
+      if (lines.length >= count) break;
+    }
+    return lines;
   } finally {
     reader.close();
     input.destroy();

@@ -505,6 +505,16 @@ test("parseApplyPatch handles added, deleted and multi-file patches", () => {
   assert.deepEqual(edits[2], { tool: "Edit", input: { file_path: "src/gone.ts" } });
 });
 
+test("parseApplyPatch reads a patch with Windows line endings", () => {
+  const edits = parseApplyPatch(
+    ["*** Begin Patch", "*** Update File: src/a.ts", "@@", "-a", "+b", "*** End Patch", ""].join("\r\n"),
+  );
+
+  assert.deepEqual(edits, [
+    { tool: "MultiEdit", input: { file_path: "src/a.ts", edits: [{ old_string: "a", new_string: "b" }] } },
+  ]);
+});
+
 test("one patch touching several files keeps its result on the first call", () => {
   const session = convert([
     META,

@@ -1,0 +1,39 @@
+{"role":"_system_prompt","content":"You are Kimi Code CLI. [system prompt cut for the fixture]\n\nThe current working directory is `/home/dev/kshop`."}
+{"role":"_checkpoint","id":0}
+{"role":"user","content":"SCENARIO-KMAIN: the add test fails, fix it"}
+{"role":"_checkpoint","id":1}
+{"role":"_usage","token_count":1000}
+{"role":"assistant","content":[{"type":"think","think":"The add test fails. Read the code before changing anything.","encrypted":null},{"type":"text","text":"Reading the code."}],"tool_calls":[{"type":"function","id":"call_KMAIN_0_0","function":{"name":"ReadFile","arguments":"{\"path\":\"src/app.js\"}"}},{"type":"function","id":"call_KMAIN_0_1","function":{"name":"Grep","arguments":"{\"pattern\":\"add\",\"path\":\"src\"}"}}]}
+{"role":"_usage","token_count":1050}
+{"role":"tool","content":[{"type":"text","text":"<system>3 lines read from file starting from line 1. Total lines in file: 3. End of file reached.</system>"},{"type":"text","text":"     1\texport function add(a, b) {\n     2\t  return a - b;\n     3\t}\n"}],"tool_call_id":"call_KMAIN_0_0"}
+{"role":"tool","content":"src/app.js","tool_call_id":"call_KMAIN_0_1"}
+{"role":"_checkpoint","id":2}
+{"role":"_usage","token_count":1000}
+{"role":"assistant","content":[],"tool_calls":[{"type":"function","id":"call_KMAIN_1_0","function":{"name":"Shell","arguments":"{\"command\":\"node --test\"}"}}]}
+{"role":"_usage","token_count":1050}
+{"role":"tool","content":[{"type":"text","text":"<system>ERROR: Command failed with exit code: 1.</system>"},{"type":"text","text":"TAP version 13\n# Subtest: add\nnot ok 1 - add\n  ---\n  duration_ms: 2.817644\n  location: '/home/dev/kshop/test/app.test.js:5:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    Expected values to be strictly equal:\n    \n    -1 !== 5\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: 5\n  actual: -1\n  operator: 'strictEqual'\n  stack: |-\n    TestContext.<anonymous> (file:///home/dev/kshop/test/app.test.js:6:10)\n    Test.runInAsyncScope (node:async_hooks:206:9)\n    Test.run (node:internal/test_runner/test:796:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:526:18)\n    node:internal/test_runner/harness:255:12\n    node:internal/process/task_queues:140:7\n    AsyncResource.runInAsyncScope (node:async_hooks:206:9)\n    AsyncResource.runMicrotask (node:internal/process/task_queues:137:8)\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 93.47442\n"}],"tool_call_id":"call_KMAIN_1_0"}
+{"role":"_checkpoint","id":3}
+{"role":"_usage","token_count":1000}
+{"role":"assistant","content":[{"type":"think","think":"Hand the fix to a coder subagent.","encrypted":null}],"tool_calls":[{"type":"function","id":"call_KMAIN_2_0","function":{"name":"Agent","arguments":"{\"description\":\"Fix add()\",\"prompt\":\"SCENARIO-KSUB: add() in src/app.js subtracts instead of adding. Fix it.\",\"subagent_type\":\"coder\"}"}}]}
+{"role":"_usage","token_count":1050}
+{"role":"tool","content":"agent_id: a8966474d\nresumed: false\nactual_subagent_type: coder\nstatus: completed\n\n[summary]\nFixed add() in src/app.js: it subtracted b from a, and now it returns a + b. I read the file first, replaced the single wrong operator, and left the rest of the module untouched. The test in test/app.test.js expects add(2, 3) to equal 5, which the corrected function now returns.","tool_call_id":"call_KMAIN_2_0"}
+{"role":"_checkpoint","id":4}
+{"role":"_usage","token_count":1000}
+{"role":"assistant","content":[],"tool_calls":[{"type":"function","id":"call_KMAIN_3_0","function":{"name":"WriteFile","arguments":"{\"path\":\"NOTES.md\",\"content\":\"# Notes\\n\"}"}},{"type":"function","id":"call_KMAIN_3_1","function":{"name":"WriteFile","arguments":"{\"path\":\"NOTES.md\",\"content\":\"- add() now adds\\n\",\"mode\":\"append\"}"}}]}
+{"role":"_usage","token_count":1050}
+{"role":"tool","content":"<system>File successfully overwritten. Current size: 17 bytes.</system>","tool_call_id":"call_KMAIN_3_0"}
+{"role":"tool","content":"<system>File successfully appended to. Current size: 17 bytes.</system>","tool_call_id":"call_KMAIN_3_1"}
+{"role":"_checkpoint","id":5}
+{"role":"_usage","token_count":1000}
+{"role":"assistant","content":[],"tool_calls":[{"type":"function","id":"call_KMAIN_4_0","function":{"name":"Shell","arguments":"{\"command\":\"node --test\"}"}}]}
+{"role":"_usage","token_count":1050}
+{"role":"tool","content":[{"type":"text","text":"<system>Command executed successfully.</system>"},{"type":"text","text":"TAP version 13\n# Subtest: add\nok 1 - add\n  ---\n  duration_ms: 1.300508\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 74.227911\n"}],"tool_call_id":"call_KMAIN_4_0"}
+{"role":"_checkpoint","id":6}
+{"role":"_usage","token_count":1000}
+{"role":"assistant","content":[],"tool_calls":[{"type":"function","id":"call_KMAIN_5_0","function":{"name":"SetTodoList","arguments":"{\"todos\":[{\"title\":\"Fix add()\",\"status\":\"done\"}]}"}}]}
+{"role":"_usage","token_count":1050}
+{"role":"tool","content":[{"type":"text","text":"<system>Todo list updated</system>"},{"type":"text","text":"Todo list updated"}],"tool_call_id":"call_KMAIN_5_0"}
+{"role":"_checkpoint","id":7}
+{"role":"_usage","token_count":1000}
+{"role":"assistant","content":"add() adds again, NOTES.md says so, and node --test passes."}
+{"role":"_usage","token_count":1050}

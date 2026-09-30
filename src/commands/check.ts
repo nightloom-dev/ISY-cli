@@ -211,6 +211,17 @@ export async function runCheck(
   // A SessionStart hook must never delay or break the session it announces:
   // no network, and any failure means silence rather than a broken launch.
   try {
+    // Hooks an older isy wrote are rewritten where they stand before they are
+    // judged: `isy init` would do the same, but it signs in again first, and
+    // on a plan with one key that means revoking the key in use.
+    for (const agent of await presentAgents()) {
+      try {
+        await agent.repairHooks?.();
+      } catch {
+        // A config that will not parse is reported by the line below, as before.
+      }
+    }
+
     // Deliberately without `cwd`: the post-commit hook is per repository and
     // only an accelerator — SessionEnd still uploads without it. Nagging about
     // it at the start of every session in every repo would be noise, so it is

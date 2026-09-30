@@ -308,22 +308,23 @@ export function redactLines(
   return { lines: output, summary: summarize(context, total, unparsed, invalid) };
 }
 
-export async function redactTranscriptFile(
-  filePath: string,
+/**
+ * `redactLines` for lines that arrive one at a time — a file read as it streams,
+ * or a Claude session with its subagents spliced in (`subagents.ts`). One
+ * context for the whole stream, so the working directory the first record names
+ * roots every path after it, the subagents' included.
+ */
+export async function redactLineStream(
+  lines: AsyncIterable<string>,
   options: RedactOptions = {},
 ): Promise<{ lines: string[]; summary: RedactionSummary }> {
   const invalid: string[] = [];
   const context = createContext(options, invalid);
-  const reader = createInterface({
-    input: createReadStream(filePath, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  });
-
   const output: string[] = [];
   let total = 0;
   let unparsed = 0;
 
-  for await (const line of reader) {
+  for await (const line of lines) {
     total += 1;
     const result = redactOneLine(line, context);
     if (result.line.length === 0) continue;
@@ -332,4 +333,15 @@ export async function redactTranscriptFile(
   }
 
   return { lines: output, summary: summarize(context, total, unparsed, invalid) };
+}
+
+export function redactTranscriptFile(
+  filePath: string,
+  options: RedactOptions = {},
+): Promise<{ lines: string[]; summary: RedactionSummary }> {
+  const reader = createInterface({
+    input: createReadStream(filePath, { encoding: "utf8" }),
+    crlfDelay: Infinity,
+  });
+  return redactLineStream(reader, options);
 }

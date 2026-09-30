@@ -129,7 +129,9 @@ export function parseApplyPatch(patch: string): PatchEdit[] {
     }
   };
 
-  for (const line of patch.split("\n")) {
+  // A patch written on Windows ends its lines in CRLF, and a header line
+  // carrying the `\r` matches nothing: the whole patch read as no edit at all.
+  for (const line of patch.split(/\r?\n/)) {
     const updating = /^\*\*\* (?:Update|Move) File: (.+)$/.exec(line);
     if (updating) {
       closeFile();
