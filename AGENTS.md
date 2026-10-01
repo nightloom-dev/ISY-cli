@@ -43,6 +43,11 @@ database or to a model.
 - **The parser must survive unknown fields and record types.** Transcript
   formats are undocumented and move between CLI versions. Log and skip; never
   throw.
+- **Codex stores internal rollouts beside the user's thread.** A rollout with
+  `parent_thread_id` or `source.subagent` is guardian/subagent bookkeeping and
+  must not be uploaded by `sweep` as a separate user session. The active model
+  is in `turn_context`, not on every message; the adapter carries it onto the
+  normalized records for the server report.
 - **Nothing is quoted verbatim out of a transcript** — not developer prompts,
   not `thinking` blocks. Anything printed or sent goes through `mask-paths`
   first, which is idempotent: applying it twice is safe.

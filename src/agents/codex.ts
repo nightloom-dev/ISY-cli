@@ -48,20 +48,16 @@ function codexHooks(): AgentHook[] {
     },
     {
       event: "SessionEnd",
-      // Detached on purpose. An upload has a 30s budget of its own, and Codex
-      // is tearing the session down while this runs, so the hook shell returns
-      // at once and the upload outlives it. A background job's stdin is
-      // /dev/null, so the payload is handed over on fd 3 first: without it the
-      // upload took the newest rollout in the cwd, which is the wrong session
-      // whenever two share a directory.
-      //
-      // ponytail: POSIX `&`, so no Windows. Codex's own `commandWindows`
-      // override is the way up if anyone runs ISY there.
-      command: "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
+      // SessionEnd is synchronous in current Codex builds, including when a
+      // hook declares itself async. Keep the command portable and let the
+      // upload's own 30 second deadline bound shutdown instead of detaching a
+      // POSIX child that cannot run on Windows and can lose stdin during exit.
+      command: "npx @nightloom/isy upload --hook --agent codex",
       superseded: [
         "npx isy upload --hook --agent codex",
         "nohup npx isy upload --hook --agent codex >/dev/null 2>&1 </dev/null &",
         "exec 3<&0; nohup npx isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
+        "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
       ],
     },
   ];
@@ -113,6 +109,27 @@ async function sessionCwd(path: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * Desktop Codex stores guardian and other internal subagent rollouts beside
+ * the user's thread. They have their own transcript but no SessionEnd hook;
+ * sweep must not upload them as independent work sessions. The root rollout
+ * has no parent_thread_id and no `source.subagent` marker.
+ */
+async function isRootSession(path: string): Promise<boolean> {
+  try {
+    const parsed: unknown = JSON.parse(await firstLine(path));
+    if (typeof parsed !== "object" || parsed === null) return true;
+    const payload = (parsed as { payload?: unknown }).payload;
+    if (typeof payload !== "object" || payload === null) return true;
+    const meta = payload as { parent_thread_id?: unknown; source?: unknown };
+    if (typeof meta.parent_thread_id === "string" && meta.parent_thread_id.length > 0) return false;
+    return !(typeof meta.source === "object" && meta.source !== null && "subagent" in meta.source);
+  } catch {
+    // Old rollouts do not carry either marker and remain valid sessions.
+    return true;
+  }
+}
+
 function sessionIdOf(path: string): string {
   const name = basename(path, ".jsonl");
   return ROLLOUT_ID.exec(name)?.[1] ?? name;
@@ -131,6 +148,7 @@ async function scanRollouts(keep?: (path: string) => Promise<boolean>): Promise<
   const sessions: SessionFile[] = [];
 
   for (const path of (await rolloutPaths()).slice(0, SCAN_LIMIT)) {
+    if (!(await isRootSession(path))) continue;
     if (keep && !(await keep(path))) continue;
     try {
       const info = await stat(path);

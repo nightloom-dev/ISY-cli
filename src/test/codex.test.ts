@@ -92,6 +92,16 @@ test("takes the session identity off session_meta and drops its system prompt", 
   assert.doesNotMatch(session.records.map((r) => json(r)).join(""), /You are Codex/);
 });
 
+test("carries the active Codex model from turn_context onto normalized messages", () => {
+  const session = convert([
+    META,
+    { type: "turn_context", payload: { model: "gpt-6.1-sol" } },
+    say("assistant", "done"),
+  ]);
+
+  assert.equal(session.records[0]?.message?.model, "gpt-6.1-sol");
+});
+
 test("turns a shell call and its output into a Bash tool use", () => {
   const session = convert([
     META,
@@ -571,6 +581,29 @@ test("finds only the sessions recorded for this working directory", async () => 
   assert.equal(sessions[0]?.sessionId, "019dc36a-3ce7-7163-8d38-416ea68327d4");
 });
 
+test("does not discover guardian or subagent rollouts as user sessions", async () => {
+  const cwd = "/work/codex-subagents";
+  const root = await writeRollout("2026-08-18", "019dc36a-3ce7-7163-8d38-416ea68327d8", [
+    metaFor(cwd, "sess-root"),
+    say("user", "go"),
+  ]);
+  await writeRollout("2026-08-18", "019dc36a-3ce7-7163-8d38-416ea68327d9", [
+    {
+      ...metaFor(cwd, "sess-guardian"),
+      payload: {
+        ...metaFor(cwd, "sess-guardian").payload,
+        parent_thread_id: "sess-root",
+        source: { subagent: { other: "guardian" } },
+      },
+    },
+    say("assistant", "allow"),
+  ]);
+
+  const sessions = await codexAgent.sessionsIn(cwd);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0]?.path, root);
+});
+
 test("uses the transcript path Codex sends, and the newest session without one", async () => {
   const cwd = "/work/codex-transcript";
   const path = await writeRollout("2026-08-20", "019dc36a-3ce7-7163-8d38-416ea68327d6", [
@@ -620,11 +653,9 @@ test("writes its hooks into hooks.json and takes them out again", async () => {
     contents.hooks.SessionStart?.[0]?.hooks[0]?.command,
     "npx @nightloom/isy check --hook --agent codex",
   );
-  // Detached, because Codex is closing the session and the hook shell must not
-  // wait; the payload goes over fd 3, because a background job's stdin is /dev/null.
-  assert.match(
-    contents.hooks.SessionEnd?.[0]?.hooks[0]?.command ?? "",
-    /^exec 3<&0; nohup npx @nightloom\/isy upload --hook --agent codex <&3 .*&$/,
+  assert.equal(
+    contents.hooks.SessionEnd?.[0]?.hooks[0]?.command,
+    "npx @nightloom/isy upload --hook --agent codex",
   );
 
   assert.deepEqual(await codexAgent.hooksInstalled(), ["SessionStart", "SessionEnd"]);
@@ -641,6 +672,7 @@ test("replaces an older isy command rather than stacking a second one", async ()
     "nohup npx isy upload --hook --agent codex >/dev/null 2>&1 </dev/null &",
     // Same command, back when it was reached through npx.
     "exec 3<&0; nohup npx isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
+    "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
   ]) {
     await writeFile(
       codexHooksPath(),
@@ -653,7 +685,11 @@ test("replaces an older isy command rather than stacking a second one", async ()
       hooks: { SessionEnd: { hooks: { command: string }[] }[] };
     };
     assert.equal(contents.hooks.SessionEnd.length, 1, older);
-    assert.match(contents.hooks.SessionEnd[0]?.hooks[0]?.command ?? "", /<&3 /, older);
+    assert.equal(
+      contents.hooks.SessionEnd[0]?.hooks[0]?.command,
+      "npx @nightloom/isy upload --hook --agent codex",
+      older,
+    );
   }
 });
 
@@ -678,7 +714,10 @@ test("superseding keeps the user's later groups at their approved positions", as
     hooks: { SessionEnd: { hooks: { command: string }[] }[] };
   };
   assert.equal(contents.hooks.SessionEnd.length, 2);
-  assert.match(contents.hooks.SessionEnd[0]?.hooks[0]?.command ?? "", /<&3 /);
+  assert.equal(
+    contents.hooks.SessionEnd[0]?.hooks[0]?.command,
+    "npx @nightloom/isy upload --hook --agent codex",
+  );
   assert.equal(contents.hooks.SessionEnd[1]?.hooks[0]?.command, "their-hook");
 });
 

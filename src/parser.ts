@@ -259,7 +259,7 @@ const OTHER_KNOWN_TOOLS = new Set([
   "TaskOutput", "TaskStop", "Monitor", "LS", "NotebookRead", "SlashCommand",
   "ListMcpResourcesTool", "ReadMcpResourceTool",
   // Codex, kept under its own name by agents/codex-records.ts
-  "update_plan", "view_image", "web_search", "web__run", "image_gen__imagegen", "wait",
+  "update_plan", "view_image", "web_search", "web__run", "image_gen__imagegen", "wait", "js",
 ]);
 
 function isKnownTool(name: string): boolean {

@@ -403,6 +403,7 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
   let sessionId = options.sessionId;
   let cwd = options.cwd;
   let version = options.version;
+  let model: string | undefined;
 
   /** Call ids of `exec` scripts: only their output can name a running cell. */
   const scripts = new Set<string>();
@@ -455,6 +456,14 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
       continue;
     }
 
+    // The active model lives in turn_context in current Codex rollouts rather
+    // than on each assistant message. Carry it onto the normalized messages so
+    // the server's existing modelOf() can display GPT-6/Codex model slugs.
+    if (parsed.type === "turn_context") {
+      model = asString(payload.model) ?? model;
+      continue;
+    }
+
     // `event_msg` restates what `response_item` already records, and
     // `turn_context` / `world_state` are bookkeeping.
     if (parsed.type !== "response_item") continue;
@@ -472,7 +481,7 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
       emit({
         type: role,
         timestamp,
-        message: { role, content: [{ type: "text", text }] },
+        message: { role, ...(model ? { model } : {}), content: [{ type: "text", text }] },
       });
       continue;
     }
@@ -483,7 +492,11 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
       emit({
         type: "assistant",
         timestamp,
-        message: { role: "assistant", content: [{ type: "thinking", thinking }] },
+        message: {
+          role: "assistant",
+          ...(model ? { model } : {}),
+          content: [{ type: "thinking", thinking }],
+        },
       });
       continue;
     }
@@ -513,7 +526,11 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
       }
       const blocks = toolUseBlocks(payload);
       if (blocks.length === 0) continue;
-      emit({ type: "assistant", timestamp, message: { role: "assistant", content: blocks } });
+      emit({
+        type: "assistant",
+        timestamp,
+        message: { role: "assistant", ...(model ? { model } : {}), content: blocks },
+      });
       continue;
     }
 
