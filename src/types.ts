@@ -9,12 +9,16 @@ export interface TranscriptRecord {
   type: string;
   uuid?: string;
   parentUuid?: string | null;
+  /** Set where a compaction restarted the chain: the record the boundary follows. */
+  logicalParentUuid?: string | null;
   sessionId?: string;
   timestamp?: string;
   cwd?: string;
   gitBranch?: string;
   version?: string;
   isSidechain?: boolean;
+  /** On a subagent's records: the `Agent` call that started it (`subagents.ts`). */
+  parentToolUseID?: string;
   requestId?: string;
   message?: TranscriptMessage;
   toolUseResult?: unknown;
@@ -106,7 +110,10 @@ export interface SessionMeta {
   startedAt?: string;
   endedAt?: string;
   assistantRecords: number;
+  /** Reasoning with text in it: what makes `known_gap` reachable. */
   thinkingBlocks: number;
+  /** Reasoning recorded without its text — emptied `thinking`, `redacted_thinking`. */
+  hiddenThinkingBlocks: number;
   editToolUses: number;
   /** Touched a file by any means — see parser.ts:shellWrites. Gates analysis. */
   hasFileEdits: boolean;
@@ -130,8 +137,17 @@ export interface ParsedSession {
 export interface SessionFile {
   sessionId: string;
   path: string;
+  /** Size and mtime of the session as a whole, subagents included: what decides whether it grew. */
   sizeBytes: number;
   modifiedAt: Date;
+  /**
+   * When the session's own transcript was last written, its subagents aside —
+   * what "the newest session here" is ordered by (`paths.ts:lastActive`). A
+   * subagent sent to the background goes on writing while its session sits
+   * idle, and by `modifiedAt` an idle session outranked the one that just
+   * made a commit. Absent where the two cannot differ.
+   */
+  activeAt?: Date;
 }
 
 /**

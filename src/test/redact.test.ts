@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseLines, parseTranscriptFile } from "../parser.js";
@@ -207,6 +207,50 @@ test("redacts a line that is not valid JSON without dropping it", () => {
   assert.equal(summary.unparsedLines, 1);
 });
 
+test("a record with U+2028 in a string is read whole, and its key-named secret redacted", async () => {
+  // JSON.stringify leaves U+2028 and U+2029 unescaped; node:readline ends a
+  // line at both, and the record came apart into two fragments.
+  const dir = await mkdtemp(join(tmpdir(), "isy-redact-"));
+  const file = join(dir, "session.jsonl");
+  const record = { type: "user", toolUseResult: { stdout: "one\u2028two\u2029three", token: "abcdefgh12345678" } };
+  await writeFile(file, `${JSON.stringify({ type: "user" })}\r\n${JSON.stringify(record)}\n`);
+
+  const { lines, summary } = await redactTranscriptFile(file);
+  assert.equal(lines.length, 2);
+  assert.equal(summary.unparsedLines, 0);
+  assert.ok(!lines[1]!.includes("abcdefgh12345678"));
+  assert.equal((JSON.parse(lines[1]!) as typeof record).toolUseResult.stdout, "one\u2028two\u2029three");
+
+  const session = await parseTranscriptFile(file);
+  assert.equal(session.records.length, 2);
+  assert.equal(session.skipped.malformedJson, 0);
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("masks email addresses", () => {
+  assert.equal(redactOne("Author: Alice <alice.b+isy@mail.example.org>"), `Author: Alice <${marker("email")}>`);
+  // Not an address: no domain, or a version where the domain would be.
+  assert.equal(redactOne("@nightloom/isy@1.0.1 and @scope/pkg"), "@nightloom/isy@1.0.1 and @scope/pkg");
+});
+
+test("an attachment record keeps its place in the chain and loses everything but its type", () => {
+  // What Claude Code 2.1.285 writes as context for the model: the account's
+  // email, its organisation, the system prompt.
+  const records = [
+    { type: "attachment", uuid: "a1", parentUuid: null, attachment: { type: "session_context", context: { userEmail: "The user's email address is alice@example.org." } }, rendered: [{ content: "alice@example.org" }], renderedRole: "user" },
+    { type: "attachment", uuid: "a2", parentUuid: "a1", attachment: { type: "credential_org", organizationUuid: "1b4e28ba-2fa1-11d2-883f-0016d3cca427" } },
+    { type: "attachment", uuid: "a3", parentUuid: "a2", attachment: { type: "prompt_snapshot", systemPrompt: "You are Claude Code. # claudeMd ..." } },
+  ];
+  const { lines } = summaryFor(records);
+  const out = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  assert.deepEqual(out, [
+    { type: "attachment", uuid: "a1", parentUuid: null, attachment: { type: "session_context" } },
+    { type: "attachment", uuid: "a2", parentUuid: "a1", attachment: { type: "credential_org" } },
+    { type: "attachment", uuid: "a3", parentUuid: "a2", attachment: { type: "prompt_snapshot" } },
+  ]);
+});
+
 test("keeps output parseable as JSONL and counts what it replaced", () => {
   const { lines, summary } = summaryFor([
     { type: "user", message: { role: "user", content: 'password = "hunter2000"' } },
@@ -319,9 +363,17 @@ test("redacts real transcripts without corrupting them", { skip: !existsSync(cor
     const { lines, summary } = await redactTranscriptFile(file);
     redactedLines += lines.length;
     assert.equal(summary.invalidExtraPatterns.length, 0);
-    for (const line of lines) {
-      if (line.startsWith("{")) assert.doesNotThrow(() => JSON.parse(line), `${file} produced invalid JSON`);
-    }
+    // A line that came in broken — a transcript cut off mid-write — goes out
+    // broken and is counted; every other one has to come out as JSON.
+    const broken = lines.filter((line) => {
+      try {
+        JSON.parse(line);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.ok(broken.length <= summary.unparsedLines, `${file} produced invalid JSON`);
   }
 
   assert.ok(redactedLines > 0);
@@ -349,7 +401,10 @@ test("redacted output still parses into the same session structure", { skip: !ex
 
       assert.equal(redacted.records.length, original.records.length, `${file} lost records`);
       assert.equal(redacted.toolUses.length, original.toolUses.length, `${file} lost tool calls`);
-      assert.equal(redacted.fileEdits.size, original.fileEdits.size, `${file} lost edited files`);
+      // Edits, not files: a `sed -i` path is resolved from the command's text,
+      // which masking rewrites, so two keys for one file can become one.
+      const edits = (session: typeof original) => [...session.fileEdits.values()].reduce((sum, list) => sum + list.length, 0);
+      assert.equal(edits(redacted), edits(original), `${file} lost edits`);
       assert.equal(redacted.mainPath.size, original.mainPath.size, `${file} lost tree structure`);
       checked += 1;
     }

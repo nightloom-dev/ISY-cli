@@ -1,0 +1,216 @@
+{
+  "MAIN": [
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "text",
+        "text": "Let me look at the code first."
+      },
+      {
+        "type": "tool_use",
+        "name": "Read",
+        "input": {
+          "file_path": "/home/dev/shop/src/app.js"
+        }
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "Agent",
+        "input": {
+          "description": "Fix add and run tests",
+          "subagent_type": "general-purpose",
+          "prompt": "SCENARIO-SUB: add() in /home/dev/shop/src/app.js subtracts instead of adding. Fix it and run the tests with node --test."
+        }
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "text",
+        "text": "The subagent fixed add() and the tests pass."
+      }
+    ]
+  ],
+  "SUB": [
+    [
+      {
+        "type": "thinking",
+        "thinking": "The test expects 5 for add(2, 3), so the operator is wrong. Read the file before touching it."
+      },
+      {
+        "type": "tool_use",
+        "name": "Read",
+        "input": {
+          "file_path": "/home/dev/shop/src/app.js"
+        }
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "Edit",
+        "input": {
+          "file_path": "/home/dev/shop/src/app.js",
+          "old_string": "return a - b;",
+          "new_string": "return a + b;"
+        }
+      }
+    ],
+    [
+      {
+        "type": "tool_use",
+        "name": "Bash",
+        "input": {
+          "command": "cd /home/dev/shop && node --test",
+          "description": "Run the tests"
+        }
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "Fixed: add() now returns a + b, and node --test passes."
+      }
+    ]
+  ],
+  "MAIN2": [
+    [
+      {
+        "type": "redacted_thinking"
+      },
+      {
+        "type": "tool_use",
+        "name": "Write",
+        "input": {
+          "file_path": "/home/dev/shop/README.md",
+          "content": "# shop\n\n`add(a, b)` returns the sum of two numbers.\n"
+        }
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "CronList",
+        "input": {}
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "Bash",
+        "input": {
+          "command": "cd /home/dev/shop && npm test",
+          "description": "Run the test suite"
+        }
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "README documents add(), and the suite still passes."
+      }
+    ]
+  ],
+  "FG": [
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "Agent",
+        "input": {
+          "description": "Fix total() quantity",
+          "subagent_type": "general-purpose",
+          "run_in_background": false,
+          "prompt": "SCENARIO-FGSUB: total() in /home/dev/cart/src/cart.js ignores qty. Fix it."
+        }
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "Bash",
+        "input": {
+          "command": "cd /home/dev/cart && npm test",
+          "description": "Run the tests"
+        }
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "text",
+        "text": "total() now multiplies by qty; npm test passes."
+      }
+    ]
+  ],
+  "FGSUB": [
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "Read",
+        "input": {
+          "file_path": "/home/dev/cart/src/cart.js"
+        }
+      }
+    ],
+    [
+      {
+        "type": "thinking",
+        "thinking": ""
+      },
+      {
+        "type": "tool_use",
+        "name": "Edit",
+        "input": {
+          "file_path": "/home/dev/cart/src/cart.js",
+          "old_string": "sum + item.price, 0",
+          "new_string": "sum + item.price * item.qty, 0"
+        }
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "total() multiplies price by qty now. I did not run the tests."
+      }
+    ]
+  ]
+}

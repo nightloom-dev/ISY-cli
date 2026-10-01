@@ -1,5 +1,5 @@
-import { createReadStream } from "node:fs";
-import { createInterface } from "node:readline";
+import { posix } from "node:path";
+import { fileLines } from "./lines.js";
 import type {
   ContentBlock,
   FileEdit,
@@ -13,20 +13,54 @@ import type {
 export const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 export const LOOKUP_TOOLS = new Set(["Read", "Grep", "Glob"]);
 
+/**
+ * Every record type Claude Code writes to a session file: the table its 2.1.285
+ * session writer routes each append by, plus `progress`, which older builds
+ * wrote inline. A type outside it is kept and counted in `skipped.unknownTypes`,
+ * which is what `isy status` reports as records it could not place — so a type
+ * missing here reads to the user as a transcript this client half-understood.
+ */
 const KNOWN_RECORD_TYPES = new Set([
   "user",
   "assistant",
   "attachment",
   "system",
+  "progress",
+  "summary",
+  "custom-title",
   "ai-title",
   "agent-name",
+  "agent-color",
+  "agent-setting",
+  "tag",
+  "relocated",
+  "ended-by-model",
+  "continued-in",
   "mode",
   "permission-mode",
+  "memory-mode",
+  "isolation-latch",
+  "atis-latch",
+  "dev-mods",
   "queue-operation",
   "last-prompt",
   "bridge-session",
+  "pr-link",
+  "frame-link",
+  "worktree-state",
+  "cost-state",
+  "history-suppression",
+  "artifact-comment-monitor",
+  "artifact-autoreact-ledger",
   "file-history-snapshot",
   "file-history-delta",
+  "attribution-snapshot",
+  "content-replacement",
+  "api-request",
+  "api-request-shape",
+  "api-request-blob",
+  "fork-context-ref",
+  "observer-ref",
 ]);
 
 interface ParseState {
@@ -38,9 +72,17 @@ interface ParseState {
   filesRead: Set<string>;
   skipped: SkipStats;
   thinkingBlocks: number;
+  hiddenThinkingBlocks: number;
   editToolUses: number;
   shellWrote: boolean;
-  sawUnknownTool: boolean;
+  /** A call the parser cannot see into that could have written a file (`mayWrite`). */
+  opaqueWrite: boolean;
+  /** A subagent's result says it edited files, whether or not its own records came along. */
+  delegatedEdits: boolean;
+  /** Calls whose subagent's own records are in the stream (`parentToolUseID`). */
+  delegated: Set<string>;
+  /** Calls whose result counted the subagent's edits, whatever the count. */
+  counted: Set<string>;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -49,6 +91,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** A string as written, empty included: `new_string: ""` is how an edit deletes lines. */
+function asText(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function createState(): ParseState {
@@ -61,9 +108,13 @@ function createState(): ParseState {
     filesRead: new Set(),
     skipped: { lines: 0, blank: 0, malformedJson: 0, notAnObject: 0, unknownTypes: {} },
     thinkingBlocks: 0,
+    hiddenThinkingBlocks: 0,
     editToolUses: 0,
     shellWrote: false,
-    sawUnknownTool: false,
+    opaqueWrite: false,
+    delegatedEdits: false,
+    delegated: new Set(),
+    counted: new Set(),
   };
 }
 
@@ -129,14 +180,14 @@ function pushFileEdits(state: ParseState, use: ToolUse): void {
       entries.push({
         ...base,
         oldString: asString(edit.old_string),
-        newString: asString(edit.new_string),
+        newString: asText(edit.new_string),
       });
     }
   } else {
     entries.push({
       ...base,
       oldString: asString(use.input.old_string),
-      newString: asString(use.input.new_string) ?? asString(use.input.new_source),
+      newString: asText(use.input.new_string) ?? asText(use.input.new_source),
       content: asString(use.input.content),
     });
   }
@@ -248,19 +299,50 @@ const SHELL_READERS =
   /^\s*(?:sudo\s+)?(cat|head|tail|less|more|bat|nl|wc|sed|awk|rg|grep|egrep|fgrep|jq|yq|xxd|od|file|stat|diff|git\s+show|git\s+diff|git\s+log|git\s+blame)\b/;
 
 /**
- * Tools known not to write a file. Anything outside these and the edit tools is
- * a name some CLI invented — Kimi's `StrReplaceFile` next to its plain `Grep`,
- * the next Codex harness — and the parser cannot say whether it wrote one.
+ * Tools known not to write a file: delegation, planning, task lists, schedules,
+ * the web, the harness talking to the person. Claude Code's are its 2.1.285
+ * inventory together with the names it still accepts for older ones (`Task` is
+ * `Agent`, `KillShell` and `KillBash` are `TaskStop`, `Brief` is
+ * `SendUserMessage`). A subagent's edits are its own tool calls, spliced into the
+ * session (`subagents.ts`), so the call that started it is not one — unless
+ * nothing of the subagent came back (`delegatedUnseen`).
  */
 const OTHER_KNOWN_TOOLS = new Set([
   // Claude Code
-  "Task", "Agent", "TodoWrite", "WebFetch", "WebSearch", "Skill", "AskUserQuestion",
-  "EnterPlanMode", "ExitPlanMode", "ToolSearch", "BashOutput", "KillShell", "KillBash",
-  "TaskOutput", "TaskStop", "Monitor", "LS", "NotebookRead", "SlashCommand",
-  "ListMcpResourcesTool", "ReadMcpResourceTool",
+  "Task", "Agent", "SubagentHandback", "SendMessage", "ListAgents", "ListPeers", "Workflow",
+  "TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "GetTask", "TaskOutput", "TaskStop",
+  "BashOutput", "KillShell", "KillBash", "Monitor",
+  "WebFetch", "WebSearch", "Skill", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "ToolSearch",
+  "EnterWorktree", "ExitWorktree", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger",
+  "SendUserMessage", "Brief", "SendUserFile", "SendFile", "PushNotification", "ReadNotifications",
+  "FetchInboxMessage", "ReportFindings", "EndConversation", "Poll", "Sleep", "StructuredOutput", "LSP",
+  "Artifact", "ArtifactComments", "ArtifactData", "DesignSync", "ClaudeDesign", "Projects",
+  "SuggestSkills", "SuggestPluginInstall", "SuggestConnectors", "SearchMcpRegistry", "ListConnectors",
+  "ListPlugins", "ListSkills", "SearchPlugins", "SearchSkills", "ShowOnboardingRolePicker",
+  "ShareOnboardingGuide", "LS", "NotebookRead", "SlashCommand",
+  "ListMcpResources", "ListMcpResourcesTool", "ReadMcpResource", "ReadMcpResourceTool",
+  "ReadMcpResourceDir", "ReadMcpResourceDirTool",
   // Codex, kept under its own name by agents/codex-records.ts
   "update_plan", "view_image", "web_search", "web__run", "image_gen__imagegen", "wait",
+  // Kimi, where agents/kimi-tools.ts has no Claude name to give: `GetGoal`
+  // takes no arguments, which alone would read as a possible edit. The Tower
+  // tools run Kimi Code's multi-agent workspace: they plan, message and review
+  // under `.tower/`, and their workers are subagents like any other.
+  "Think", "SendDMail", "AgentSwarm", "WaitFor", "CreateGoal", "GetGoal", "UpdateGoal", "SetGoalBudget",
+  "TowerInit", "TowerPlan", "TowerSpawn", "TowerSend", "TowerInbox", "TowerFinding", "TowerReview",
+  "TowerMission", "TowerStatus", "TowerTeardown",
 ]);
+
+/** Tools that run code of their own, which writes wherever it says: a shell the parser cannot read. */
+const CODE_RUNNERS = new Set(["PowerShell", "REPL", "JavaScript"]);
+
+/**
+ * Tools that change files without naming them in an argument `mayWrite` reads:
+ * Codex's `apply_patch`, as `codex-records.ts` passes it on when the patch
+ * would not parse (the files are inside `input`), and Kimi Code's `TowerMerge`,
+ * a git merge of a worker's branch into the checkout.
+ */
+const UNNAMED_WRITERS = new Set(["apply_patch", "TowerMerge"]);
 
 function isKnownTool(name: string): boolean {
   return (
@@ -270,6 +352,56 @@ function isKnownTool(name: string): boolean {
     name.startsWith("mcp__") ||
     OTHER_KNOWN_TOOLS.has(name)
   );
+}
+
+/**
+ * Arguments that say what a call works on. A tool that writes a file has to be
+ * told which one, or be handed code that decides; a tool that files a task,
+ * messages a teammate or opens a worktree is told neither.
+ */
+const TARGET_ARGUMENT =
+  /^(?:file_?path|filePath|notebook_path|(?:relative_)?path|paths|file|files|filename|target_file|command|cmd|code|script|patch|edits?)$/;
+
+/** Words an MCP tool's name carries when it changes something rather than reads it. */
+const MCP_WRITE_VERBS = new Set([
+  "write", "edit", "replace", "insert", "patch", "apply", "create", "update", "delete", "remove", "move", "rename", "push",
+]);
+
+/** A tool name's words, whichever way it is spelled: `replace_symbol_body`, `writeFile`, `edit-file`. */
+function nameWords(name: string): string[] {
+  return name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[^a-z0-9]+/);
+}
+
+/**
+ * Whether a call the parser has no rule for could have written a file.
+ *
+ * Every Claude Code release adds tools, nearly all of them bookkeeping —
+ * `TaskCreate`, `SendMessage`, `EnterWorktree` — and when any unknown name
+ * counted as an edit, every session on 2.1 read as one that edited files. So an
+ * unknown tool counts only when its arguments could name a file or carry code,
+ * or when there are none to read: arguments an adapter could not parse are not
+ * arguments that say nothing. A tool an adapter has no Claude name for,
+ * told a `path`, and a Codex `exec {script}` still count; `TaskCreate {subject}`
+ * does not.
+ *
+ * An MCP tool is named by its server, and most of them only read — a
+ * filesystem server's `read_file {path}`, GitHub's `get_file_contents {path}`.
+ * One counts when its name says it changes something and it is told where:
+ * `write_file {path}`, Serena's `replace_symbol_body {relative_path}`.
+ *
+ * ponytail: judged by names. A writer that takes its file under an argument
+ * outside `TARGET_ARGUMENT`, or an MCP writer whose name has none of
+ * `MCP_WRITE_VERBS`, reads as no edit; add the name when a CLI or server ships one.
+ */
+export function mayWrite(name: string, input: Record<string, unknown>): boolean {
+  if (CODE_RUNNERS.has(name) || UNNAMED_WRITERS.has(name)) return true;
+  const keys = Object.keys(input);
+  const told = keys.some((key) => TARGET_ARGUMENT.test(key));
+  if (name.startsWith("mcp__")) {
+    return told && nameWords(name.slice(name.lastIndexOf("__") + 2)).some((word) => MCP_WRITE_VERBS.has(word));
+  }
+  if (isKnownTool(name)) return false;
+  return keys.length === 0 || told;
 }
 
 /** A redirect into a file: `> a.ts`, `>> log`, `2> out`. Not `2>&1`, not `/dev/null`. */
@@ -310,8 +442,12 @@ export function shellWrites(command: string): boolean {
   return false;
 }
 
-/** `sed -i` rewrites the file; whatever else it is, it is not a look at it. */
-const IN_PLACE = /(?:^|\s)(?:-i(?:\.\S+)?|--in-place)(?:\s|$)/;
+/**
+ * `sed -i` rewrites the file; whatever else it is, it is not a look at it. GNU
+ * takes any backup suffix (`-i.bak`, `-ie`), the flag rides in a cluster
+ * (`-Ei`), and BSD spells it `-I`.
+ */
+const IN_PLACE = /(?:^|\s)(?:-[a-zA-Z]*[iI]\S*|--in-place\S*)(?:\s|$)/;
 
 /** Tools whose first non-flag argument is a program, not a path. */
 const SCRIPTED = /^\s*(?:sudo\s+)?(?:sed|awk)\b/;
@@ -321,7 +457,8 @@ export function shellReadPaths(command: string): string[] {
 
   for (const segment of commandSegments(withoutHeredocs(command))) {
     if (!SHELL_READERS.test(segment)) continue;
-    if (IN_PLACE.test(segment)) continue;
+    // Only sed's: `grep -i foo src/a.ts` is a look, and was taken for a write.
+    if (SCRIPTED.test(segment) && IN_PLACE.test(segment)) continue;
 
     // `sed 's/^/UNPUSHED: /'` has slashes in it and is not a path: read as one
     // it yields "/", which then matches every absolute path there is.
@@ -337,8 +474,9 @@ export function shellReadPaths(command: string): string[] {
         continue;
       }
 
+      // A glob stays one: `cat src/*.js` read every file it expanded to, and
+      // `detectors.ts:samePath` matches it against the file edited.
       const path = token.includes(":") ? token.slice(token.lastIndexOf(":") + 1) : token;
-      if (path.includes("*") || path.includes("?")) continue;
       // "/" and "." name no file, and "/" matches every path there is.
       if (/^[./]+$/.test(path)) continue;
       if (!/\.[A-Za-z0-9]+$/.test(path) && !path.includes("/")) continue;
@@ -348,6 +486,97 @@ export function shellReadPaths(command: string): string[] {
   }
 
   return paths;
+}
+
+/** A shell word, quotes and all: `'s/a b/c/'` is one word, not two. */
+const SHELL_WORD = /(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"])+/g;
+
+/**
+ * Flags whose next word is the script, not a file. Only the bare ones for sed:
+ * `sed -ie` is `-i` with the backup suffix "e", while `perl -pe` is `-p -e`.
+ */
+const SED_SCRIPT_FLAG = /^(?:-e|--expression|-f|--file)$/;
+const PERL_SCRIPT_FLAG = /^-[a-zA-Z]*e$/;
+
+/**
+ * The files `sed -i` and `perl -i` rewrite: every argument after the script.
+ * What the edit changed stays unseen — a sed script is a program, not the text
+ * it replaces — but where it landed is on the command line, and without it a
+ * session editing through sed read to the detectors as one that edited nothing.
+ *
+ * Given the directory the command ran in, a relative path is resolved against
+ * it, `cd` within the command included, so `sed -i` and Edit on one file land
+ * under one key — before masking (both absolute) and after (both relative to
+ * a working directory of "."). Without it, or past a `cd` it cannot follow
+ * (`cd ~`, `cd -`, `cd $DIR`), paths stay as typed, like `shellReadPaths`.
+ *
+ * ponytail: in-place editors only. A redirect, `tee` or a heredoc into python
+ * still names no file to the detectors (`shellWrites` knows only that one was
+ * written); a glob names files this cannot list.
+ */
+export function shellEditPaths(command: string, cwd?: string): string[] {
+  const paths: string[] = [];
+  let dir = cwd;
+
+  for (const segment of commandSegments(withoutHeredocs(command))) {
+    if (/^\s*cd(?:\s|$)/.test(segment)) {
+      const to = /^\s*cd\s+(\S+)\s*$/.exec(segment)?.[1]?.replace(/["']/g, "");
+      if (to?.startsWith("/")) dir = posix.normalize(to);
+      else dir = dir === undefined || to === undefined || /^[~$-]/.test(to) ? undefined : posix.join(dir, to);
+      continue;
+    }
+    if (!IN_PLACE_EDITORS.test(segment)) continue;
+    const perl = /^\s*(?:sudo\s+)?perl\b/.test(segment);
+    // The same test `shellWrites` applies, on the same unquoted text, so the two
+    // agree on what was written: `sed 's/ -i //' a.ts` only prints.
+    const bare = segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''");
+    if (!(perl ? /\bperl\s+-\w*i/.test(bare) : IN_PLACE.test(bare))) continue;
+
+    let scriptSeen = false;
+    let scriptNext = false;
+    const words = segment.replace(/^\s*sudo\s+/, "").match(SHELL_WORD) ?? [];
+    for (const word of words.slice(1)) {
+      if (/^\d*[<>|]|^&/.test(word)) break;
+      const token = word.replace(/["']/g, "");
+      if (scriptNext) {
+        scriptNext = false;
+        continue;
+      }
+      if ((perl ? PERL_SCRIPT_FLAG : SED_SCRIPT_FLAG).test(token)) {
+        scriptSeen = true;
+        scriptNext = true;
+        continue;
+      }
+      if (/^--(?:expression|file)=/.test(token)) scriptSeen = true;
+      // An empty word is BSD sed's backup suffix: `sed -i '' 's/a/b/' f`.
+      if (token.length === 0 || token.startsWith("-") || token.startsWith("$")) continue;
+      if (!scriptSeen) {
+        scriptSeen = true;
+        continue;
+      }
+      if (/[*?]/.test(token) || /^[./]+$/.test(token)) continue;
+      if (dir === undefined || token.startsWith("~")) paths.push(token.replace(/^\.\//, ""));
+      else paths.push(token.startsWith("/") ? posix.normalize(token) : posix.join(dir, token));
+    }
+  }
+
+  return paths;
+}
+
+function pushShellEdits(state: ParseState, use: ToolUse, command: string, cwd: unknown): void {
+  for (const filePath of shellEditPaths(command, asString(cwd))) {
+    const edit: FileEdit = {
+      toolUseId: use.id,
+      tool: use.name,
+      filePath,
+      recordIndex: use.recordIndex,
+      uuid: use.uuid,
+      timestamp: use.timestamp,
+    };
+    const existing = state.fileEdits.get(filePath);
+    if (existing) existing.push(edit);
+    else state.fileEdits.set(filePath, [edit]);
+  }
 }
 
 function pushToolUse(
@@ -381,9 +610,10 @@ function pushToolUse(
   if (name === "Bash" && typeof use.input.command === "string") {
     for (const path of shellReadPaths(use.input.command)) state.filesRead.add(path);
     if (shellWrites(use.input.command)) state.shellWrote = true;
+    pushShellEdits(state, use, use.input.command, record.cwd);
   }
 
-  if (!isKnownTool(name)) state.sawUnknownTool = true;
+  if (mayWrite(name, use.input)) state.opaqueWrite = true;
 }
 
 function pushBlocks(state: ParseState, record: TranscriptRecord, recordIndex: number): void {
@@ -408,14 +638,63 @@ function pushBlocks(state: ParseState, record: TranscriptRecord, recordIndex: nu
       raw: item,
     });
 
-    if (type === "thinking") state.thinkingBlocks += 1;
+    // Reasoning counts when there is something in it to read. Claude Code 2.1
+    // records most thinking with the text left out — only the signature — and
+    // `redacted_thinking` is encrypted outright: both show the model thought,
+    // neither says what, so neither makes `known_gap` reachable.
+    if (type === "thinking" && typeof item.thinking === "string" && item.thinking.trim().length > 0) {
+      state.thinkingBlocks += 1;
+    } else if (type === "thinking" || type === "redacted_thinking") {
+      state.hiddenThinkingBlocks += 1;
+    }
     if (type === "tool_use") pushToolUse(state, record, item, recordIndex);
     if (type === "tool_result") {
       const target = asString(item.tool_use_id);
       const use = target ? state.toolUseById.get(target) : undefined;
       if (use) use.result = buildToolResult(record, item, recordIndex);
+      const edited = subagentEdits(record);
+      if (edited !== undefined && target) state.counted.add(target);
+      if (edited !== undefined && edited > 0) state.delegatedEdits = true;
     }
   }
+}
+
+/**
+ * How many files a subagent's result says it edited. Claude Code 2.1 keeps a
+ * subagent's calls in a file of its own and totals them on the call's result
+ * (`toolStats.editFileCount`), so a session uploaded without that file — by a
+ * client older than the splicing in `subagents.ts` — still says it touched files.
+ * Only a subagent that ran to the end is counted: one sent to the background
+ * answers at once, with no total (`delegatedUnseen`).
+ */
+function subagentEdits(record: TranscriptRecord): number | undefined {
+  const detail = isObject(record.toolUseResult) ? record.toolUseResult : undefined;
+  const stats = detail && isObject(detail.toolStats) ? detail.toolStats : undefined;
+  return typeof stats?.editFileCount === "number" ? stats.editFileCount : undefined;
+}
+
+/**
+ * Tools that hand work to subagents whose records come back linked to the call
+ * (`parentToolUseID`): Claude's, which Kimi's `Agent` is translated to, and
+ * Kimi Code's `AgentSwarm` and `TowerSpawn`, whose subagents it links the same way.
+ */
+const DELEGATION_TOOLS = new Set(["Agent", "Task", "AgentSwarm", "TowerSpawn"]);
+
+/**
+ * Whether a subagent was sent off and neither its records nor a count of its
+ * edits came back: a background subagent's result is only "launched", and a
+ * session uploaded without the subagent's file — by an older client, or with
+ * the file gone — carries nothing else of it. What it did cannot be seen, so
+ * it may have edited. A call that failed started nothing.
+ */
+function delegatedUnseen(state: ParseState): boolean {
+  return state.toolUses.some(
+    (use) =>
+      DELEGATION_TOOLS.has(use.name) &&
+      use.result?.isError !== true &&
+      !state.delegated.has(use.id) &&
+      !state.counted.has(use.id),
+  );
 }
 
 function pushLine(state: ParseState, line: string): void {
@@ -447,6 +726,9 @@ function pushLine(state: ParseState, line: string): void {
 
   const record = { ...parsed, type } as TranscriptRecord;
   state.records.push(record);
+  if (record.isSidechain === true && typeof record.parentToolUseID === "string") {
+    state.delegated.add(record.parentToolUseID);
+  }
   pushBlocks(state, record, state.records.length - 1);
 }
 
@@ -456,6 +738,18 @@ function buildByUuid(records: TranscriptRecord[]): Map<string, TranscriptRecord>
     if (typeof record.uuid === "string") byUuid.set(record.uuid, record);
   }
   return byUuid;
+}
+
+/**
+ * The record this one continues. Its parent — or, where a compaction started the
+ * chain over, the record the compaction summarised: Claude Code writes the
+ * `compact_boundary` with no parent and names what it follows in
+ * `logicalParentUuid`. Walking parents alone stopped at the boundary, and the
+ * whole session before its last compaction fell off the main path.
+ */
+function parentOf(record: TranscriptRecord): string | undefined {
+  if (typeof record.parentUuid === "string") return record.parentUuid;
+  return typeof record.logicalParentUuid === "string" ? record.logicalParentUuid : undefined;
 }
 
 function buildMainPath(
@@ -475,7 +769,8 @@ function buildMainPath(
   let current = tip;
   while (current && typeof current.uuid === "string" && !path.has(current.uuid)) {
     path.add(current.uuid);
-    current = typeof current.parentUuid === "string" ? byUuid.get(current.parentUuid) : undefined;
+    const parent = parentOf(current);
+    current = parent === undefined ? undefined : byUuid.get(parent);
   }
   return path;
 }
@@ -523,11 +818,18 @@ function finish(state: ParseState): ParsedSession {
       endedAt,
       assistantRecords,
       thinkingBlocks: state.thinkingBlocks,
+      hiddenThinkingBlocks: state.hiddenThinkingBlocks,
       editToolUses: state.editToolUses,
       // Not the same question as editToolUses > 0: a file written from the
-      // shell counts, and a tool this parser does not know is "cannot tell",
-      // which must not read as "edited nothing".
-      hasFileEdits: state.editToolUses > 0 || state.shellWrote || state.sawUnknownTool,
+      // shell counts, a call the parser cannot see into is "cannot tell", which
+      // must not read as "edited nothing", and so is a subagent that says it
+      // edited, or whose work never came back to say.
+      hasFileEdits:
+        state.editToolUses > 0 ||
+        state.shellWrote ||
+        state.opaqueWrite ||
+        state.delegatedEdits ||
+        delegatedUnseen(state),
       sidechainRecords,
     },
     skipped: state.skipped,
@@ -540,12 +842,15 @@ export function parseLines(lines: Iterable<string>): ParsedSession {
   return finish(state);
 }
 
-export async function parseTranscriptFile(filePath: string): Promise<ParsedSession> {
+/** `parseLines` for lines that arrive one at a time, as a stream or a generator does. */
+export async function parseLineStream(lines: AsyncIterable<string>): Promise<ParsedSession> {
   const state = createState();
-  const input = createReadStream(filePath, { encoding: "utf8" });
-  const reader = createInterface({ input, crlfDelay: Infinity });
-  for await (const line of reader) pushLine(state, line);
-  const session = finish(state);
+  for await (const line of lines) pushLine(state, line);
+  return finish(state);
+}
+
+export async function parseTranscriptFile(filePath: string): Promise<ParsedSession> {
+  const session = await parseLineStream(fileLines(filePath));
   session.filePath = filePath;
   return session;
 }
@@ -563,8 +868,8 @@ export function onAbandonedBranch(session: ParsedSession, uuid: string | undefin
 
   while (current && typeof current.uuid === "string" && !visited.has(current.uuid)) {
     visited.add(current.uuid);
-    const parent = current.parentUuid;
-    if (typeof parent !== "string") return false;
+    const parent = parentOf(current);
+    if (parent === undefined) return false;
     if (session.mainPath.has(parent)) return true;
     current = session.byUuid.get(parent);
   }

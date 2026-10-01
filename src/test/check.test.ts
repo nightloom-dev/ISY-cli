@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { promisify } from "node:util";
 import { collectCheck, formatCheck, relativeTime, runCheck } from "../commands/check.js";
 import type { CheckReport } from "../commands/check.js";
-import { HOOK_COMMAND, START_HOOK_COMMAND } from "../hook.js";
+import { HOOK_COMMAND, ISY_HOOKS, START_HOOK_COMMAND } from "../hook.js";
 
 const saved = {
   home: process.env.ISY_HOME,
@@ -46,11 +46,13 @@ async function configure(config: object): Promise<void> {
   await writeFile(join(home, "config.json"), JSON.stringify(config));
 }
 
+/** Hooks as `isy init` writes them, timeout and all. */
 async function hooks(commands: { SessionEnd?: string; SessionStart?: string }): Promise<void> {
   const settings: Record<string, unknown> = {};
   const entries: Record<string, unknown> = {};
   for (const [event, command] of Object.entries(commands)) {
-    entries[event] = [{ hooks: [{ type: "command", command }] }];
+    const timeout = ISY_HOOKS.find((hook) => hook.event === event)?.timeout;
+    entries[event] = [{ hooks: [{ type: "command", command, ...(timeout !== undefined ? { timeout } : {}) }] }];
   }
   settings.hooks = entries;
   await writeFile(join(claude, "settings.json"), JSON.stringify(settings));
@@ -87,6 +89,31 @@ test("announces itself as active once the token and both hooks are in place", as
   assert.deepEqual(report.missingHooks, []);
   // The version is the package's own, read at runtime: pinning it here broke on every release.
   assert.equal(formatCheck(report, NOW), `ISY ${report.version} active · unwinned · hooks ok · last upload 3h ago`);
+});
+
+test("the session start hook brings the hooks an older isy wrote up to date before judging them", async () => {
+  await configure({ token: "t", githubLogin: "unwinned" });
+  await hooks({ SessionEnd: "npx @nightloom/isy upload --hook", SessionStart: START_HOOK_COMMAND });
+
+  // As isy 1.0 left it: the upload runs in the hook, and Claude Code 2.1 kills it.
+  assert.deepEqual((await collectCheck()).missingHooks, ["SessionEnd"]);
+
+  const printed: string[] = [];
+  const log = console.log;
+  console.log = (line: string) => void printed.push(line);
+  try {
+    await runCheck({ hook: true });
+  } finally {
+    console.log = log;
+  }
+
+  // Rewritten in place, with no `isy init` and so no second key to pair for.
+  const settings = JSON.parse(await readFile(join(claude, "settings.json"), "utf8")) as {
+    hooks: Record<string, { hooks: { command: string }[] }[]>;
+  };
+  assert.equal(settings.hooks.SessionEnd?.[0]?.hooks[0]?.command, HOOK_COMMAND);
+  const line = (JSON.parse(printed[0]!) as { systemMessage: string }).systemMessage;
+  assert.match(line, /hooks ok/);
 });
 
 test("names the hook that is missing instead of claiming to work", async () => {

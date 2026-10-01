@@ -1,4 +1,4 @@
-import { EDIT_TOOLS } from "../parser.js";
+import { claudeTool, wholeFileRead } from "./kimi-tools.js";
 
 /**
  * Kimi CLI keeps a session as `context.jsonl` (kosong Message records) plus an
@@ -13,9 +13,6 @@ import { EDIT_TOOLS } from "../parser.js";
 
 /** Kimi's own bookkeeping roles, which are not conversation turns. */
 const CONTROL_ROLES = new Set(["_system_prompt", "_usage", "_checkpoint"]);
-
-/** Tools whose file argument Claude calls `file_path` and Kimi calls `path`. */
-const PATH_ARG_TOOLS = new Set([...EDIT_TOOLS, "Read"]);
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,10 +45,17 @@ function contentText(content: unknown): string {
   return parts.join("\n");
 }
 
-/** Reasoning, wherever this Kimi build happens to put it. */
-function reasoningText(line: Record<string, unknown>): string | undefined {
+/**
+ * Reasoning, wherever this Kimi build happens to put it: a `reasoning_content`
+ * field, or content parts — `think` is Kimi CLI's own (`{type: "think", think}`),
+ * and the only one it writes, so reading `thinking` and `reasoning` alone lost
+ * every thought a real session recorded. A part left empty still says the model
+ * reasoned (the parser counts it as hidden), so it comes through as an empty
+ * block rather than as nothing.
+ */
+function reasoningParts(line: Record<string, unknown>): string[] | undefined {
   const direct = asString(line.reasoning_content) ?? asString(line.reasoning);
-  if (direct) return direct;
+  if (direct) return [direct];
 
   const content = line.content;
   if (!Array.isArray(content)) return undefined;
@@ -59,25 +63,17 @@ function reasoningText(line: Record<string, unknown>): string | undefined {
   const parts: string[] = [];
   for (const part of content) {
     if (!isObject(part)) continue;
-    if (part.type !== "thinking" && part.type !== "reasoning") continue;
-    const text = asString(part.thinking) ?? asString(part.text) ?? asString(part.reasoning);
-    if (text) parts.push(text);
+    if (part.type !== "think" && part.type !== "thinking" && part.type !== "reasoning") continue;
+    const text = [part.think, part.thinking, part.text, part.reasoning].find((value) => typeof value === "string");
+    parts.push(typeof text === "string" ? text : "");
   }
-  return parts.length > 0 ? parts.join("\n") : undefined;
+  return parts.length > 0 ? parts : undefined;
 }
 
-/**
- * Kimi names the file argument `path` where Claude names it `file_path`.
- * Renaming here keeps parser.ts and detectors.ts free of Kimi knowledge.
- * Grep and Glob keep `path`, exactly as they do in Claude Code.
- */
-export function renameArgs(tool: string, input: Record<string, unknown>): Record<string, unknown> {
-  if (!PATH_ARG_TOOLS.has(tool)) return input;
-  if (typeof input.path !== "string" || typeof input.file_path === "string") return input;
-
-  const { path, ...rest } = input;
-  return { ...rest, file_path: path };
-}
+/** Kimi CLI prefixes a failed call's result with this, and has no other error flag here. */
+const FAILED_RESULT = /^<system>ERROR:/;
+/** The status line Kimi CLI puts ahead of a result: `<system>…</system>`. */
+const RESULT_STATUS = /^<system>([\s\S]*?)<\/system>/;
 
 /** Tool calls, whether OpenAI-style `tool_calls` or inline content parts. */
 function toolUseBlocks(line: Record<string, unknown>): Record<string, unknown>[] {
@@ -112,7 +108,8 @@ function toolUseBlocks(line: Record<string, unknown>): Record<string, unknown>[]
       }
     }
 
-    blocks.push({ type: "tool_use", id, name, input: renameArgs(name, input) });
+    const use = claudeTool(name, input);
+    blocks.push({ type: "tool_use", id, name: use.name, input: use.input });
   }
   return blocks;
 }
@@ -210,6 +207,9 @@ export function toClaudeRecords(context: Iterable<string>, options: KimiOptions)
     return uuid;
   };
 
+  /** What each call asked for, by id: a `ReadFile` result is only the file given its call. */
+  const calls = new Map<string, Record<string, unknown>>();
+
   const emitTurn = (line: Record<string, unknown>, parent: string | null): string | undefined => {
     const role = String(line.role);
     const timestamp = asString(line.timestamp) ?? asString(line.created_at);
@@ -218,15 +218,37 @@ export function toClaudeRecords(context: Iterable<string>, options: KimiOptions)
       const id = asString(line.tool_call_id);
       if (!id) return undefined;
       const text = contentText(line.content);
+      const failed = FAILED_RESULT.test(text);
+      // What the tool printed, without the status line Kimi put ahead of it.
+      const status = RESULT_STATUS.exec(text);
+      const output = status ? text.slice(status[0].length).replace(/^\n/, "") : text;
+      const call = calls.get(id);
+      const file =
+        call?.name === "Read" && !failed && typeof call.input === "object" && status
+          ? wholeFileRead(output, status[1]!)
+          : undefined;
+      const filePath = isObject(call?.input) ? call.input.file_path : undefined;
       return emit(
         {
           type: "user",
           timestamp,
           message: {
             role: "user",
-            content: [{ type: "tool_result", tool_use_id: id, content: text }],
+            content: [{ type: "tool_result", tool_use_id: id, content: text, ...(failed ? { is_error: true } : {}) }],
           },
-          toolUseResult: { stdout: text },
+          toolUseResult:
+            file !== undefined && typeof filePath === "string"
+              ? {
+                  type: "text",
+                  file: {
+                    filePath,
+                    content: file,
+                    numLines: file.split("\n").length,
+                    startLine: 1,
+                    totalLines: file.split("\n").length,
+                  },
+                }
+              : { stdout: output },
         },
         parent,
       );
@@ -234,11 +256,12 @@ export function toClaudeRecords(context: Iterable<string>, options: KimiOptions)
 
     if (role === "assistant") {
       const blocks: Record<string, unknown>[] = [];
-      const reasoning = reasoningText(line);
-      if (reasoning) blocks.push({ type: "thinking", thinking: reasoning });
+      for (const thinking of reasoningParts(line) ?? []) blocks.push({ type: "thinking", thinking });
       const text = contentText(line.content);
       if (text) blocks.push({ type: "text", text });
-      blocks.push(...toolUseBlocks(line));
+      const uses = toolUseBlocks(line);
+      for (const use of uses) calls.set(String(use.id), use);
+      blocks.push(...uses);
       if (blocks.length === 0) return undefined;
 
       return emit(

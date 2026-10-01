@@ -10,6 +10,7 @@ import {
   installedHooks,
   isHookInstalled,
   removeHook,
+  repairHooks,
 } from "../hook.js";
 
 let configDir: string;
@@ -138,7 +139,7 @@ test("installs both the upload hook and the session start announcement", async (
 
 test("does not call itself installed while one of the two hooks is missing", async () => {
   await writeSettings({
-    hooks: { SessionEnd: [{ hooks: [{ type: "command", command: HOOK_COMMAND }] }] },
+    hooks: { SessionEnd: [{ hooks: [{ type: "command", command: HOOK_COMMAND, timeout: 30 }] }] },
   });
 
   assert.equal(await isHookInstalled(), false);
@@ -178,4 +179,81 @@ test("removes a hook left behind by an older isy", async () => {
 
   assert.equal(await removeHook(), "removed");
   assert.equal((await settings()).hooks, undefined);
+});
+
+test("the upload runs detached, so the end of a session waits for nothing", async () => {
+  await installHook();
+
+  const hooks = (await settings()).hooks as Record<string, { hooks: Record<string, unknown>[] }[]>;
+  // Claude Code cancels a SessionEnd hook after 1.5s, and waits out a longer
+  // one on /clear and /resume: the shell hands the payload over and returns.
+  assert.match(String(hooks.SessionEnd?.[0]?.hooks[0]?.command), /^exec 3<&0; nohup npx @nightloom\/isy upload --hook <&3 .*&$/);
+  assert.equal(hooks.SessionEnd?.[0]?.hooks[0]?.timeout, undefined);
+  assert.equal(hooks.SessionStart?.[0]?.hooks[0]?.timeout, undefined);
+});
+
+test("the upload hook isy 1.0 wrote is not installed, and is brought up to date in place", async () => {
+  await writeSettings({
+    hooks: {
+      SessionEnd: [
+        { hooks: [{ type: "command", command: "bash someone-else.sh" }] },
+        { hooks: [{ type: "command", command: "npx @nightloom/isy upload --hook" }] },
+        { hooks: [{ type: "command", command: "bash after.sh" }] },
+      ],
+      SessionStart: [{ hooks: [{ type: "command", command: START_HOOK_COMMAND }] }],
+    },
+  });
+
+  assert.deepEqual(await installedHooks(), ["SessionStart"]);
+  assert.equal(await isHookInstalled(), false);
+  assert.equal(await installHook(), "installed");
+
+  const hooks = (await settings()).hooks as Record<string, { hooks: Record<string, unknown>[] }[]>;
+  assert.deepEqual(
+    hooks.SessionEnd?.map((group) => group.hooks[0]),
+    [
+      { type: "command", command: "bash someone-else.sh" },
+      { type: "command", command: HOOK_COMMAND },
+      { type: "command", command: "bash after.sh" },
+    ],
+  );
+  assert.equal(await isHookInstalled(), true);
+  assert.equal(await installHook(), "already-present");
+});
+
+test("an older upload command is brought up to date, and what else its entry says is kept", async () => {
+  await writeSettings({
+    hooks: { SessionEnd: [{ hooks: [{ type: "command", command: "npx isy upload --hook", timeout: 5 }] }] },
+  });
+
+  assert.equal(await installHook(), "installed");
+  const hooks = (await settings()).hooks as Record<string, { hooks: Record<string, unknown>[] }[]>;
+  assert.deepEqual(hooks.SessionEnd, [{ hooks: [{ type: "command", command: HOOK_COMMAND, timeout: 5 }] }]);
+});
+
+test("a repair rewrites what an older isy wrote where it stands, and adds nothing", async () => {
+  await writeSettings({
+    model: "opus",
+    hooks: {
+      SessionEnd: [
+        { hooks: [{ type: "command", command: "bash someone-else.sh" }] },
+        { hooks: [{ type: "command", command: "npx @nightloom/isy upload --hook", timeout: 30 }] },
+      ],
+    },
+  });
+
+  assert.equal(await repairHooks(), true);
+  const result = await settings();
+  assert.equal(result.model, "opus");
+  const hooks = result.hooks as Record<string, { hooks: Record<string, unknown>[] }[]>;
+  assert.equal(hooks.SessionEnd?.[0]?.hooks[0]?.command, "bash someone-else.sh");
+  assert.equal(hooks.SessionEnd?.[1]?.hooks[0]?.command, HOOK_COMMAND);
+  // The session start hook was never there, so the reader left it out: not ours to add back.
+  assert.equal(hooks.SessionStart, undefined);
+  assert.deepEqual(await installedHooks(), ["SessionEnd"]);
+
+  // Up to date, or not there at all: nothing to write.
+  assert.equal(await repairHooks(), false);
+  await writeSettings({ hooks: { SessionEnd: [{ hooks: [{ type: "command", command: "bash someone-else.sh" }] }] } });
+  assert.equal(await repairHooks(), false);
 });

@@ -1,5 +1,7 @@
 node_modules/
 dist/
 *.log
+# Kimi CLI writes the model and version only to its log, so the fixture home has one.
+!src/test/fixtures/**/*.log
 *.tgz
 .env*

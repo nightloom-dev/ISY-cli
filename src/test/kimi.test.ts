@@ -289,15 +289,17 @@ test("adds its hook block to config.toml once, and can take it back out", async 
 
   const contents = await readFile(kimiConfigPath(), "utf8");
   assert.match(contents, /\[model\]/); // the user's own settings survive
-  assert.equal(contents.match(/\[\[hooks\]\]/g)?.length, 3);
+  // A home that is not `.kimi-code` is Kimi CLI's: it kills SessionEnd hooks
+  // after five seconds, so the upload is detached, and it shows no hook's
+  // stdout, so there is no drain to write.
+  assert.equal(contents.match(/\[\[hooks\]\]/g)?.length, 2);
   assert.match(contents, /event = "SessionEnd"/);
-  assert.match(contents, /command = 'npx @nightloom\/isy upload --hook --agent kimi'/);
+  assert.match(
+    contents,
+    /command = "exec 3<&0; nohup npx @nightloom\/isy upload --hook --agent kimi <&3 >\/dev\/null 2>&1 &"/,
+  );
 
-  assert.deepEqual(await kimiAgent.hooksInstalled(), [
-    "SessionStart",
-    "SessionEnd",
-    "UserPromptSubmit",
-  ]);
+  assert.deepEqual(await kimiAgent.hooksInstalled(), ["SessionStart", "SessionEnd"]);
 
   assert.equal(await kimiAgent.removeHooks(), "removed");
   assert.equal(await kimiAgent.removeHooks(), "absent");
@@ -339,6 +341,18 @@ test("picks the agent from the payload the CLI sends", () => {
   };
   assert.equal(detectAgent(kimi038).id, "kimi");
   assert.equal(detectAgent({ session_id: "a71d4bfa-287e-49e6-a5bc-41a36c1ef97e", cwd: "/work" }).id, "claude");
+
+  // What Kimi CLI 1.52 sends: a bare UUID, like Claude's — and no transcript
+  // path, which Claude Code and Codex always send.
+  const kimi152 = {
+    hook_event_name: "SessionEnd",
+    session_id: "63ade4e9-4c75-4070-a8c6-f28b7de486b8",
+    cwd: "/work",
+    reason: "exit",
+  };
+  assert.equal(detectAgent(kimi152).id, "kimi");
+  const claude = { ...kimi152, transcript_path: "/home/u/.claude/projects/-work/63ade4e9.jsonl", prompt_id: "p" };
+  assert.equal(detectAgent(claude).id, "claude");
 });
 
 async function writeKimiSession(cwd: string, sessionId: string, lines: unknown[]): Promise<string> {
@@ -417,4 +431,45 @@ test("status says which CLIs it looked in when nothing is recorded", async () =>
   assert.equal(report.project.sessions, 0);
   assert.equal(report.latestSession, undefined);
   assert.match(formatStatus(report), /no Claude Code or Kimi CLI sessions recorded/);
+});
+
+test("a block that lost its end marker is replaced, not stacked", async () => {
+  const BEGIN = "# isy:begin — managed by isy, do not edit inside this block";
+  // What an older isy left behind: a block cut short, and — after the next
+  // install found no END and appended — a second one after it.
+  await writeFile(
+    kimiConfigPath(),
+    [
+      '[model]\nname = "k2"\n',
+      BEGIN,
+      "[[hooks]]",
+      'event = "SessionEnd"',
+      "command = 'npx isy upload --hook'",
+      "timeout = 30",
+      "",
+      "[ui]",
+      'theme = "dark"',
+      "",
+      BEGIN,
+      "[[hooks]]",
+      'event = "SessionEnd"',
+      "command = 'npx isy upload --hook --agent kimi'",
+      "timeout = 30",
+      "# isy:end",
+      "",
+    ].join("\n"),
+  );
+
+  assert.equal(await kimiAgent.installHooks(), "installed");
+  const contents = await readFile(kimiConfigPath(), "utf8");
+  assert.equal(contents.match(/# isy:begin/g)?.length, 1);
+  assert.equal(contents.match(/# isy:end/g)?.length, 1);
+  assert.doesNotMatch(contents, /npx isy upload/);
+  // What the user wrote between the two blocks is theirs, and stays.
+  assert.match(contents, /\[model\]/);
+  assert.match(contents, /\[ui\]\ntheme = "dark"/);
+  assert.equal(await kimiAgent.installHooks(), "already-present");
+
+  assert.equal(await kimiAgent.removeHooks(), "removed");
+  assert.doesNotMatch(await readFile(kimiConfigPath(), "utf8"), /isy:begin|\[\[hooks\]\]/);
 });

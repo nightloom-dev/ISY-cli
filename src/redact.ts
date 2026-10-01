@@ -1,7 +1,6 @@
-import { createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import { createInterface } from "node:readline";
+import { fileLines } from "./lines.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
@@ -68,6 +67,12 @@ export const BUILTIN_RULES: RedactionRule[] = [
     type: "connection_string",
     pattern: /\b(postgres|postgresql|mysql|mongodb\+srv|mongodb|redis|amqp):\/\/([^\s:/@]+):([^\s/@]+)@/g,
     replacement: `$1://$2:${marker("connection_string")}@`,
+  },
+  {
+    // After the connection string: its password sits right before an `@` too.
+    type: "email",
+    pattern: /\b[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b/g,
+    replacement: marker("email"),
   },
   {
     type: "assignment",
@@ -225,12 +230,30 @@ function learnRoot(record: Record<string, unknown>, context: RedactContext): voi
   context.roots = { ...context.roots, ...resolveRoots({ cwd }) };
 }
 
+/**
+ * Claude Code's `attachment` records are the harness's context for the model:
+ * the account's email (`session_context`), its organisation (`credential_org`),
+ * the whole system prompt with memory and CLAUDE.md (`prompt_snapshot`), the
+ * connectors' instructions. Nothing downstream reads past their `type`, so that
+ * is all that goes. The record itself stays: the next record names it as its
+ * `parentUuid`, and the parser walks that chain.
+ */
+function stripAttachment(record: Record<string, unknown>, context: RedactContext): void {
+  if (record.type !== "attachment") return;
+  const kind = isObject(record.attachment) ? record.attachment.type : undefined;
+  record.attachment = typeof kind === "string" ? { type: kind } : {};
+  delete record.rendered;
+  delete record.renderedRole;
+  count(context, "attachment", 1);
+}
+
 function redactRecord(
   record: Record<string, unknown>,
   context: RedactContext,
 ): Record<string, unknown> {
   learnRoot(record, context);
   scanDotenv(record, context);
+  stripAttachment(record, context);
   return redactValue(record, context) as Record<string, unknown>;
 }
 
@@ -308,22 +331,23 @@ export function redactLines(
   return { lines: output, summary: summarize(context, total, unparsed, invalid) };
 }
 
-export async function redactTranscriptFile(
-  filePath: string,
+/**
+ * `redactLines` for lines that arrive one at a time — a file read as it streams,
+ * or a Claude session with its subagents spliced in (`subagents.ts`). One
+ * context for the whole stream, so the working directory the first record names
+ * roots every path after it, the subagents' included.
+ */
+export async function redactLineStream(
+  lines: AsyncIterable<string>,
   options: RedactOptions = {},
 ): Promise<{ lines: string[]; summary: RedactionSummary }> {
   const invalid: string[] = [];
   const context = createContext(options, invalid);
-  const reader = createInterface({
-    input: createReadStream(filePath, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  });
-
   const output: string[] = [];
   let total = 0;
   let unparsed = 0;
 
-  for await (const line of reader) {
+  for await (const line of lines) {
     total += 1;
     const result = redactOneLine(line, context);
     if (result.line.length === 0) continue;
@@ -332,4 +356,11 @@ export async function redactTranscriptFile(
   }
 
   return { lines: output, summary: summarize(context, total, unparsed, invalid) };
+}
+
+export function redactTranscriptFile(
+  filePath: string,
+  options: RedactOptions = {},
+): Promise<{ lines: string[]; summary: RedactionSummary }> {
+  return redactLineStream(fileLines(filePath), options);
 }

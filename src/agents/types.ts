@@ -20,6 +20,11 @@ export interface HookInput {
 export interface AgentHook {
   event: string;
   command: string;
+  /**
+   * Seconds the CLI should wait for the hook, written beside the command. A hook
+   * with the right command and the wrong timeout is not installed yet.
+   */
+  timeout?: number;
   /** Commands an older isy wrote for the same job: replace, never stack. */
   superseded?: string[];
 }
@@ -82,6 +87,13 @@ export interface Agent {
   hooksInstalled(): Promise<string[]>;
   installHooks(): Promise<"installed" | "already-present">;
   removeHooks(): Promise<"removed" | "absent">;
+  /**
+   * Bring isy's own hooks an older isy wrote up to date in place, adding none,
+   * with no sign-in — what a SessionStart hook runs, so an upgrade does not
+   * wait on `isy init`. Whether anything changed. Absent where rewriting a hook
+   * takes the user's say-so: Codex asks again for every hook it has not seen.
+   */
+  repairHooks?(): Promise<boolean>;
 
   /**
    * Show one line to the user. Each CLI displays text its own way, and the same

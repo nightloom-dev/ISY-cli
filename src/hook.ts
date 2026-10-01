@@ -4,7 +4,7 @@ import type { AgentHook } from "./agents/types.js";
 import { claudeConfigDir, claudeSettingsPath } from "./paths.js";
 
 export const HOOK_EVENT = "SessionEnd";
-export const HOOK_COMMAND = "npx @nightloom/isy upload --hook";
+export const HOOK_COMMAND = "exec 3<&0; nohup npx @nightloom/isy upload --hook <&3 >/dev/null 2>&1 &";
 export const START_HOOK_EVENT = "SessionStart";
 export const START_HOOK_COMMAND = "npx @nightloom/isy check --hook";
 
@@ -18,11 +18,29 @@ export const START_HOOK_COMMAND = "npx @nightloom/isy check --hook";
  * installing over it rewrites that line in place instead of leaving two hooks
  * to fire.
  */
-export const ISY_HOOKS: { event: string; command: string; superseded: string[] }[] = [
+export const ISY_HOOKS: (AgentHook & { superseded: string[] })[] = [
   {
     event: HOOK_EVENT,
+    // Detached, the way Kimi CLI's and Codex's are. Claude Code 2.1 cancels a
+    // SessionEnd hook after 1.5 seconds unless it asks for more — before `npx`
+    // has even started node, so every upload at the end of a session was
+    // killed — and it waits out whatever a hook asks for on `/clear` and
+    // `/resume` too, so a hook given the upload's own thirty seconds froze
+    // both for as long as the upload took. The shell returns at once and the
+    // upload outlives it. A background job's stdin is /dev/null, so the
+    // payload is handed over on fd 3 first: without it the upload took the
+    // newest session in the cwd, the wrong one whenever two share a directory.
+    // Its line is parked for the next session start (`claude.ts:deliver`).
+    //
+    // ponytail: POSIX `&`. Claude Code runs hooks through bash (Git Bash on
+    // Windows), so this holds wherever it does; a hook shell without `nohup`
+    // loses the upload to the sweep at the next session start.
     command: HOOK_COMMAND,
-    superseded: ["npx isy upload --silent", "npx isy upload --hook"],
+    superseded: [
+      "npx isy upload --silent",
+      "npx isy upload --hook",
+      "npx @nightloom/isy upload --hook",
+    ],
   },
   { event: START_HOOK_EVENT, command: START_HOOK_COMMAND, superseded: ["npx isy check --hook"] },
 ];
@@ -93,16 +111,20 @@ function matchers(settings: Record<string, unknown>, event: string): HookMatcher
   return Array.isArray(entries) ? (entries.filter(isObject) as HookMatcher[]) : [];
 }
 
+/** An entry running one of `commands`, and — when one is asked for — with that timeout. */
+function runs(entry: unknown, commands: readonly string[], timeout?: number): boolean {
+  if (!isObject(entry) || typeof entry.command !== "string" || !commands.includes(entry.command)) return false;
+  return timeout === undefined || entry.timeout === timeout;
+}
+
 function hasHook(
   settings: Record<string, unknown>,
   event: string,
   commands: readonly string[],
+  timeout?: number,
 ): boolean {
   return matchers(settings, event).some((matcher) =>
-    Array.isArray(matcher.hooks) &&
-    matcher.hooks.some(
-      (entry) => isObject(entry) && typeof entry.command === "string" && commands.includes(entry.command),
-    ),
+    Array.isArray(matcher.hooks) && matcher.hooks.some((entry) => runs(entry, commands, timeout)),
   );
 }
 
@@ -131,23 +153,20 @@ function stripHook(
 }
 
 /**
- * Swap the first superseded command for its replacement at the same group and
- * position, dropping any further copies, so no group's index moves.
+ * Swap the first entry running one of `commands` for the hook as it should be
+ * written, at the same group and position, dropping any further copies, so no
+ * group's index moves. The same swap brings an older command up to date and
+ * gives the current one a timeout it was written without.
  */
-function replaceSuperseded(
-  groups: unknown[],
-  commands: readonly string[],
-  command: string,
-): boolean {
+function replaceSuperseded(groups: unknown[], commands: readonly string[], hook: AgentHook): boolean {
   let replaced = false;
   for (const group of groups) {
     if (!isObject(group) || !Array.isArray(group.hooks)) continue;
     group.hooks = (group.hooks as unknown[]).filter((entry: unknown) => {
-      if (!isObject(entry) || typeof entry.command !== "string" || !commands.includes(entry.command)) {
-        return true;
-      }
+      if (!isObject(entry) || !runs(entry, commands)) return true;
       if (replaced) return false;
-      entry.command = command;
+      entry.command = hook.command;
+      if (hook.timeout !== undefined) entry.timeout = hook.timeout;
       replaced = true;
       return true;
     });
@@ -155,16 +174,45 @@ function replaceSuperseded(
   return replaced;
 }
 
+/**
+ * Bring the entries an older isy wrote up to date, in place, and add nothing:
+ * a hook that is not there at all stays away — that is the reader's call, and
+ * `isy check` names it. The SessionStart hook runs this, so an upgrade needs no
+ * `isy init`, which pairs the browser again, and on a plan with one key asks
+ * the reader to revoke the key in use first. Whether anything changed.
+ */
+export async function repairHooksIn(file: HookFile): Promise<boolean> {
+  const settings = await readSettings(file);
+  const stale = file.hooks.filter(
+    (hook) =>
+      !hasHook(settings, hook.event, [hook.command], hook.timeout) &&
+      hasHook(settings, hook.event, [hook.command, ...(hook.superseded ?? [])]),
+  );
+  if (stale.length === 0) return false;
+
+  const hooks = isObject(settings.hooks) ? { ...settings.hooks } : {};
+  for (const hook of stale) {
+    const existing = [...(hooks[hook.event] as unknown[])];
+    replaceSuperseded(existing, [hook.command, ...(hook.superseded ?? [])], hook);
+    hooks[hook.event] = existing;
+  }
+
+  await writeSettings(file, { ...settings, hooks });
+  return true;
+}
+
 export async function installedHooksIn(file: HookFile): Promise<string[]> {
   const settings = await readSettings(file);
-  return file.hooks.filter((hook) => hasHook(settings, hook.event, [hook.command])).map(
+  return file.hooks.filter((hook) => hasHook(settings, hook.event, [hook.command], hook.timeout)).map(
     (hook) => hook.event,
   );
 }
 
 export async function installHookIn(file: HookFile): Promise<"installed" | "already-present"> {
   const settings = await readSettings(file);
-  const missing = file.hooks.filter((hook) => !hasHook(settings, hook.event, [hook.command]));
+  const missing = file.hooks.filter(
+    (hook) => !hasHook(settings, hook.event, [hook.command], hook.timeout),
+  );
   if (missing.length === 0) return "already-present";
 
   const hooks = isObject(settings.hooks) ? { ...settings.hooks } : {};
@@ -179,9 +227,14 @@ export async function installHookIn(file: HookFile): Promise<"installed" | "alre
     // after it — and with them the positions Codex keys its approvals on, so
     // the user's hooks would lose their approval and ours would inherit one it
     // was never given.
-    const replaced =
-      hook.superseded !== undefined && replaceSuperseded(existing, hook.superseded, hook.command);
-    if (!replaced) existing.push({ hooks: [{ type: "command", command: hook.command }] });
+    const replaced = replaceSuperseded(existing, [hook.command, ...(hook.superseded ?? [])], hook);
+    if (!replaced) {
+      existing.push({
+        hooks: [
+          { type: "command", command: hook.command, ...(hook.timeout !== undefined ? { timeout: hook.timeout } : {}) },
+        ],
+      });
+    }
 
     hooks[hook.event] = existing;
   }
@@ -213,7 +266,7 @@ export async function removeHookIn(file: HookFile): Promise<"removed" | "absent"
 export async function isHookInstalled(): Promise<boolean> {
   const file = claudeHookFile();
   const settings = await readSettings(file);
-  return ISY_HOOKS.every((hook) => hasHook(settings, hook.event, [hook.command]));
+  return ISY_HOOKS.every((hook) => hasHook(settings, hook.event, [hook.command], hook.timeout));
 }
 
 export function installedHooks(): Promise<string[]> {
@@ -226,6 +279,10 @@ export function installHook(): Promise<"installed" | "already-present"> {
 
 export function removeHook(): Promise<"removed" | "absent"> {
   return removeHookIn(claudeHookFile());
+}
+
+export function repairHooks(): Promise<boolean> {
+  return repairHooksIn(claudeHookFile());
 }
 
 export function settingsLocation(): string {

@@ -1,0 +1,3 @@
+2026-09-30 09:30:16.214 | INFO     | kimi_cli.cli:_run:571 |  - Created new session: 63ade4e9-4c75-4070-a8c6-f28b7de486b8
+2026-09-30 09:30:16.620 | INFO     | kimi_cli.app:create:126 |  - Using LLM model: provider='mock' model='kimi-k2-mock' max_context_size=128000
+2026-09-30 09:30:16.641 | INFO     | kimi_cli.soul.agent:load_agent:412 |  - Loading agent: @SITE_PACKAGES@/kimi_cli/agents/default/agent.yaml

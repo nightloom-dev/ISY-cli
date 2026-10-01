@@ -1,0 +1,58 @@
+{
+  "KMAIN": [
+    [
+      { "reasoning": "The add test fails. Read the code before changing anything." },
+      { "text": "Reading the code." },
+      { "tool": "ReadFile", "args": { "path": "src/app.js" } },
+      { "tool": "Grep", "args": { "pattern": "add", "path": "src" } }
+    ],
+    [{ "tool": "Shell", "args": { "command": "node --test" } }],
+    [
+      { "reasoning": "Hand the fix to a coder subagent." },
+      { "tool": "Agent", "args": { "description": "Fix add()", "prompt": "SCENARIO-KSUB: add() in src/app.js subtracts instead of adding. Fix it.", "subagent_type": "coder" } }
+    ],
+    [
+      { "tool": "WriteFile", "args": { "path": "NOTES.md", "content": "# Notes\n" } },
+      { "tool": "WriteFile", "args": { "path": "NOTES.md", "content": "- add() now adds\n", "mode": "append" } }
+    ],
+    [{ "tool": "Shell", "args": { "command": "node --test" } }],
+    [{ "tool": "SetTodoList", "args": { "todos": [{ "title": "Fix add()", "status": "done" }] } }],
+    [{ "text": "add() adds again, NOTES.md says so, and node --test passes." }]
+  ],
+  "KSUB": [
+    [{ "tool": "ReadFile", "args": { "path": "src/app.js" } }],
+    [
+      { "reasoning": "The operator is wrong." },
+      { "tool": "StrReplaceFile", "args": { "path": "src/app.js", "edit": { "old": "return a - b;", "new": "return a + b;", "replace_all": false } } }
+    ],
+    [{ "text": "Fixed add() in src/app.js: it subtracted b from a, and now it returns a + b. I read the file first, replaced the single wrong operator, and left the rest of the module untouched. The test in test/app.test.js expects add(2, 3) to equal 5, which the corrected function now returns." }]
+  ],
+  "KCMAIN": [
+    [
+      { "reasoning": "The add test fails. Read the code before changing anything." },
+      { "text": "Reading the code." },
+      { "tool": "Read", "args": { "path": "src/app.js" } },
+      { "tool": "Grep", "args": { "pattern": "add", "path": "src" } }
+    ],
+    [{ "tool": "Bash", "args": { "command": "node --test", "description": "run the tests" } }],
+    [
+      { "reasoning": "Hand the fix to a coder subagent." },
+      { "tool": "Agent", "args": { "description": "Fix add()", "prompt": "SCENARIO-KCSUB: add() in src/app.js subtracts instead of adding. Fix it.", "subagent_type": "coder" } }
+    ],
+    [
+      { "tool": "Write", "args": { "path": "NOTES.md", "content": "# Notes\n" } },
+      { "tool": "Write", "args": { "path": "NOTES.md", "content": "- add() now adds\n", "mode": "append" } }
+    ],
+    [{ "tool": "Bash", "args": { "command": "node --test", "description": "run the tests again" } }],
+    [{ "tool": "TodoList", "args": { "todos": [{ "title": "Fix add()", "status": "done" }] } }],
+    [{ "text": "add() adds again, NOTES.md says so, and node --test passes." }]
+  ],
+  "KCSUB": [
+    [{ "tool": "Read", "args": { "path": "src/app.js" } }],
+    [
+      { "reasoning": "The operator is wrong." },
+      { "tool": "Edit", "args": { "path": "src/app.js", "old_string": "return a - b;", "new_string": "return a + b;" } }
+    ],
+    [{ "text": "Fixed add() in src/app.js: it subtracted b from a, and now it returns a + b. I read the file first, replaced the single wrong operator, and left the rest of the module untouched. The test in test/app.test.js expects add(2, 3) to equal 5, which the corrected function now returns." }]
+  ]
+}

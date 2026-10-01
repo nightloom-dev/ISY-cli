@@ -1,7 +1,7 @@
 # isy
 
 Command-line client for [ISY](https://iseeyaai.com). It reads the transcript of a
-coding session — Claude Code, Codex CLI or Kimi CLI — and uploads it, so the
+coding session — Claude Code, Codex CLI, Kimi CLI or Kimi Code — and uploads it, so the
 review on your pull request can be about how the work was done and not only
 about the diff that came out of it: a fix that was never run, an assumption
 nobody checked, a file edited from stale context.
