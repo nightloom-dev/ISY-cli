@@ -1,5 +1,5 @@
-import { createReadStream } from "node:fs";
-import { createInterface } from "node:readline";
+import { posix } from "node:path";
+import { fileLines } from "./lines.js";
 import type {
   ContentBlock,
   FileEdit,
@@ -93,6 +93,11 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** A string as written, empty included: `new_string: ""` is how an edit deletes lines. */
+function asText(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function createState(): ParseState {
   return {
     records: [],
@@ -175,14 +180,14 @@ function pushFileEdits(state: ParseState, use: ToolUse): void {
       entries.push({
         ...base,
         oldString: asString(edit.old_string),
-        newString: asString(edit.new_string),
+        newString: asText(edit.new_string),
       });
     }
   } else {
     entries.push({
       ...base,
       oldString: asString(use.input.old_string),
-      newString: asString(use.input.new_string) ?? asString(use.input.new_source),
+      newString: asText(use.input.new_string) ?? asText(use.input.new_source),
       content: asString(use.input.content),
     });
   }
@@ -437,8 +442,12 @@ export function shellWrites(command: string): boolean {
   return false;
 }
 
-/** `sed -i` rewrites the file; whatever else it is, it is not a look at it. */
-const IN_PLACE = /(?:^|\s)(?:-i(?:\.\S+)?|--in-place)(?:\s|$)/;
+/**
+ * `sed -i` rewrites the file; whatever else it is, it is not a look at it. GNU
+ * takes any backup suffix (`-i.bak`, `-ie`), the flag rides in a cluster
+ * (`-Ei`), and BSD spells it `-I`.
+ */
+const IN_PLACE = /(?:^|\s)(?:-[a-zA-Z]*[iI]\S*|--in-place\S*)(?:\s|$)/;
 
 /** Tools whose first non-flag argument is a program, not a path. */
 const SCRIPTED = /^\s*(?:sudo\s+)?(?:sed|awk)\b/;
@@ -448,7 +457,8 @@ export function shellReadPaths(command: string): string[] {
 
   for (const segment of commandSegments(withoutHeredocs(command))) {
     if (!SHELL_READERS.test(segment)) continue;
-    if (IN_PLACE.test(segment)) continue;
+    // Only sed's: `grep -i foo src/a.ts` is a look, and was taken for a write.
+    if (SCRIPTED.test(segment) && IN_PLACE.test(segment)) continue;
 
     // `sed 's/^/UNPUSHED: /'` has slashes in it and is not a path: read as one
     // it yields "/", which then matches every absolute path there is.
@@ -464,8 +474,9 @@ export function shellReadPaths(command: string): string[] {
         continue;
       }
 
+      // A glob stays one: `cat src/*.js` read every file it expanded to, and
+      // `detectors.ts:samePath` matches it against the file edited.
       const path = token.includes(":") ? token.slice(token.lastIndexOf(":") + 1) : token;
-      if (path.includes("*") || path.includes("?")) continue;
       // "/" and "." name no file, and "/" matches every path there is.
       if (/^[./]+$/.test(path)) continue;
       if (!/\.[A-Za-z0-9]+$/.test(path) && !path.includes("/")) continue;
@@ -475,6 +486,97 @@ export function shellReadPaths(command: string): string[] {
   }
 
   return paths;
+}
+
+/** A shell word, quotes and all: `'s/a b/c/'` is one word, not two. */
+const SHELL_WORD = /(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"])+/g;
+
+/**
+ * Flags whose next word is the script, not a file. Only the bare ones for sed:
+ * `sed -ie` is `-i` with the backup suffix "e", while `perl -pe` is `-p -e`.
+ */
+const SED_SCRIPT_FLAG = /^(?:-e|--expression|-f|--file)$/;
+const PERL_SCRIPT_FLAG = /^-[a-zA-Z]*e$/;
+
+/**
+ * The files `sed -i` and `perl -i` rewrite: every argument after the script.
+ * What the edit changed stays unseen — a sed script is a program, not the text
+ * it replaces — but where it landed is on the command line, and without it a
+ * session editing through sed read to the detectors as one that edited nothing.
+ *
+ * Given the directory the command ran in, a relative path is resolved against
+ * it, `cd` within the command included, so `sed -i` and Edit on one file land
+ * under one key — before masking (both absolute) and after (both relative to
+ * a working directory of "."). Without it, or past a `cd` it cannot follow
+ * (`cd ~`, `cd -`, `cd $DIR`), paths stay as typed, like `shellReadPaths`.
+ *
+ * ponytail: in-place editors only. A redirect, `tee` or a heredoc into python
+ * still names no file to the detectors (`shellWrites` knows only that one was
+ * written); a glob names files this cannot list.
+ */
+export function shellEditPaths(command: string, cwd?: string): string[] {
+  const paths: string[] = [];
+  let dir = cwd;
+
+  for (const segment of commandSegments(withoutHeredocs(command))) {
+    if (/^\s*cd(?:\s|$)/.test(segment)) {
+      const to = /^\s*cd\s+(\S+)\s*$/.exec(segment)?.[1]?.replace(/["']/g, "");
+      if (to?.startsWith("/")) dir = posix.normalize(to);
+      else dir = dir === undefined || to === undefined || /^[~$-]/.test(to) ? undefined : posix.join(dir, to);
+      continue;
+    }
+    if (!IN_PLACE_EDITORS.test(segment)) continue;
+    const perl = /^\s*(?:sudo\s+)?perl\b/.test(segment);
+    // The same test `shellWrites` applies, on the same unquoted text, so the two
+    // agree on what was written: `sed 's/ -i //' a.ts` only prints.
+    const bare = segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''");
+    if (!(perl ? /\bperl\s+-\w*i/.test(bare) : IN_PLACE.test(bare))) continue;
+
+    let scriptSeen = false;
+    let scriptNext = false;
+    const words = segment.replace(/^\s*sudo\s+/, "").match(SHELL_WORD) ?? [];
+    for (const word of words.slice(1)) {
+      if (/^\d*[<>|]|^&/.test(word)) break;
+      const token = word.replace(/["']/g, "");
+      if (scriptNext) {
+        scriptNext = false;
+        continue;
+      }
+      if ((perl ? PERL_SCRIPT_FLAG : SED_SCRIPT_FLAG).test(token)) {
+        scriptSeen = true;
+        scriptNext = true;
+        continue;
+      }
+      if (/^--(?:expression|file)=/.test(token)) scriptSeen = true;
+      // An empty word is BSD sed's backup suffix: `sed -i '' 's/a/b/' f`.
+      if (token.length === 0 || token.startsWith("-") || token.startsWith("$")) continue;
+      if (!scriptSeen) {
+        scriptSeen = true;
+        continue;
+      }
+      if (/[*?]/.test(token) || /^[./]+$/.test(token)) continue;
+      if (dir === undefined || token.startsWith("~")) paths.push(token.replace(/^\.\//, ""));
+      else paths.push(token.startsWith("/") ? posix.normalize(token) : posix.join(dir, token));
+    }
+  }
+
+  return paths;
+}
+
+function pushShellEdits(state: ParseState, use: ToolUse, command: string, cwd: unknown): void {
+  for (const filePath of shellEditPaths(command, asString(cwd))) {
+    const edit: FileEdit = {
+      toolUseId: use.id,
+      tool: use.name,
+      filePath,
+      recordIndex: use.recordIndex,
+      uuid: use.uuid,
+      timestamp: use.timestamp,
+    };
+    const existing = state.fileEdits.get(filePath);
+    if (existing) existing.push(edit);
+    else state.fileEdits.set(filePath, [edit]);
+  }
 }
 
 function pushToolUse(
@@ -508,6 +610,7 @@ function pushToolUse(
   if (name === "Bash" && typeof use.input.command === "string") {
     for (const path of shellReadPaths(use.input.command)) state.filesRead.add(path);
     if (shellWrites(use.input.command)) state.shellWrote = true;
+    pushShellEdits(state, use, use.input.command, record.cwd);
   }
 
   if (mayWrite(name, use.input)) state.opaqueWrite = true;
@@ -747,9 +850,7 @@ export async function parseLineStream(lines: AsyncIterable<string>): Promise<Par
 }
 
 export async function parseTranscriptFile(filePath: string): Promise<ParsedSession> {
-  const input = createReadStream(filePath, { encoding: "utf8" });
-  const reader = createInterface({ input, crlfDelay: Infinity });
-  const session = await parseLineStream(reader);
+  const session = await parseLineStream(fileLines(filePath));
   session.filePath = filePath;
   return session;
 }

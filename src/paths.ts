@@ -1,8 +1,7 @@
-import { createReadStream } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { fileLines } from "./lines.js";
 import { sessionFingerprint } from "./subagents.js";
 import type { SessionFile } from "./types.js";
 
@@ -154,28 +153,20 @@ const CWD_SCAN_LINES = 40;
  * same field `mask-paths` roots its rewriting on.
  */
 export async function firstCwd(path: string, limit = CWD_SCAN_LINES): Promise<string | undefined> {
-  const input = createReadStream(path, { encoding: "utf8" });
-  const reader = createInterface({ input, crlfDelay: Infinity });
-
-  try {
-    let seen = 0;
-    for await (const line of reader) {
-      if (seen++ >= limit) return undefined;
-      if (line.length === 0) continue;
-      try {
-        const parsed: unknown = JSON.parse(line);
-        if (typeof parsed !== "object" || parsed === null) continue;
-        const cwd = (parsed as { cwd?: unknown }).cwd;
-        if (typeof cwd === "string" && cwd.length > 0) return cwd;
-      } catch {
-        continue;
-      }
+  let seen = 0;
+  for await (const line of fileLines(path)) {
+    if (seen++ >= limit) return undefined;
+    if (line.length === 0) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (typeof parsed !== "object" || parsed === null) continue;
+      const cwd = (parsed as { cwd?: unknown }).cwd;
+      if (typeof cwd === "string" && cwd.length > 0) return cwd;
+    } catch {
+      continue;
     }
-    return undefined;
-  } finally {
-    reader.close();
-    input.destroy();
   }
+  return undefined;
 }
 
 /** The first line of a file, without reading the rest: transcripts get large. */
@@ -185,19 +176,12 @@ export async function firstLine(path: string): Promise<string> {
 
 /** The first `count` lines of a file, without reading the rest. */
 export async function firstLines(path: string, count: number): Promise<string[]> {
-  const input = createReadStream(path, { encoding: "utf8" });
-  const reader = createInterface({ input, crlfDelay: Infinity });
   const lines: string[] = [];
-  try {
-    for await (const line of reader) {
-      lines.push(line);
-      if (lines.length >= count) break;
-    }
-    return lines;
-  } finally {
-    reader.close();
-    input.destroy();
+  for await (const line of fileLines(path)) {
+    lines.push(line);
+    if (lines.length >= count) break;
   }
+  return lines;
 }
 
 /**

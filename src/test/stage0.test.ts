@@ -185,6 +185,27 @@ test("scores a weakened test lower when nothing failed beforehand", () => {
   assert.equal(candidates[0]?.weight, 0.6);
 });
 
+test("flags an assertion deleted outright, with an empty replacement", () => {
+  // Claude Code deletes lines with `new_string: ""`; read as no replacement at
+  // all, the most direct weakening of a test was the one never flagged.
+  const session = padded([
+    assistant("b", "pad19", [{ type: "tool_use", id: "t0", name: "Bash", input: { command: "npm test" } }]),
+    result("br", "b", "t0", { toolUseResult: { stdout: "1 test FAILED", stderr: "" } }),
+    assistant("c", "br", [
+      {
+        type: "tool_use",
+        id: "t1",
+        name: "Edit",
+        input: { file_path: "/r/test/money.test.js", old_string: "assert.equal(split(5, 2), [3, 2]);\n", new_string: "" },
+      },
+    ]),
+  ]);
+
+  const candidates = detectTestModifiedToPass(session);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.weight, 0.9);
+});
+
 test("ignores a strengthened test and a non-test file", () => {
   const session = padded([
     assistant("c", "pad19", [
@@ -487,6 +508,41 @@ function edited(uuid: string, parentUuid: string, filePath: string, newString = 
     },
   ]);
 }
+
+test("a file read through a glob counts as read", () => {
+  // `cat src/*.js` read src/server.js; a candidate here was a false "never read".
+  const session = padded([
+    ran("s", "pad19", "cat src/*.js test/*.js README.md"),
+    edited("e", "s", "/repo/src/server.js"),
+  ]);
+  assert.deepEqual(detectUnverifiedAssumption(session), []);
+
+  const elsewhere = padded([ran("s", "pad19", "cat lib/*.js"), edited("e", "s", "/repo/src/server.js")]);
+  assert.equal(detectUnverifiedAssumption(elsewhere).length, 1);
+});
+
+test("an edit through sed -i is an edit to the detectors", () => {
+  // Never read, edited in place: the same assumption an Edit would make.
+  const blind = padded([ran("s", "pad19", "sed -i 's/2.34/2.35/' README.md")]);
+  const found = detectUnverifiedAssumption(blind);
+  assert.equal(found.length, 1);
+  assert.equal(found[0]?.filePath, "/repo/README.md");
+
+  // A test rewritten in place right after a failure: what changed is the model's to read.
+  const afterFailure = padded([
+    ran("t", "pad19", "npm test"),
+    result("tr", "t", "bash-t", { toolUseResult: { stdout: "1 test FAILED", stderr: "" } }),
+    ran("s", "tr", "sed -i 's/\\[0.02, 0.03\\]/[0.03, 0.02]/' test/money.test.js"),
+  ]);
+  const weakened = detectTestModifiedToPass(afterFailure);
+  assert.equal(weakened.length, 1);
+  assert.equal(weakened[0]?.filePath, "/repo/test/money.test.js");
+  assert.equal(weakened[0]?.weight, 0.5);
+
+  // The same edit with nothing failing before it is no signal.
+  const calm = padded([ran("s", "pad19", "sed -i 's/a/b/' test/money.test.js")]);
+  assert.deepEqual(detectTestModifiedToPass(calm), []);
+});
 
 test("code edited after the last test run is one note, not one per file", () => {
   const session = padded([

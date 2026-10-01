@@ -1,8 +1,7 @@
-import { createReadStream } from "node:fs";
 import type { Dirent } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { createInterface } from "node:readline";
 import { basename, dirname, join } from "node:path";
+import { fileLines } from "./lines.js";
 
 /**
  * Claude Code 2.1 writes every subagent to a file of its own beside the session:
@@ -103,17 +102,6 @@ export async function sessionFingerprint(
     }
   }
   return { sizeBytes, modifiedAt: new Date(modified) };
-}
-
-async function* fileLines(path: string): AsyncGenerator<string> {
-  const input = createReadStream(path, { encoding: "utf8" });
-  const reader = createInterface({ input, crlfDelay: Infinity });
-  try {
-    for await (const line of reader) yield line;
-  } finally {
-    reader.close();
-    input.destroy();
-  }
 }
 
 /**

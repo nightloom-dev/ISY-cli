@@ -70,6 +70,9 @@ node trim-kimi.mjs /home/dev/kimihome/.kimi <session id> ../kimi-cli-1.52/.kimi
 `trim-kimi.mjs` cuts the system prompt down to the sentence naming the working
 directory, keeps the log lines that open the run, and replaces the installed
 package's path the log names with `@SITE_PACKAGES@`.
+The log itself was lost to the `*.log` rule in `.gitignore` before it was ever
+committed, and is rebuilt in the shape `trim-kimi.mjs` writes: the three lines
+that open the run, the session id and the model as recorded.
 
 What the recording showed about 1.52, beyond the fixture itself:
 

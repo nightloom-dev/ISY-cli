@@ -11,6 +11,7 @@ import {
   onAbandonedBranch,
   onMainPath,
   parseLines,
+  shellEditPaths,
   shellReadPaths,
   shellWrites,
   withoutHeredocs,
@@ -294,11 +295,43 @@ test("picks file paths out of shell commands that read a file", () => {
   assert.deepEqual(shellReadPaths("rg -n 'drain' src/queue.ts"), ["src/queue.ts"]);
 });
 
-test("does not treat a write or a glob as a shell read", () => {
+test("does not treat a write as a shell read", () => {
   assert.deepEqual(shellReadPaths("rm -rf src/app.ts"), []);
   assert.deepEqual(shellReadPaths("echo hi > src/app.ts"), []);
-  assert.deepEqual(shellReadPaths("cat src/*.ts"), []);
   assert.deepEqual(shellReadPaths("npm test"), []);
+});
+
+test("a case-insensitive grep is a read, and sed -i in any spelling is not", () => {
+  assert.deepEqual(shellReadPaths("grep -i total src/cart.ts"), ["src/cart.ts"]);
+  assert.deepEqual(shellReadPaths("sed -Ei 's/a/b/' src/cart.ts"), []);
+  assert.deepEqual(shellReadPaths("sed -i.bak 's/a/b/' src/cart.ts"), []);
+});
+
+test("keeps a glob read as the glob, for the detectors to match", () => {
+  assert.deepEqual(shellReadPaths("cat src/*.ts test/*.js README.md"), ["src/*.ts", "test/*.js", "README.md"]);
+});
+
+test("names the files sed -i and perl -i rewrite, and not their scripts", () => {
+  assert.deepEqual(shellEditPaths("sed -i 's/a b/c d/; s/x/y/' test/money.test.js README.md"), ["test/money.test.js", "README.md"]);
+  assert.deepEqual(shellEditPaths("sed -i -e 's/a/b/' -e 's/c/d/' src/a.ts"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("sed -i '' 's/a/b/' src/a.ts"), ["src/a.ts"], "BSD sed's empty backup suffix");
+  assert.deepEqual(shellEditPaths("sed -ie 's/a/b/' src/a.ts"), ["src/a.ts"], "-ie is -i with a suffix");
+  assert.deepEqual(shellEditPaths("perl -pi -e 's/a/b/' src/a.ts"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("sudo sed -i 's/a/b/' /etc/hosts"), ["/etc/hosts"]);
+  assert.deepEqual(shellEditPaths(`sed -i "s/banker's/away/" README.md && npm test`), ["README.md"]);
+  // Not an edit: no -i, or a glob this cannot list.
+  assert.deepEqual(shellEditPaths("sed -n '1,5p' src/a.ts"), []);
+  assert.deepEqual(shellEditPaths("sed 's/ -i //' src/a.ts"), [], "-i inside the script");
+  assert.deepEqual(shellEditPaths("sed -i 's/a/b/' src/*.ts"), []);
+});
+
+test("resolves a sed -i path against the directory the command ran in", () => {
+  assert.deepEqual(shellEditPaths("sed -i 's/a/b/' ./src/a.ts", "/repo"), ["/repo/src/a.ts"]);
+  // Masked, the working directory is "." and paths come out repo-relative, as Edit's do.
+  assert.deepEqual(shellEditPaths("sed -i 's/a/b/' ./src/a.ts", "."), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("cd pkg && sed -i 's/a/b/' a.ts", "/repo"), ["/repo/pkg/a.ts"]);
+  assert.deepEqual(shellEditPaths("cd /elsewhere && sed -i 's/a/b/' a.ts", "/repo"), ["/elsewhere/a.ts"]);
+  assert.deepEqual(shellEditPaths("cd $DIR && sed -i 's/a/b/' a.ts", "/repo"), ["a.ts"], "a cd it cannot follow");
 });
 
 test("stops at a redirection so a heredoc write is not read as a lookup", () => {

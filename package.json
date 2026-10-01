@@ -50,7 +50,8 @@
     "test": "node --import tsx --test src/test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build",
-    "calibrate:corpus": "tsx src/index.ts analyze \"$HOME/.claude/projects\""
+    "calibrate:corpus": "tsx src/index.ts analyze \"$HOME/.claude/projects\"",
+    "e2e:live": "node e2e/live.mjs"
   },
   "devDependencies": {
     "@types/node": "^26",

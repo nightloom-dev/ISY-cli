@@ -43,6 +43,15 @@ database or to a model.
 - **The parser must survive unknown fields and record types.** Transcript
   formats are undocumented and move between CLI versions. Log and skip; never
   throw.
+- **A JSONL file is split on `\n` alone** (`lines.ts:fileLines`), never with
+  `node:readline`: it also ends a line at U+2028 and U+2029, which
+  `JSON.stringify` leaves unescaped inside strings, and a record carrying one
+  came apart into fragments that neither parsed nor had their secrets redacted.
+- **Claude Code's `attachment` records go up as their `type` alone**
+  (`redact.ts:stripAttachment`). They hold what the harness tells the model —
+  the account's email and organisation, the whole system prompt — and nothing
+  downstream reads past the type. The records stay: the next one names them as
+  its `parentUuid`.
 - **Nothing is quoted verbatim out of a transcript** — not developer prompts,
   not `thinking` blocks. Anything printed or sent goes through `mask-paths`
   first, which is idempotent: applying it twice is safe.
