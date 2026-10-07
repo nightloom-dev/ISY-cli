@@ -9,6 +9,8 @@ nobody checked, a file edited from stale context.
 Nothing is posted anywhere until a pull request exists. Sessions are matched to
 one by commit SHA, and the result is a single comment on that pull request.
 
+*Developed in a private repository and published here as a snapshot, so the history starts at publication.*
+
 ## Install
 
 ```sh
