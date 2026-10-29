@@ -446,6 +446,24 @@ test("drops developer messages, which are harness context and not the user's wor
   assert.doesNotMatch(session.records.map((r) => json(r)).join(""), /prior runs said/);
 });
 
+test("drops the context Codex sends under the user's role, and keeps what the user typed", () => {
+  // What Codex 0.14x opens a session with: AGENTS.md, the plugins it suggests
+  // and the environment, two parts to a message.
+  const parts = (...texts: string[]) =>
+    item({ type: "message", role: "user", content: texts.map((text) => ({ type: "input_text", text })) });
+  const environment = "<environment_context>\n  <cwd>/home/alice/repo</cwd>\n  <shell>zsh</shell>\n</environment_context>";
+  const session = convert([
+    META,
+    parts("# AGENTS.md instructions for /home/alice/repo\n\n<INSTRUCTIONS>\nUse pnpm.\n</INSTRUCTIONS>", environment),
+    parts("<recommended_plugins>\n- github\n</recommended_plugins>", environment),
+    say("user", "<user_instructions>\nAlways answer in French.\n</user_instructions>"),
+    say("user", "fix the failing test"),
+  ]);
+
+  assert.equal(session.records.length, 1);
+  assert.equal(session.blocks[0]?.text, "fix the failing test");
+});
+
 test("an apply_patch update becomes an edit the shared parser unpacks per hunk", () => {
   const session = convert([
     META,

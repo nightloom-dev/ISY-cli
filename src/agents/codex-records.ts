@@ -63,6 +63,19 @@ function contentText(content: unknown): string {
 }
 
 /**
+ * What Codex sends under the user's role that the user never typed: the
+ * working directory and shell (`<environment_context>`), AGENTS.md and the
+ * user's own instruction file, the plugins it recommends. Codex tells them from
+ * a turn by these openings, and sends several as parts of one message.
+ */
+const HARNESS_USER_PART = /^\s*(?:<environment_context>|<user_instructions>|<recommended_plugins>|# AGENTS\.md instructions for )/;
+
+function typedByUser(content: unknown): unknown {
+  if (!Array.isArray(content)) return HARNESS_USER_PART.test(contentText(content)) ? "" : content;
+  return content.filter((part) => !HARNESS_USER_PART.test(contentText([part])));
+}
+
+/**
  * Reasoning Codex actually recorded in the clear. `encrypted_content` is an
  * opaque blob — megabytes of it per session — and is deliberately dropped:
  * it cannot be analysed and must never reach the server.
@@ -468,7 +481,7 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
       // `developer` messages are harness-injected context, not the user's work.
       if (role !== "user" && role !== "assistant") continue;
 
-      const text = contentText(payload.content);
+      const text = contentText(role === "user" ? typedByUser(payload.content) : payload.content);
       if (!text) continue;
 
       emit({
