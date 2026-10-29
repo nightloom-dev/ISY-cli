@@ -110,9 +110,10 @@ const URL_LIKE = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'`<>]*/;
  * rather than an address on the network. Node, vitest and Next print
  * `imported from file:///home/alice/…` on an unresolved import, and that lands
  * in a tool result like any other line of stdout; an editor spells the same
- * path `vscode://file/home/alice/…`. The scheme is kept, the path masked.
+ * path `vscode://file/home/alice/…`, and some tools `file://localhost/home/…`.
+ * The scheme is kept, the path masked.
  */
-const LOCAL_URL = /^((?:file|vscode(?:-insiders)?):\/\/(?:file)?)(\/[^\s"'`<>]*)$/;
+const LOCAL_URL = /^((?:file|vscode(?:-insiders)?):\/\/(?:file|localhost)?)(\/[^\s"'`<>]*)$/;
 
 /**
  * `\\host\share\…`. The lookbehind keeps a drive letter out: a transcript line
@@ -127,9 +128,19 @@ const UNC = new RegExp(
   `(?<![A-Za-z0-9:~\\\\])\\\\\\\\${SEG.source}+(?:[\\\\/]+${SEG.source}+)*[\\\\/]?`,
 );
 
+/**
+ * What ends an escape rather than a word, so a path may open right after it:
+ * `\n`, `\u001b`, `\x22`, and a terminal's colour code (`ESC[2m`), raw or
+ * escaped — test runners colour the paths they print.
+ */
+const ESCAPE_END = String.raw`(?:\\[A-Za-z0-9]|\\u[0-9A-Fa-f]{4}|\\x[0-9A-Fa-f]{2}|(?:\x1b|\\u001b|\\x1b|\\033|\\e)\[[0-9;]*m)`;
+
+/** A letter or digit right before a path continues a word, unless it ends an escape. */
+const NOT_A_WORD = `(?<![A-Za-z0-9](?<!${ESCAPE_END}))`;
+
 /** Separators repeat for the same reason: JSON doubles every backslash. */
 const WINDOWS = new RegExp(
-  `(?<![A-Za-z0-9])[A-Za-z]:[\\\\/]+(?:${SEG.source}+[\\\\/]+)*${SEG.source}*`,
+  `${NOT_A_WORD}[A-Za-z]:[\\\\/]+(?:${SEG.source}+[\\\\/]+)*${SEG.source}*`,
 );
 
 /**
@@ -140,14 +151,17 @@ const WINDOWS = new RegExp(
  * `~` stays, and that is all idempotence needs: masking twice is masking once,
  * because `./dist/b.js` and `100%/x` are under no root and come back unchanged.
  *
- * The inner lookbehind is the one exception to the letter rule: a letter that
- * is itself behind a backslash ends an escape sequence rather than a word. Tool
- * output reaches a transcript JSON-encoded twice often enough for that to
- * matter — Prisma reports `invocation in\\n/home/alice/…`, and read as a word
- * `in\\n` carried the account name through untouched.
+ * The one exception to the letter rule is a letter that ends an escape rather
+ * than a word (`ESCAPE_END`). Tool output reaches a transcript JSON-encoded
+ * twice often enough for that to matter — Prisma reports
+ * `invocation in\\n/home/alice/…`, and read as a word `in\\n` carried the
+ * account name through untouched.
+ *
+ * A slash may come escaped, `\/home\/alice\/…`, as PHP and some loggers write
+ * JSON; that is still one path.
  */
 const POSIX = new RegExp(
-  `(?<!~)(?<!(?<!\\\\)[A-Za-z0-9])\\/(?:${SEG.source}+\\/)*${SEG.source}+\\/?`,
+  `(?<!~)${NOT_A_WORD}\\\\?\\/(?:${SEG.source}+\\\\?\\/)*${SEG.source}+(?:\\\\?\\/)?`,
 );
 
 /**
@@ -180,7 +194,7 @@ const TRAILING = /[.,;:!?]+$/;
  * slug behind a newline is as much the account name as one behind a slash.
  */
 const PROJECT_SLUG =
-  /(?<![A-Za-z0-9._-])-(?:home|root|users|[a-z]-users)-[A-Za-z0-9._-]*-[A-Za-z0-9._-]+(?![A-Za-z0-9._-])/gi;
+  /(?<![A-Za-z0-9._-])-(?:home|root|users|(?:mnt-|cygdrive-)?[a-z]-users)-[A-Za-z0-9._-]*-[A-Za-z0-9._-]+(?![A-Za-z0-9._-])/gi;
 
 /**
  * `-home-alice`: the slug of a session that ran in the home directory itself.
@@ -191,7 +205,7 @@ const PROJECT_SLUG =
  * known nothing here fires at all.
  */
 const HOME_SLUG =
-  /(?<![A-Za-z0-9._-])-(?:home|root|users|[a-z]-users)-[A-Za-z0-9._]+(?![A-Za-z0-9._-])/gi;
+  /(?<![A-Za-z0-9._-])-(?:home|root|users|(?:mnt-|cygdrive-)?[a-z]-users)-[A-Za-z0-9._]+(?![A-Za-z0-9._-])/gi;
 
 function maskSlugs(value: string, home: readonly string[] | undefined): string {
   const masked = value.replace(PROJECT_SLUG, MASK_PROJECT);
@@ -221,7 +235,8 @@ const NOT_AN_ACCOUNT: ReadonlySet<string> = new Set(["shared", "public", "defaul
  * Which segment of a path would be the account name, or -1 when the path is
  * not shaped like a home at all. `/home/alice/…` and `/Users/alice/…` name it
  * second; `C:\Users\alice\…` and the Git Bash spelling `/c/Users/alice/…`
- * name it third.
+ * name it third, and WSL's `/mnt/c/Users/alice/…` and Cygwin's
+ * `/cygdrive/c/Users/alice/…` fourth.
  *
  * The spellings are exact because the near misses are ordinary text:
  * `/users/42/profile` is a URL and `/root/app` is a `WORKDIR`, and neither
@@ -231,7 +246,8 @@ const NOT_AN_ACCOUNT: ReadonlySet<string> = new Set(["shared", "public", "defaul
 function accountAt(parts: readonly string[]): number {
   const head = parts[0] ?? "";
   if (head === "home" || head === "Users") return 1;
-  if (/^[a-z]:?$/i.test(head) && (parts[1] ?? "").toLowerCase() === "users") return 2;
+  const drive = head === "mnt" || head === "cygdrive" ? 1 : 0;
+  if (/^[a-z]:?$/i.test(parts[drive] ?? "") && (parts[drive + 1] ?? "").toLowerCase() === "users") return drive + 2;
   return -1;
 }
 
@@ -259,8 +275,9 @@ function genericHome(parts: readonly string[]): string[] | undefined {
   return parts.slice(account + 1);
 }
 
-/** `\` when the path was written the Windows way, so a `~` path keeps its shape. */
+/** The separator the path was written with, so a `~` path keeps its shape. */
 function joiner(value: string): string {
+  if (value.includes("\\/")) return "\\/";
   return value.includes("\\") ? "\\" : "/";
 }
 

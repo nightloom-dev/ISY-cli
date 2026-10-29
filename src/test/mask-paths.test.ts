@@ -191,6 +191,37 @@ test("a local URL names this machine and is masked like the path it is", () => {
   assert.equal(maskPaths("vscode://file/home/alice/notes.md", roots), "vscode://file~/notes.md");
 });
 
+test("a Windows home seen from WSL or Cygwin loses its account name", () => {
+  assert.equal(maskPath("/mnt/c/Users/alice/Documents/x.ts", blind), "~/Documents/x.ts");
+  assert.equal(maskPath("/cygdrive/d/Users/alice/x.ts", blind), "~/x.ts");
+  assert.equal(maskPath("/mnt/data/backup/x.ts", blind), "/mnt/data/backup/x.ts");
+
+  const wsl = { cwd: "/mnt/c/Users/alice/proj" };
+  assert.equal(maskPaths("cd /mnt/c/Users/alice/proj/src && cat /mnt/c/Users/alice/.npmrc", wsl), "cd src && cat ~/.npmrc");
+  assert.equal(maskPaths("ls ~/.claude/projects/-mnt-c-Users-alice-proj", wsl), `ls ~/.claude/projects/${marker("project")}`);
+});
+
+test("a path right after an escape or a terminal colour code is still a path", () => {
+  // Raw, as a parsed transcript holds the output of a test runner.
+  assert.equal(maskPaths(`\u001b[2m${CWD}/src/a.ts\u001b[22m failed`, roots), "\u001b[2msrc/a.ts\u001b[22m failed");
+  assert.equal(maskPaths("\u001b[31m/home/alice/.npmrc", roots), "\u001b[31m~/.npmrc");
+  // Escaped, as a line that failed to parse or output encoded twice holds it.
+  for (const escape of ["\\u001b[2m", "\\x1b[0;31m", "\\033[1m", "\\u0022", "\\x22"]) {
+    assert.equal(maskPaths(`${escape}/home/alice/.npmrc`, roots), `${escape}~/.npmrc`, escape);
+  }
+  assert.equal(maskPaths(`C:\\x1b[2mC:\\Users\\alice\\a.ts`, roots), "C:\\x1b[2m~\\a.ts");
+});
+
+test("a path whose slashes JSON escaped is still a path", () => {
+  assert.equal(maskPaths('{"file":"\\/home\\/alice\\/notes\\/a.md"}', roots), '{"file":"~\\/notes\\/a.md"}');
+  assert.equal(maskPaths('{"file":"\\/home\\/alice\\/work\\/isy\\/src\\/a.ts"}', roots), '{"file":"src/a.ts"}');
+  assert.equal(maskPaths('"\\/Users\\/bob\\/x.ts"', blind), '"~\\/x.ts"');
+});
+
+test("a file URL that names localhost is masked like the path it is", () => {
+  assert.equal(maskPaths("open file://localhost/home/alice/notes.md", roots), "open file://localhost~/notes.md");
+});
+
 test("a slash that continues a word does not open a path", () => {
   for (const text of ["and/or", "2024/01/02", "read src/**/*.ts", "a 50/50 chance"]) {
     assert.equal(maskPaths(text, roots), text);
@@ -209,6 +240,11 @@ test("masking twice is masking once", () => {
     `cd ${CWD} && npm test`,
     "/home/alice/.claude/projects/-home-alice-work-isy/6f2.jsonl",
     "C:\\Users\\alice\\proj\\src\\a.ts",
+    "/mnt/c/Users/alice/proj/a.ts",
+    "\u001b[2m/home/alice/.npmrc",
+    "\\u001b[2m/home/alice/.npmrc",
+    '{"file":"\\/home\\/alice\\/notes\\/a.md"}',
+    "file://localhost/home/alice/notes.md",
   ];
 
   for (const text of texts) {
