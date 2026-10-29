@@ -248,6 +248,24 @@ test("summarizes session metadata", () => {
   assert.equal(session.meta.thinkingBlocks, 1);
 });
 
+test("a subagent decides neither where the session ran nor when it ended", () => {
+  const session = parseLines(jsonl([
+    { ...assistant("a", null, [{ type: "text", text: "start" }]), timestamp: "2026-08-14T09:00:00Z" },
+    { ...assistant("b", "a", [{ type: "text", text: "done" }]), timestamp: "2026-08-14T12:00:00Z" },
+    // A subagent whose call is nowhere follows the whole session (`subagents.ts`).
+    { ...assistant("s", null, [{ type: "text", text: "work" }]), isSidechain: true, timestamp: "2026-08-14T10:00:00Z", cwd: "/jobs/wf", gitBranch: "HEAD", version: "2.0.1" },
+  ]));
+
+  assert.equal(session.meta.cwd, "/repo");
+  assert.equal(session.meta.gitBranch, "feat/x");
+  assert.equal(session.meta.claudeVersion, "2.0.0");
+  assert.equal(session.meta.endedAt, "2026-08-14T12:00:00Z");
+
+  // Read alone, a subagent's file is all there is to go by.
+  const alone = parseLines(jsonl([{ ...assistant("s", null, []), isSidechain: true, cwd: "/jobs/wf" }]));
+  assert.equal(alone.meta.cwd, "/jobs/wf");
+});
+
 const corpus = join(homedir(), ".claude", "projects");
 
 /** Object lines in a file: what one subagent adds to its session once spliced in. */

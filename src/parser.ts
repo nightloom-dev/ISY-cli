@@ -794,13 +794,20 @@ function finish(state: ParseState): ParsedSession {
 
   for (const record of state.records) {
     sessionId ??= asString(record.sessionId);
-    cwd = asString(record.cwd) ?? cwd;
-    gitBranch = asString(record.gitBranch) ?? gitBranch;
-    claudeVersion = asString(record.version) ?? claudeVersion;
+    // A subagent can work in a directory of its own and outlast the session, and
+    // one whose call is nowhere follows all of it (`subagents.ts`): where and on
+    // what the session ran comes off its own records, and off a subagent's only
+    // when it has none — a subagent's file read alone.
+    const own = record.isSidechain !== true;
+    if (own || cwd === undefined) cwd = asString(record.cwd) ?? cwd;
+    if (own || gitBranch === undefined) gitBranch = asString(record.gitBranch) ?? gitBranch;
+    if (own || claudeVersion === undefined) claudeVersion = asString(record.version) ?? claudeVersion;
     const timestamp = asString(record.timestamp);
     if (timestamp) {
       startedAt ??= timestamp;
-      endedAt = timestamp;
+      // The latest, not the last: a subagent that follows the session can have
+      // ended before it.
+      if (endedAt === undefined || timestamp > endedAt) endedAt = timestamp;
     }
     if (record.type === "assistant") assistantRecords += 1;
     if (record.isSidechain === true) sidechainRecords += 1;
