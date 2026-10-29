@@ -470,6 +470,7 @@ test("knows every record type Claude Code 2.1 writes", () => {
     { type: "custom-title", customTitle: "x", sessionId: "s1" },
     { type: "attribution-snapshot", sessionId: "s1" },
     { type: "progress", sessionId: "s1" },
+    { type: "tools-used", tools: ["Read", "Bash"], sessionId: "s1" },
   ]));
 
   assert.deepEqual(session.skipped.unknownTypes, {});

@@ -16,9 +16,10 @@ export const LOOKUP_TOOLS = new Set(["Read", "Grep", "Glob"]);
 /**
  * Every record type Claude Code writes to a session file: the table its 2.1.285
  * session writer routes each append by, plus `progress`, which older builds
- * wrote inline. A type outside it is kept and counted in `skipped.unknownTypes`,
- * which is what `isy status` reports as records it could not place — so a type
- * missing here reads to the user as a transcript this client half-understood.
+ * wrote inline, and `tools-used`, which 2.1.304 and later add. A type outside
+ * it is kept and counted in `skipped.unknownTypes`, which is what `isy status`
+ * reports as records it could not place — so a type missing here reads to the
+ * user as a transcript this client half-understood.
  */
 const KNOWN_RECORD_TYPES = new Set([
   "user",
@@ -61,6 +62,7 @@ const KNOWN_RECORD_TYPES = new Set([
   "api-request-blob",
   "fork-context-ref",
   "observer-ref",
+  "tools-used",
 ]);
 
 interface ParseState {
