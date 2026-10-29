@@ -190,7 +190,7 @@ async function stateProblems(verified: string[]): Promise<HealthProblem[]> {
   }
 }
 
-/** Uploads that used up all three attempts. Their stored `lastError` is the evidence. */
+/** Uploads that used up every attempt. Their stored `lastError` is the evidence. */
 async function queueProblems(): Promise<HealthProblem[]> {
   const failed = await listFailed();
   if (failed.length === 0) return [];
@@ -199,7 +199,7 @@ async function queueProblems(): Promise<HealthProblem[]> {
     {
       id: "uploads-abandoned",
       summary: `${failed.length} session${failed.length === 1 ? "" : "s"} never reached the server`,
-      attempted: "POST /api/v1/sessions for each queued session, three times",
+      attempted: "POST /api/v1/sessions for each queued session, until the queue gave up on it",
       evidence: failed
         .map((item) => `${item.entry.sessionId}: ${item.entry.lastError ?? "no error recorded"}`)
         .join("\n"),

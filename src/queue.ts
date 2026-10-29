@@ -3,7 +3,14 @@ import { join } from "node:path";
 import { queueDir } from "./paths.js";
 import type { UploadPayload } from "./api.js";
 
-export const MAX_ATTEMPTS = 3;
+/**
+ * Attempts are spaced rather than made once per run: the wait before the next
+ * one doubles from ten minutes, so the last comes nearly two days after the
+ * session was queued. Runs come minutes apart — a session's start and end,
+ * every commit — so counted per run, one short outage would use them all up.
+ */
+export const MAX_ATTEMPTS = 8;
+const RETRY_AFTER_MS = 10 * 60_000;
 const FAILED_SUFFIX = ".failed";
 
 export interface QueueEntry {
@@ -11,6 +18,8 @@ export interface QueueEntry {
   contentHash: string;
   attempts: number;
   queuedAt: string;
+  /** When the last attempt failed. isy 1.0 did not record it; `queuedAt` stands in. */
+  lastAttemptAt?: string;
   lastError?: string;
   payload: UploadPayload;
 }
@@ -42,12 +51,17 @@ export async function enqueue(payload: UploadPayload, lastError?: string): Promi
 
   const path = join(dir, entryName(payload.sessionId, payload.contentHash));
   const existing = await readEntry(path);
+  const now = new Date().toISOString();
 
   const entry: QueueEntry = {
     sessionId: payload.sessionId,
     contentHash: payload.contentHash,
     attempts: existing ? existing.attempts : 0,
-    queuedAt: existing ? existing.queuedAt : new Date().toISOString(),
+    queuedAt: existing ? existing.queuedAt : now,
+    // The send that failed starts the wait, or the drain closing the same run
+    // would try again a second later. Queued again by a later failed send, an
+    // entry keeps both this and `attempts`: the queue keeps its own schedule.
+    lastAttemptAt: existing ? existing.lastAttemptAt : now,
     lastError,
     payload,
   };
@@ -93,6 +107,12 @@ export async function listPending(): Promise<QueueItem[]> {
   return listBySuffix(".json");
 }
 
+/** Whether a queued upload has waited out the delay since it last failed. */
+export function isDue(entry: QueueEntry, now = Date.now()): boolean {
+  const last = Date.parse(entry.lastAttemptAt ?? entry.queuedAt);
+  return Number.isNaN(last) || now - last >= RETRY_AFTER_MS * 2 ** entry.attempts;
+}
+
 /** Uploads that ran out of attempts. Their `lastError` is the only record of why. */
 export async function listFailed(): Promise<QueueItem[]> {
   return listBySuffix(FAILED_SUFFIX);
@@ -103,7 +123,8 @@ export async function recordFailure(
   error: string,
 ): Promise<"retained" | "abandoned"> {
   const attempts = item.entry.attempts + 1;
-  const updated: QueueEntry = { ...item.entry, attempts, lastError: error };
+  const lastAttemptAt = new Date().toISOString();
+  const updated: QueueEntry = { ...item.entry, attempts, lastAttemptAt, lastError: error };
   await writeFile(item.path, JSON.stringify(updated), { mode: 0o600 });
 
   if (attempts >= MAX_ATTEMPTS) {
@@ -113,12 +134,17 @@ export async function recordFailure(
   return "retained";
 }
 
-export async function drop(item: QueueItem): Promise<void> {
+export async function drop(item: Pick<QueueItem, "path">): Promise<void> {
   try {
     await unlink(item.path);
   } catch {
     return;
   }
+}
+
+/** Bytes that went up some other way: a copy waiting out its delay here is done. */
+export async function forget(sessionId: string, contentHash: string): Promise<void> {
+  await drop({ path: join(queueDir(), entryName(sessionId, contentHash)) });
 }
 
 export async function abandon(item: QueueItem, error: string): Promise<void> {

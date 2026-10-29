@@ -18,7 +18,8 @@ import {
 import type { UploadPayload } from "../api.js";
 import { writeConfig } from "../config.js";
 import { formatUploadAlert, runUpload } from "../commands/upload.js";
-import { MAX_ATTEMPTS, enqueue, listPending, recordFailure } from "../queue.js";
+import { MAX_ATTEMPTS, enqueue, isDue, listPending, recordFailure } from "../queue.js";
+import type { QueueEntry } from "../queue.js";
 import { projectSlug, queueDir } from "../paths.js";
 
 const run = promisify(execFile);
@@ -249,7 +250,36 @@ test("gives a long session the time its size needs, but not past a waiting hook'
   assert.equal(uploadTimeoutMs(minute, now - 1, now), UPLOAD_TIMEOUT_MS);
 });
 
-test("gives up on a queued session after three attempts", async () => {
+test("waits twice as long after every failure before trying a queued session again", () => {
+  const queuedAt = "2026-08-16T10:00:00.000Z";
+  const minutes = (n: number) => Date.parse(queuedAt) + n * 60_000;
+  // As isy 1.0 wrote it: no last attempt recorded, so the time it was queued stands in.
+  const entry: QueueEntry = {
+    sessionId: "s1",
+    contentHash: "sha256:abc123def456",
+    attempts: 0,
+    queuedAt,
+    payload: samplePayload(),
+  };
+
+  assert.equal(isDue(entry, minutes(9)), false);
+  assert.equal(isDue(entry, minutes(10)), true);
+  assert.equal(isDue({ ...entry, attempts: 3 }, minutes(79)), false);
+  assert.equal(isDue({ ...entry, attempts: 3 }, minutes(80)), true);
+});
+
+test("runs minutes apart cannot spend a queued session's attempts", async () => {
+  // A session start, a session end and a commit inside one outage.
+  await writeConfig({ token: "test-token", apiBaseUrl: "http://127.0.0.1:1" });
+  for (let run = 0; run < 3; run += 1) await runUpload({ silent: true }, repo);
+
+  const pending = await listPending();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.entry.attempts, 0);
+  assert.equal((await readdir(queueDir())).some((name) => name.endsWith(".failed")), false);
+});
+
+test("gives up on a queued session at its last attempt", async () => {
   const path = await enqueue(samplePayload("queued"), "first failure");
   let items = await listPending();
   assert.equal(items.length, 1);
@@ -280,14 +310,20 @@ test("queues the session when the server is unreachable, then sends it on the ne
   await writeConfig({ token: "test-token", apiBaseUrl: baseUrl });
   const drainRun = await runUpload({ silent: true }, repo);
   assert.equal(drainRun.sent, 1);
-  assert.equal(drainRun.drained, 1);
+  // The copy still waiting out its delay is not sent a second time.
+  assert.equal(requests.length, 1);
   assert.deepEqual(await listPending(), []);
 });
 
 test("never retries a session that was already given up on", async () => {
   await writeConfig({ token: "test-token", apiBaseUrl: "http://127.0.0.1:1" });
+  await runUpload({ silent: true }, repo);
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    // Every wait over, as though the runs came days apart.
+    for (const item of await listPending()) {
+      await writeFile(item.path, JSON.stringify({ ...item.entry, lastAttemptAt: "2026-01-01T00:00:00.000Z" }));
+    }
     await runUpload({ silent: true }, repo);
   }
 

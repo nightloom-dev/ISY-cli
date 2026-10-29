@@ -10,7 +10,17 @@ import type { DiscoveredSession, IsyConfig } from "../types.js";
 import { logError, logLine } from "../log.js";
 import { parseLines } from "../parser.js";
 import { packageVersion } from "../paths.js";
-import { MAX_ATTEMPTS, abandon, drop, enqueue, isAbandoned, listPending, recordFailure } from "../queue.js";
+import {
+  MAX_ATTEMPTS,
+  abandon,
+  drop,
+  enqueue,
+  forget,
+  isAbandoned,
+  isDue,
+  listPending,
+  recordFailure,
+} from "../queue.js";
 import { updateNotice } from "../update.js";
 import { planNotice } from "../plan.js";
 import type { PlanStatus } from "../plan.js";
@@ -131,6 +141,7 @@ async function notePlan(plan: PlanStatus | undefined, report: UploadReport): Pro
 async function drainQueue(api: ApiOptions, deadline: number, report: UploadReport): Promise<void> {
   for (const item of await listPending()) {
     if (Date.now() >= deadline) return;
+    if (!isDue(item.entry)) continue;
 
     const outcome = await uploadSession(item.entry.payload, api);
     if (outcome.status === "ok") {
@@ -315,6 +326,7 @@ async function sendOne(
     await noteClientVersion(outcome.clientVersion, payload.isyVersion, report);
     await notePlan(outcome.plan, report);
     if (outcome.deduplicated !== true) report.fresh += 1;
+    await forget(payload.sessionId, payload.contentHash);
     // Recorded only once the server has it: a failed send must stay "changed"
     // so the next commit tries again rather than skipping it forever.
     const seen = await fingerprint(target);
