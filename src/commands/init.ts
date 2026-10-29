@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createInterface } from "node:readline/promises";
+import { drainAlerts, parkAlert } from "../alert.js";
 import { DEFAULT_API_BASE_URL, verifyToken } from "../api.js";
 import { readConfig, writeConfig } from "../config.js";
 import { presentAgents } from "../agents/index.js";
@@ -161,6 +162,13 @@ export async function runInit(options: { token?: string }, cwd: string): Promise
 
   await writeConfig({ ...config, token, githubLogin: verified.githubLogin });
   if (!kept) console.log(`Token stored in ${configPath()}`);
+
+  // A hook that found the key missing or refused parked "run: isy init", and
+  // this is that run. Left parked, the next session start would send the reader
+  // back here for nothing; anything else waiting stays for it.
+  for (const line of (await drainAlerts()).split("\n")) {
+    if (line && !line.endsWith("run: isy init")) await parkAlert(line);
+  }
 
   // Hooks go into every CLI actually installed here, and none that is not.
   const agents = await presentAgents();

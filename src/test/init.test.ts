@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { drainAlerts, parkAlert } from "../alert.js";
 import { runInit } from "../commands/init.js";
 import { HOOK_COMMAND } from "../hook.js";
 
@@ -102,4 +103,14 @@ test("isy init signs in again when the key it holds is no longer taken", async (
     process.env.PATH = path;
   }
   assert.deepEqual(asked, ["GET /api/v1/me", "POST /api/v1/cli/pairings"]);
+});
+
+test("isy init answers the alerts that sent the reader to it and keeps the rest", async () => {
+  await writeFile(join(home, "config.json"), JSON.stringify({ token: "isy_held", apiBaseUrl: baseUrl }));
+  await parkAlert("ISY: authentication rejected (401), run: isy init");
+  await parkAlert("ISY: this month's analyses are used up");
+
+  await quietly(() => runInit({}, cwd));
+
+  assert.equal(await drainAlerts(), "ISY: this month's analyses are used up");
 });
