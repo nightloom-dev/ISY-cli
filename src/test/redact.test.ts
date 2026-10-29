@@ -87,9 +87,55 @@ test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });
 
-test("masks a snake_case key but not the same word inside a longer identifier", () => {
+test("masks a snake_case key but not a camelCase variable in code", () => {
   assert.equal(redactOne("access_token = AbCdEf1234567890"), `access_token = ${marker("assignment")}`);
   assert.equal(redactOne("const adminPassword = someLongVariableName"), "const adminPassword = someLongVariableName");
+});
+
+test("masks a secret's name however a file spells it: quoted, with affixes, glued", () => {
+  const masked = marker("assignment");
+  const cases: [string, string][] = [
+    ['{"password": "hunter2000"}', `{"password": "${masked}"}`],
+    ['"client_secret": "abcdefgh1234"', `"client_secret": "${masked}"`],
+    ['{"accessToken":"abcdefgh1234"}', `{"accessToken":"${masked}"}`],
+    ["SECRET_KEY_BASE=abcdef0123456789", `SECRET_KEY_BASE=${masked}`],
+    ["STRIPE_SECRET_KEY=whsec_abcdefgh", `STRIPE_SECRET_KEY=${masked}`],
+    ["AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG", `AWS_SECRET_ACCESS_KEY=${masked}`],
+    ["aws_secret_access_key = wJalrXUtnFEMI/K7MDENG", `aws_secret_access_key = ${masked}`],
+    ["PGPASSWORD=hunter2000 psql -h db", `PGPASSWORD=${masked} psql -h db`],
+    ["//registry.npmjs.org/:_authToken=abcdef123456", `//registry.npmjs.org/:_authToken=${masked}`],
+    ["curl -H 'x-api-key: abcdef123456'", `curl -H 'x-api-key: ${masked}'`],
+  ];
+  for (const [input, expected] of cases) assert.equal(redactOne(input), expected, input);
+});
+
+test("leaves what is said about a secret alone, and code that only names one", () => {
+  for (const text of [
+    "tokenHash = computeTheHash(input)",
+    "TOKENS_PER_ANALYSIS = 1_000_000",
+    "POSTGRES_PASSWORD_FILE=/run/secrets/pg",
+    "this.signingSecret = signingSecret",
+    "accessTokenUrl: https://example.com/oauth",
+    '"token": 1234567890, "isSecret": true',
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+});
+
+test("an assistant record keeps its usage numbers, as JSON and as text", () => {
+  const usage = { input_tokens: 3, cache_creation_input_tokens: 12345678, cache_read_input_tokens: 123456789, output_tokens: 87654321, max_tokens: 64000000 };
+  const record = {
+    type: "assistant",
+    uuid: "a",
+    message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "text", text: `usage was ${JSON.stringify(usage)}` }], usage: { ...usage, service_tier: "standard" } },
+  };
+  // The last line of a transcript cut off mid-write is redacted as text.
+  const { lines } = redactLines([JSON.stringify(record), JSON.stringify(record).slice(0, -2)]);
+
+  const parsed = JSON.parse(lines[0]!) as typeof record;
+  assert.deepEqual(parsed.message.usage, record.message.usage);
+  assert.equal(parsed.message.content[0]!.text, record.message.content[0]!.text);
+  assert.equal(lines[1], JSON.stringify(record).slice(0, -2));
 });
 
 test("leaves a value that is plainly code rather than a literal secret", () => {

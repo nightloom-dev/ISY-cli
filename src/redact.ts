@@ -22,6 +22,37 @@ export interface RedactionRule {
   replacement: string;
 }
 
+/** `[pP][aA]…`: case by hand, so a rule can still tell a camelCase hump from a glued prefix. */
+function anyCase(source: string): string {
+  return source.replace(/[a-z]/g, (letter) => `[${letter}${letter.toUpperCase()}]`);
+}
+
+const SECRET_WORD = anyCase("(?:password|passwd|secret|token|api[-_]?key|private[-_]?key|access[-_]?key)");
+
+/**
+ * A name that holds a secret: one of the words, wherever it sits in an
+ * identifier — `PGPASSWORD`, `STRIPE_SECRET_KEY`, `aws_secret_access_key`,
+ * `x-api-key` — and followed by nothing but `KEY` and `BASE` (`SECRET_KEY_BASE`).
+ * That tail is the line between the secret and what is said about it:
+ * `tokenHash`, `max_tokens`, `TOKENS_PER_ANALYSIS` and `PASSWORD_FILE` turn up
+ * in a real corpus as often as the secrets do, and none of them is one.
+ */
+function secretName(atWord = ""): string {
+  return String.raw`[A-Za-z0-9_.-]*?${atWord}${SECRET_WORD}${anyCase("(?:[-_]?key)?(?:[-_]?base)?")}(?![A-Za-z0-9_.-])`;
+}
+
+/** The word glued to what came before, but not as a camelCase hump. */
+const PLAIN_NAME = secretName("(?!(?<=[a-z0-9])[A-Z])");
+/** `adminPassword`, `_authToken`: as often a variable in code as a key in a file. */
+const CAMEL_NAME = secretName("(?<=[a-z0-9])(?=[A-Z])");
+
+/**
+ * What an assigned secret looks like: long enough to be one, and not code. A
+ * number never is — usage counts sit under names like these in every record,
+ * and stdout quotes them as JSON text.
+ */
+const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))[^\s"'{}()[\]<>$]{8,}`;
+
 export const BUILTIN_RULES: RedactionRule[] = [
   {
     type: "private_key",
@@ -75,14 +106,26 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: marker("email"),
   },
   {
+    // The name may close a quote of its own: `"password": "…"`.
     type: "assignment",
-    pattern:
-      /(?<![A-Za-z0-9])(password|passwd|secret|token|api[-_]?key|private[-_]?key)(\s*[=:]\s*)(["']?)(?!\[ISY_REDACTED)[^\s"'{}()[\]<>$]{8,}/gi,
+    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])(${PLAIN_NAME})(["']?\s*[=:]\s*)(["']?)${SECRET_VALUE}`, "g"),
     replacement: `$1$2$3${marker("assignment")}`,
+  },
+  {
+    // A camelCase name counts where it is plainly data — a quoted key with a
+    // quoted value (`{"accessToken":"…"}`) or `name=value` with no space, as
+    // `.npmrc` writes `_authToken=` — and not in `adminPassword = someVariable`.
+    type: "assignment",
+    pattern: new RegExp(
+      String.raw`(?<=["'])(${CAMEL_NAME})(["']\s*:\s*["'])${SECRET_VALUE}|(?<![A-Za-z0-9_.-])(${CAMEL_NAME})(=)${SECRET_VALUE}`,
+      "g",
+    ),
+    replacement: `$1$2$3$4${marker("assignment")}`,
   },
 ];
 
-const SENSITIVE_KEY = /^(password|passwd|secret|token|api[-_]?key|private[-_]?key)$/i;
+/** A JSON key is data, never code, so any spelling of a secret's name counts. */
+const SENSITIVE_KEY = new RegExp(`^${secretName()}$`);
 const MIN_SENSITIVE_VALUE = 8;
 const EDIT_INPUT_FIELDS = ["content", "old_string", "new_string", "new_source"];
 
