@@ -237,8 +237,20 @@ function learnRoot(record: Record<string, unknown>, context: RedactContext): voi
  * connectors' instructions. Nothing downstream reads past their `type`, so that
  * is all that goes. The record itself stays: the next record names it as its
  * `parentUuid`, and the parser walks that chain.
+ *
+ * Claude Code 2.1.30x also records the request it sends: `api-request-shape`
+ * carries the system prompt and the tool definitions, `api-request-blob` the
+ * context blocks sent beside the conversation — memory, CLAUDE.md, the email
+ * again. The parser reads neither, so only the fields that name them go.
  */
+const REQUEST_RECORD_KEYS = new Set(["type", "uuid", "parentUuid", "sessionId", "timestamp", "version", "shapeHash", "hash"]);
+
 function stripAttachment(record: Record<string, unknown>, context: RedactContext): void {
+  if (record.type === "api-request-shape" || record.type === "api-request-blob") {
+    for (const key of Object.keys(record)) if (!REQUEST_RECORD_KEYS.has(key)) delete record[key];
+    count(context, "attachment", 1);
+    return;
+  }
   if (record.type !== "attachment") return;
   const kind = isObject(record.attachment) ? record.attachment.type : undefined;
   record.attachment = typeof kind === "string" ? { type: kind } : {};
