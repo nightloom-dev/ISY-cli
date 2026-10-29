@@ -355,6 +355,15 @@ async function sendOne(
   } else {
     report.abandoned += 1;
     logError(`upload: dropped ${payload.sessionId}: ${outcome.error}`);
+    // Refused for what it holds, so building it again only to hear the same is
+    // all the next sweep would do: it is passed over until it changes.
+    const seen = await fingerprint(target);
+    await updateSession(target.path, (current) => ({
+      ...current,
+      rejectedHash: payload.contentHash,
+      uploadedCommit: payload.commits?.at(-1)?.sha,
+      ...seen,
+    }));
   }
 }
 

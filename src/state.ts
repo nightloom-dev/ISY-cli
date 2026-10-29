@@ -26,6 +26,12 @@ export interface SessionState {
   /** contentHash of the last upload the server accepted. */
   uploadedHash?: string;
   /**
+   * contentHash of an upload refused for what it holds — too large, or a body
+   * the server will not take. The same bytes would be refused again, so the
+   * fingerprint below is taken at the refusal too and a scan passes them over.
+   */
+  rejectedHash?: string;
+  /**
    * Transcript size and mtime at that upload. Both unchanged means the bytes
    * are unchanged, which lets a scan skip reading a transcript entirely.
    */
@@ -213,15 +219,15 @@ export function withCommit(
 }
 
 /**
- * Whether the transcript or its commit marks changed since the last accepted
- * upload. Size and mtime both matching means the bytes match, so the file need
- * not be read at all.
+ * Whether the transcript or its commit marks changed since the last upload the
+ * server accepted or refused for good. Size and mtime both matching means the
+ * bytes match, so the file need not be read at all.
  */
 export function looksUnchanged(
   state: SessionState,
   file: { sizeBytes: number; modifiedAt: Date },
 ): boolean {
-  if (state.uploadedHash === undefined) return false;
+  if (state.uploadedHash === undefined && state.rejectedHash === undefined) return false;
   if (state.commits?.at(-1)?.sha !== state.uploadedCommit) return false;
   return state.sizeBytes === file.sizeBytes && state.modifiedMs === file.modifiedAt.getTime();
 }

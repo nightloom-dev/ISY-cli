@@ -277,6 +277,22 @@ test("a refused key costs the sweep nothing: the one after isy init sends the se
   assert.equal(uploads[0]?.sessionId, "swept");
 });
 
+test("a session refused for its size is not rebuilt at every sweep, only once it changes", async () => {
+  nextStatus = 413;
+  const refused = await runUpload({ silent: true, sweep: true }, elsewhere);
+  assert.equal(refused.abandoned, 1);
+
+  // The same bytes would get the same answer, and building them is the cost.
+  const again = await runUpload({ silent: true, sweep: true }, elsewhere);
+  assert.equal(again.abandoned, 0);
+
+  nextStatus = 200;
+  const swept = (await allClaudeSessions()).find((session) => session.sessionId === "swept")!;
+  await writeFile(swept.path, `${await readFile(swept.path, "utf8")}\n`);
+  const grown = await runUpload({ silent: true, sweep: true }, elsewhere);
+  assert.equal(grown.sent, 1);
+});
+
 test("a transcript nobody has touched in a fortnight is looked at and left alone", async () => {
   const path = await writeSession("-ancient", "ancient", repo);
   const old = new Date("2026-01-01T00:00:00Z");
