@@ -42,6 +42,8 @@ export interface UploadReport {
   scanned?: number;
   /** The server's hourly upload allowance ran out; nothing was lost by it. */
   throttled?: boolean;
+  /** Why the server refused the key. Nothing was lost by that either. */
+  unauthorized?: string;
 }
 
 export async function readHookInput(
@@ -143,6 +145,11 @@ async function drainQueue(api: ApiOptions, deadline: number, report: UploadRepor
     if (outcome.status === "throttled") {
       report.throttled = true;
       logLine("upload: rate limited, the queue keeps its place for the next run");
+      return;
+    }
+    if (outcome.status === "unauthorized") {
+      report.unauthorized = outcome.error;
+      logError(`upload: the queue waits for a key the server takes: ${outcome.error}`);
       return;
     }
 
@@ -324,6 +331,11 @@ async function sendOne(
     // only burn its attempts.
     report.throttled = true;
     logLine(`upload: ${payload.sessionId} not sent, this hour's uploads are spent`);
+  } else if (outcome.status === "unauthorized") {
+    // Neither queued nor dropped either: the transcript still reads as changed,
+    // so the first run with a key the server takes sends it.
+    report.unauthorized = outcome.error;
+    logError(`upload: ${payload.sessionId} not sent: ${outcome.error}`);
   } else if (outcome.status === "retry") {
     await enqueue(payload, outcome.error);
     report.queued += 1;
@@ -444,8 +456,8 @@ export async function runUpload(
       logLine(`upload: out of budget with ${targets.length - report.sent} session(s) left`);
       break;
     }
-    // One "throttled" answers for every session in the run.
-    if (report.throttled) break;
+    // One "throttled", or one refused key, answers for every session in the run.
+    if (report.throttled || report.unauthorized) break;
 
     const git = await gitFor(target.cwd ?? workingDir);
     if (!git.ok) {
@@ -486,6 +498,7 @@ export function formatUploadReport(report: UploadReport): string {
   const parts: string[] = [];
   if (report.sent > 0) parts.push("session uploaded");
   if (report.throttled) parts.push("rate limited, the rest go out on the next run");
+  if (report.unauthorized) parts.push(report.unauthorized);
   if (report.queued > 0) parts.push("session queued for retry");
   if (report.drained > 0) parts.push(`${report.drained} queued session(s) sent`);
   if (report.abandoned > 0) parts.push(`${report.abandoned} session(s) given up on`);
@@ -516,6 +529,7 @@ export function formatUploadAlert(report: UploadReport): string | undefined {
   if (report.drained > 0) parts.push(`${report.drained} queued session(s) sent`);
   if (report.queued > 0) parts.push("upload failed, queued for retry");
   if (report.throttled) parts.push("rate limited, the rest upload on the next run");
+  if (report.unauthorized) parts.push(report.unauthorized);
   if (report.abandoned > 0) parts.push(`${report.abandoned} session(s) given up on`);
   if (report.gitHook === "installed") parts.push("commit and push hooks added to this repository");
   if (report.gitHook === "shared-hooks") {

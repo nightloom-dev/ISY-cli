@@ -170,12 +170,49 @@ test("sends a gzip body with the bearer token and the documented fields", async 
   assert.match(body.contentHash, /^sha256:/);
 });
 
-test("treats authentication and size failures as permanent", async () => {
-  for (const status of [401, 403, 413, 400, 422]) {
+test("treats size and payload failures as permanent", async () => {
+  for (const status of [413, 400, 422]) {
     nextStatus = status;
-    const outcome = await uploadSession(samplePayload(), { baseUrl, token: "bad" });
+    const outcome = await uploadSession(samplePayload(), { baseUrl, token: "test-token" });
     assert.equal(outcome.status, "permanent", `status ${status}`);
   }
+});
+
+test("treats a refused key as the key's fault, not the session's", async () => {
+  for (const status of [401, 403]) {
+    nextStatus = status;
+    const outcome = await uploadSession(samplePayload(), { baseUrl, token: "bad" });
+    assert.equal(outcome.status, "unauthorized", `status ${status}`);
+  }
+});
+
+test("a refused key keeps the queue as it is, and the run after isy init sends it", async () => {
+  // As isy 1.0 wrote it, and long enough ago that nothing is still waiting.
+  const name = "queued.abc123def456.json";
+  await writeFile(
+    join(queueDir(), name),
+    JSON.stringify({
+      sessionId: "queued",
+      contentHash: "sha256:abc123def456",
+      attempts: 0,
+      queuedAt: "2026-08-16T10:00:00.000Z",
+      payload: samplePayload("queued"),
+    }),
+  );
+
+  nextStatus = 401;
+  const refused = await runUpload({ silent: true }, repo);
+  assert.equal(refused.abandoned, 0);
+  assert.equal(refused.queued, 0);
+  assert.equal(formatUploadAlert(refused), "ISY: authentication rejected (401), run: isy init");
+  assert.deepEqual(await readdir(queueDir()), [name]);
+  assert.equal((await listPending())[0]?.entry.attempts, 0);
+
+  nextStatus = 200;
+  const paired = await runUpload({ silent: true }, repo);
+  assert.equal(paired.sent, 1);
+  assert.equal(paired.drained, 1);
+  assert.deepEqual(await readdir(queueDir()), []);
 });
 
 test("treats an exhausted hourly allowance as a pause, not a failure", async () => {

@@ -262,6 +262,21 @@ test("a rate-limited sweep keeps its sessions instead of spending their retries"
   assert.equal(next.sent, 1);
 });
 
+test("a refused key costs the sweep nothing: the one after isy init sends the session", async () => {
+  // A key revoked to pair again, with the sweep landing before `isy init` ends.
+  nextStatus = 401;
+  const refused = await runUpload({ silent: true, sweep: true }, elsewhere);
+  nextStatus = 200;
+
+  assert.match(refused.unauthorized ?? "", /run: isy init/);
+  assert.equal(refused.abandoned, 0);
+  assert.equal(refused.queued, 0);
+
+  const paired = await runUpload({ silent: true, sweep: true }, elsewhere);
+  assert.equal(paired.sent, 1);
+  assert.equal(uploads[0]?.sessionId, "swept");
+});
+
 test("a transcript nobody has touched in a fortnight is looked at and left alone", async () => {
   const path = await writeSession("-ancient", "ancient", repo);
   const old = new Date("2026-01-01T00:00:00Z");

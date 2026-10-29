@@ -66,7 +66,10 @@ export type UploadOutcome =
   // Too many uploads this hour. Not a failure: the session is kept as it is,
   // and the run stops rather than spending the retries of every session behind
   // it on an answer that will not change.
-  | { status: "throttled" };
+  | { status: "throttled" }
+  // The key, not the session: missing, unknown or revoked. Handled like
+  // "throttled", so what was waiting still goes up once `isy init` has run.
+  | { status: "unauthorized"; error: string };
 
 export interface ApiOptions {
   baseUrl: string;
@@ -117,7 +120,7 @@ function accepted(body: string): UploadOutcome {
 function classify(status: number, body: string): UploadOutcome {
   if (status >= 200 && status < 300) return accepted(body);
   if (status === 401 || status === 403) {
-    return { status: "permanent", error: `authentication rejected (${status}), run: isy init` };
+    return { status: "unauthorized", error: `authentication rejected (${status}), run: isy init` };
   }
   if (status === 413) return { status: "permanent", error: "transcript rejected as too large (413)" };
   // A backlog is drained over hours rather than given up on: a sweep can find
