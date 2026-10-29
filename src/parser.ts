@@ -697,6 +697,13 @@ function delegatedUnseen(state: ParseState): boolean {
   );
 }
 
+/**
+ * Records of what Claude Code sent to the API, not of what happened: a blob
+ * repeats messages already in the session — tool calls and results included —
+ * so reading its blocks counted every call it carried a second time.
+ */
+const REQUEST_RECORD_TYPES = new Set(["api-request", "api-request-shape", "api-request-blob"]);
+
 function pushLine(state: ParseState, line: string): void {
   state.skipped.lines += 1;
 
@@ -729,7 +736,7 @@ function pushLine(state: ParseState, line: string): void {
   if (record.isSidechain === true && typeof record.parentToolUseID === "string") {
     state.delegated.add(record.parentToolUseID);
   }
-  pushBlocks(state, record, state.records.length - 1);
+  if (!REQUEST_RECORD_TYPES.has(type)) pushBlocks(state, record, state.records.length - 1);
 }
 
 function buildByUuid(records: TranscriptRecord[]): Map<string, TranscriptRecord> {

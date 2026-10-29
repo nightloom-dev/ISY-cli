@@ -91,6 +91,23 @@ test("reads message.content when it is a plain string", () => {
   assert.equal(session.blocks[0]?.text, "plain text");
 });
 
+test("a recorded API request repeats the conversation without adding to it", () => {
+  const edit = { type: "tool_use", id: "toolu_1", name: "Edit", input: { file_path: "/repo/a.ts", old_string: "a", new_string: "b" } };
+  const session = parseLines(jsonl([
+    assistant("a", null, [edit]),
+    toolResult("b", "a", "toolu_1"),
+    // Claude Code 2.1.309 writes the messages of its next request as blobs.
+    { type: "api-request-blob", sessionId: "s1", hash: "h1", message: { role: "assistant", content: [edit] } },
+    { type: "api-request-blob", sessionId: "s1", hash: "h2", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }] } },
+    { type: "api-request", sessionId: "s1", id: "r1", params: { model: "claude-opus-5-5" }, tail: ["h1", "h2"] },
+  ]));
+
+  assert.equal(session.records.length, 5);
+  assert.equal(session.toolUses.length, 1);
+  assert.equal([...session.fileEdits.values()].reduce((sum, list) => sum + list.length, 0), 1);
+  assert.deepEqual(session.skipped.unknownTypes, {});
+});
+
 test("links a tool_use to its tool_result and normalizes stdout and stderr", () => {
   const session = parseLines(jsonl([
     assistant("a", null, [
