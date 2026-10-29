@@ -409,6 +409,25 @@ test("a turn loses the harness fields beside it, and a dotenv write its second c
   assert.ok(!lines[0]!.includes("pk_live_totally_real"));
 });
 
+test("a harness message in the user's place keeps its place in the chain and loses its text", () => {
+  // What Claude Code writes after `/review`: the developer's command, then the
+  // skill's body and a reminder as `isMeta` user records.
+  const records = [
+    { type: "user", uuid: "u1", parentUuid: null, message: { role: "user", content: "<command-name>/review</command-name>\n<command-args>src/a.ts</command-args>" } },
+    { type: "user", uuid: "u2", parentUuid: "u1", isMeta: true, sourceToolUseID: "t1", message: { role: "user", content: [{ type: "text", text: "Base directory for this skill: /home/alice/.claude/skills/review\n# Review\nRead every file..." }] } },
+    { type: "user", uuid: "u3", parentUuid: "u2", isMeta: true, message: { role: "user", content: "<system-reminder>The user's email address is alice@example.org.</system-reminder>" } },
+    { type: "assistant", uuid: "a1", parentUuid: "u3", message: { role: "assistant", content: [{ type: "text", text: "Reviewing." }] } },
+  ];
+  const { lines } = summaryFor(records);
+  const out = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  assert.deepEqual(out[0], records[0]);
+  assert.deepEqual(out[1], { ...records[1], message: { role: "user", content: marker("meta") } });
+  assert.deepEqual(out[2], { ...records[2], message: { role: "user", content: marker("meta") } });
+  assert.deepEqual(out[3], records[3]);
+  assert.deepEqual([...parseLines(lines).mainPath], ["a1", "u3", "u2", "u1"]);
+});
+
 test("keeps output parseable as JSONL and counts what it replaced", () => {
   const { lines, summary } = summaryFor([
     { type: "user", message: { role: "user", content: 'password = "hunter2000"' } },

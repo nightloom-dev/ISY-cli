@@ -391,6 +391,20 @@ function stripHarnessFields(record: Record<string, unknown>, context: RedactCont
   if (stripped) count(context, "attachment", 1);
 }
 
+/**
+ * A user record marked `isMeta` is the harness talking in the user's place: a
+ * skill's body, a `<system-reminder>`, a command's caveat, an extension's
+ * instructions, a peer agent's message. Read as text it is a turn the
+ * developer never typed, holding files the developer never sent, so only a
+ * marker goes. None carries a tool result, and the record stays where it is:
+ * the next one names it as its `parentUuid`.
+ */
+function stripMeta(record: Record<string, unknown>, context: RedactContext): void {
+  if (record.type !== "user" || record.isMeta !== true || !isObject(record.message)) return;
+  record.message = { ...record.message, content: marker("meta") };
+  count(context, "attachment", 1);
+}
+
 function redactRecord(
   record: Record<string, unknown>,
   context: RedactContext,
@@ -399,6 +413,7 @@ function redactRecord(
   scanDotenv(record, context);
   stripAttachment(record, context);
   stripHarnessFields(record, context);
+  stripMeta(record, context);
   return redactValue(record, context) as Record<string, unknown>;
 }
 
