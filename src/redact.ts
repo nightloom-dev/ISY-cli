@@ -271,6 +271,33 @@ function stripAttachment(record: Record<string, unknown>, context: RedactContext
   count(context, "attachment", 1);
 }
 
+/**
+ * Harness bookkeeping Claude Code writes beside a turn, read by nothing here or
+ * on the server. `wireToolInputs` repeats every call's input, out of reach of
+ * the dotenv cut, which edits the copy in `message` (`scanDotenv`);
+ * `serverClassifierRequest` and `serverClassifierContext` are what a permission
+ * classifier was shown, the working tree's git state included;
+ * `wireIngestContext` and `permissionDecision` say where a call ran and what
+ * allowed it.
+ */
+const HARNESS_FIELDS = [
+  "wireToolInputs",
+  "serverClassifierRequest",
+  "serverClassifierContext",
+  "wireIngestContext",
+  "permissionDecision",
+];
+
+function stripHarnessFields(record: Record<string, unknown>, context: RedactContext): void {
+  let stripped = false;
+  for (const field of HARNESS_FIELDS) {
+    if (!(field in record)) continue;
+    delete record[field];
+    stripped = true;
+  }
+  if (stripped) count(context, "attachment", 1);
+}
+
 function redactRecord(
   record: Record<string, unknown>,
   context: RedactContext,
@@ -278,6 +305,7 @@ function redactRecord(
   learnRoot(record, context);
   scanDotenv(record, context);
   stripAttachment(record, context);
+  stripHarnessFields(record, context);
   return redactValue(record, context) as Record<string, unknown>;
 }
 

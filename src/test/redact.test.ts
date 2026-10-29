@@ -282,6 +282,35 @@ test("bridge and artifact records go up without the account and organisation the
   ]);
 });
 
+test("a turn loses the harness fields beside it, and a dotenv write its second copy", () => {
+  // What Claude Code 2.1.31x writes beside a call and beside its result.
+  const write = { file_path: "/repo/.env", content: "STRIPE_LIVE=pk_live_totally_real" };
+  const records = [
+    {
+      type: "assistant",
+      uuid: "a",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Write", input: write }] },
+      wireToolInputs: { t1: write },
+      wireIngestContext: { t1: { cwd: "/repo" } },
+      serverClassifierRequest: "User: alice. Write /repo/.env",
+    },
+    {
+      type: "user",
+      uuid: "b",
+      parentUuid: "a",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] },
+      serverClassifierContext: { request: "Write", context: { git_state: { cwd: "/repo", branch: "main" }, live_cwd: "/repo", platform: "linux" } },
+      permissionDecision: { decision: "allow", source: "rule", reasonType: "rule" },
+    },
+  ];
+  const { lines } = summaryFor(records);
+  const out = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  assert.deepEqual(Object.keys(out[0]!), ["type", "uuid", "message"]);
+  assert.deepEqual(Object.keys(out[1]!), ["type", "uuid", "parentUuid", "message"]);
+  assert.ok(!lines[0]!.includes("pk_live_totally_real"));
+});
+
 test("keeps output parseable as JSONL and counts what it replaced", () => {
   const { lines, summary } = summaryFor([
     { type: "user", message: { role: "user", content: 'password = "hunter2000"' } },
