@@ -95,6 +95,29 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: marker("google_key"),
   },
   {
+    // Secret and restricted keys; `pk_` is publishable by design.
+    type: "stripe_key",
+    pattern: /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g,
+    replacement: marker("stripe_key"),
+  },
+  {
+    type: "slack_token",
+    pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
+    replacement: marker("slack_token"),
+  },
+  {
+    type: "npm_token",
+    pattern: /\bnpm_[A-Za-z0-9]{36}\b/g,
+    replacement: marker("npm_token"),
+  },
+  {
+    // After every shape a bearer token can have, so a JWT or a GitHub token
+    // keeps its own label and its marker is not marked again.
+    type: "bearer_token",
+    pattern: /\b(Bearer\s+)(?!\[ISY_REDACTED)[A-Za-z0-9._~+/-]{20,}=*/gi,
+    replacement: `$1${marker("bearer_token")}`,
+  },
+  {
     type: "connection_string",
     pattern: /\b(postgres|postgresql|mysql|mongodb\+srv|mongodb|redis|amqp):\/\/([^\s:/@]+):([^\s/@]+)@/g,
     replacement: `$1://$2:${marker("connection_string")}@`,

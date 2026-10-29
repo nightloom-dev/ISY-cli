@@ -50,6 +50,17 @@ test("masks Google API keys", () => {
   assert.equal(redactOne(`AIza${"x".repeat(35)}`), marker("google_key"));
 });
 
+test("masks Stripe secret keys, Slack and npm tokens, and an opaque bearer token", () => {
+  const body = "a1B2c3D4e5F6g7H8i9J0k1L2";
+  assert.equal(redactOne(`sk_live_${body}`), marker("stripe_key"));
+  assert.equal(redactOne(`rk_test_${body}`), marker("stripe_key"));
+  assert.equal(redactOne(`SLACK=xoxb-123456789012-1234567890123-${body}`), `SLACK=${marker("slack_token")}`);
+  assert.equal(redactOne(`npm_${"a1".repeat(18)}`), marker("npm_token"));
+  assert.equal(redactOne(`Authorization: Bearer ${body}`), `Authorization: Bearer ${marker("bearer_token")}`);
+  assert.equal(redactOne(`Bearer ghp_${"a".repeat(36)}`), `Bearer ${marker("github_token")}`);
+  assert.equal(redactOne("Bearer tokens travel in the Authorization header"), "Bearer tokens travel in the Authorization header");
+});
+
 test("masks a whole PEM private key block", () => {
   const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nabc\n-----END RSA PRIVATE KEY-----";
   assert.equal(redactOne(`before ${pem} after`), `before ${marker("private_key")} after`);
