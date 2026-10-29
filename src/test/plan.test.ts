@@ -13,17 +13,22 @@ test("the notice appears only when there is nothing left to spend", () => {
 });
 
 test("the notice names the day the allowance comes back", () => {
-  const notice = planNotice({
-    tier: "free",
-    analysesLeft: 0,
-    credits: 0,
-    resetsAt: "2026-10-01T00:00:00.000Z",
-  });
+  const notice = planNotice(
+    { tier: "free", analysesLeft: 0, credits: 0, resetsAt: "2026-10-01T00:00:00.000Z" },
+    Date.parse("2026-09-20T12:00:00.000Z"),
+  );
   assert.match(notice ?? "", /until 1 Oct/);
 
   // A server that sends a broken date still gets a usable line.
   const undated = planNotice({ tier: "free", analysesLeft: 0, credits: 0, resetsAt: "soon" });
   assert.match(undated ?? "", /not analysed\. Add credits/);
+});
+
+test("the notice is gone once the cycle it was about has rolled over", () => {
+  // Spent on 30 Oct, snapshotted then, read on 2 Nov with no upload in between.
+  const spent = { tier: "pro", analysesLeft: 0, credits: 0, resetsAt: "2026-11-01T00:00:00.000Z" };
+  assert.match(planNotice(spent, Date.parse("2026-10-30T12:00:00.000Z")) ?? "", /until 1 Nov/);
+  assert.equal(planNotice(spent, Date.parse("2026-11-02T09:00:00.000Z")), undefined);
 });
 
 test("a plan block in any other shape is no plan block", () => {

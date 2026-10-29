@@ -46,9 +46,12 @@ function resetDay(iso: string | undefined): string | undefined {
 /**
  * The line, or nothing while there is still room. Credits count as room: they
  * are what the gate spends once the allowance is gone (`billing.ts:checkQuota`).
+ * So does a cycle that has rolled over since: the snapshot is only as new as
+ * the last upload, which can be days old.
  */
-export function planNotice(plan: PlanStatus | undefined): string | undefined {
+export function planNotice(plan: PlanStatus | undefined, now = Date.now()): string | undefined {
   if (!plan || plan.analysesLeft > 0 || plan.credits > 0) return undefined;
+  if (plan.resetsAt && Date.parse(plan.resetsAt) <= now) return undefined;
   const day = resetDay(plan.resetsAt);
   return `plan limit reached on ${plan.tier} — pull requests are not analysed${
     day ? ` until ${day}` : ""
