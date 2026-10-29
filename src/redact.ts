@@ -121,15 +121,20 @@ export const BUILTIN_RULES: RedactionRule[] = [
   },
   {
     // Any scheme: a password in a URL is one whatever speaks it — rediss,
-    // amqps, https to a bare IP.
+    // amqps, https to a bare IP. The scheme is capped because `\b` lets a match
+    // start inside a dotted or dashed run: unbounded, every start rescans the
+    // rest of the run, and a long one costs minutes.
     type: "connection_string",
-    pattern: /\b([A-Za-z][A-Za-z0-9+.-]*):\/\/([^\s:/@]+):([^\s/@]+)@/g,
+    pattern: /\b([A-Za-z][A-Za-z0-9+.-]{0,31}):\/\/([^\s:/@]+):([^\s/@]+)@/g,
     replacement: `$1://$2:${marker("connection_string")}@`,
   },
   {
     // After the connection string: its password sits right before an `@` too.
+    // Starts only where a run of local-part characters starts: with `\b`, every
+    // dot, dash and `%` in a run began a new scan of the rest of it, and a
+    // version list or a URL-encoded query took minutes to get through.
     type: "email",
-    pattern: /\b[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b/g,
+    pattern: /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}\b/g,
     replacement: marker("email"),
   },
   {

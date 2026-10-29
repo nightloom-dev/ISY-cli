@@ -602,3 +602,24 @@ test("redacted output still parses into the same session structure", { skip: !ex
 
   assert.ok(checked > 0);
 });
+
+test("every rule gets through long runs it has nothing to match in", () => {
+  // Shapes a tool's output holds by the hundred kilobytes: a version list, a
+  // URL-encoded query, dotted and dashed names. A rule that rescans the rest of
+  // the run from every boundary in it takes minutes over one transcript.
+  const shapes = ["1.".repeat(50_000), "%2F".repeat(35_000), "a.".repeat(50_000), "ab-".repeat(35_000)];
+  for (const text of shapes) {
+    for (const rule of BUILTIN_RULES) {
+      const started = performance.now();
+      applyRules(text, [rule]);
+      const took = performance.now() - started;
+      assert.ok(took < 1000, `${rule.type} took ${Math.round(took)}ms on ${text.slice(0, 6)}…`);
+    }
+  }
+});
+
+test("an email or a URL password is still caught where the run it sits in starts with punctuation", () => {
+  const out = applyRules("mail -alice@example.com; db=-x.postgres://u:hunter22@db.local/app", BUILTIN_RULES);
+  assert.ok(!out.includes("alice@example.com"));
+  assert.ok(!out.includes("hunter22"));
+});
