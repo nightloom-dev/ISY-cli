@@ -242,11 +242,15 @@ function learnRoot(record: Record<string, unknown>, context: RedactContext): voi
  * carries the system prompt and the tool definitions, `api-request-blob` the
  * context blocks sent beside the conversation — memory, CLAUDE.md, the email
  * again. The parser reads neither, so only the fields that name them go.
+ * `bridge-session` and `artifact-autoreact-ledger` are cut the same way: one
+ * names the account and organisation that own the session's bridge, the other
+ * the account, and the parser reads neither past its type.
  */
 const REQUEST_RECORD_KEYS = new Set(["type", "uuid", "parentUuid", "sessionId", "timestamp", "version", "shapeHash", "hash"]);
+const STRIPPED_RECORD_TYPES = new Set(["api-request-shape", "api-request-blob", "bridge-session", "artifact-autoreact-ledger"]);
 
 function stripAttachment(record: Record<string, unknown>, context: RedactContext): void {
-  if (record.type === "api-request-shape" || record.type === "api-request-blob") {
+  if (typeof record.type === "string" && STRIPPED_RECORD_TYPES.has(record.type)) {
     for (const key of Object.keys(record)) if (!REQUEST_RECORD_KEYS.has(key)) delete record[key];
     count(context, "attachment", 1);
     return;

@@ -268,6 +268,20 @@ test("a recorded request keeps only the fields that name it", () => {
   assert.deepEqual(out[2], records[2]);
 });
 
+test("bridge and artifact records go up without the account and organisation they name", () => {
+  // What Claude Code 2.1.312 writes for the session's bridge and its artifacts.
+  const records = [
+    { type: "bridge-session", sessionId: "s1", bridgeSessionId: "b1", lastSequenceNum: 3, ownerAccountUuid: "1b4e28ba-2fa1-11d2-883f-0016d3cca427", ownerOrganizationUuid: "6fa459ea-ee8a-3ca4-894e-db77e160355e" },
+    { type: "artifact-autoreact-ledger", sessionId: "s1", v: 1, accountUuid: "1b4e28ba-2fa1-11d2-883f-0016d3cca427", artifacts: {} },
+  ];
+  const { lines } = summaryFor(records);
+
+  assert.deepEqual(lines.map((line) => JSON.parse(line) as Record<string, unknown>), [
+    { type: "bridge-session", sessionId: "s1" },
+    { type: "artifact-autoreact-ledger", sessionId: "s1" },
+  ]);
+});
+
 test("keeps output parseable as JSONL and counts what it replaced", () => {
   const { lines, summary } = summaryFor([
     { type: "user", message: { role: "user", content: 'password = "hunter2000"' } },
