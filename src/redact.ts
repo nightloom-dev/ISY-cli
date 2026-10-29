@@ -470,6 +470,13 @@ function redactOneLine(line: string, context: RedactContext): { line: string; un
   return { line: JSON.stringify(redactRecord(parsed, context)), unparsed: false };
 }
 
+/**
+ * A transcript's lines, redacted. With no `cwd`, paths are rooted at the first
+ * record that names one; with no `home`, at the home that directory implies,
+ * else this machine's. Exported as `isy/redact` so the server can re-run the
+ * rules over a transcript an older client uploaded: there the machine is the
+ * server, so it passes `home: ""` and roots paths in the transcript alone.
+ */
 export function redactLines(
   lines: Iterable<string>,
   options: RedactOptions = {},

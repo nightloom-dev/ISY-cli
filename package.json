@@ -7,11 +7,12 @@
   "bin": {
     "isy": "dist/index.js"
   },
-  "//": "The server runs the same stage 0 as `isy analyze`, so the parser and the detectors are exported from here instead of copied into it.",
+  "//": "The server runs the same stage 0 as `isy analyze`, so the parser and the detectors are exported from here instead of copied into it; the redaction too, to re-run its rules over transcripts already stored.",
   "exports": {
     "./package.json": "./package.json",
     "./parser": "./dist/parser.js",
     "./mask-paths": "./dist/mask-paths.js",
+    "./redact": "./dist/redact.js",
     "./stage0": "./dist/stage0.js",
     "./types": "./dist/types.js"
   },

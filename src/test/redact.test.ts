@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -426,6 +426,19 @@ test("a harness message in the user's place keeps its place in the chain and los
   assert.deepEqual(out[2], { ...records[2], message: { role: "user", content: marker("meta") } });
   assert.deepEqual(out[3], records[3]);
   assert.deepEqual([...parseLines(lines).mainPath], ["a1", "u3", "u2", "u1"]);
+});
+
+test("the server can re-run the rules over a stored transcript, with no roots of its own", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")) as { exports: Record<string, string> };
+  assert.equal(pkg.exports["./redact"], "./dist/redact.js");
+
+  // Uploaded by an older client: its paths already masked, a key it did not know.
+  const stored = JSON.stringify({ type: "user", cwd: ".", message: { role: "user", content: `deploy sk_live_${"a1".repeat(12)} from /root/app, ~/x and src/a.ts` } });
+  const expected = `deploy ${marker("stripe_key")} from /root/app, ~/x and src/a.ts`;
+  for (const options of [undefined, { home: "" }]) {
+    const { lines } = redactLines([stored], options);
+    assert.equal((JSON.parse(lines[0]!) as { message: { content: string } }).message.content, expected);
+  }
 });
 
 test("keeps output parseable as JSONL and counts what it replaced", () => {

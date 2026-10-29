@@ -14,10 +14,10 @@ database or to a model.
 ## 2. Two consumers, not one
 
 - **The bin.** `dist/index.js`, installed as `isy`.
-- **The library.** `./parser`, `./stage0`, `./types` and `./mask-paths` in
-  `exports` are imported by the ISY server. They are API: changing an exported
-  shape breaks a deployment you cannot see from here. Everything else is
-  internal and can move freely.
+- **The library.** `./parser`, `./stage0`, `./types`, `./mask-paths` and
+  `./redact` in `exports` are imported by the ISY server. They are API:
+  changing an exported shape breaks a deployment you cannot see from here.
+  Everything else is internal and can move freely.
 
 ## 3. Layout
 
