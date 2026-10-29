@@ -173,6 +173,26 @@ test("places a subagent without a meta file by the result that names it", async 
   assert.equal(records[2]?.parentToolUseID, "toolu_1");
 });
 
+test("a workflow's agents go in by time after the Workflow call whose result names their run", async () => {
+  // As Claude Code 2.1.312 files them: under the run's directory, the meta naming no call.
+  const { dir, path } = await session([
+    use("a", null, 1, "t_wf", "Workflow", { script: "phases" }),
+    result("b", "a", 2, "t_wf", { toolUseResult: { status: "async_launched", runId: "wf_1", taskType: "local_workflow" } }),
+    said("c", "b", "carries on", { timestamp: at(30) }),
+  ]);
+  const meta = { agentType: "workflow-subagent" };
+  const run = join("workflows", "wf_1");
+  await subagent(dir, "w1", [said("w1a", null, "one", { timestamp: at(10) }), said("w1b", "w1a", "two", { timestamp: at(40) })], meta, run);
+  await subagent(dir, "w2", [said("w2a", null, "three", { timestamp: at(20) })], meta, run);
+
+  const records = (await collect(sessionLines(path))).map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.deepEqual(records.map((record) => record.uuid), ["a", "b", "w1a", "w2a", "c", "w1b"]);
+  for (const record of records.filter((record) => String(record.uuid).startsWith("w"))) {
+    assert.equal(record.isSidechain, true);
+    assert.equal(record.parentToolUseID, "t_wf");
+  }
+});
+
 test("a subagent whose call is nowhere still counts, after the session", async () => {
   const { dir, path } = await session([said("a", null, "hello")]);
   await subagent(dir, "stray", [said("s1", null, "work")], { toolUseId: "toolu_elsewhere" });

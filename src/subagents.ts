@@ -7,10 +7,12 @@ import { fileLines } from "./lines.js";
  * Claude Code 2.1 writes every subagent to a file of its own beside the session:
  * `<session>/subagents/agent-<id>.jsonl`, with `agent-<id>.meta.json` next to it
  * naming the `Agent` call that started it (`toolUseId`). Workflow agents go one
- * level deeper (`subagents/workflows/<run>/`). The session file keeps only the
- * call and its result, so read alone it hid most of the work — in one session
- * 12 calls stood in the session file and 134 in its subagents — and a session
- * whose files were all edited by a subagent read as one that edited nothing.
+ * level deeper (`subagents/workflows/<run>/`), and their meta names no call: the
+ * `Workflow` call's result names the run (`toolUseResult.runId`). The session
+ * file keeps only the call and its result, so read alone it hid most of the
+ * work — in one session 12 calls stood in the session file and 134 in its
+ * subagents — and a session whose files were all edited by a subagent read as
+ * one that edited nothing.
  *
  * So the session is read as one transcript, each subagent's records merged in
  * as sidechain records carrying `parentToolUseID`: by time, and never ahead of
@@ -27,6 +29,8 @@ interface Subagent {
   path: string;
   /** The `Agent` call that started it, from the meta file. */
   toolUseId?: string;
+  /** The workflow run it worked in: its directory under `subagents/workflows/`. */
+  run?: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -74,7 +78,9 @@ export async function subagentsOf(sessionPath: string): Promise<Subagent[]> {
   for (const path of await agentFiles(subagentsDir(sessionPath))) {
     const meta = await readMeta(path);
     const toolUseId = typeof meta?.toolUseId === "string" && meta.toolUseId.length > 0 ? meta.toolUseId : undefined;
-    agents.push({ agentId: basename(path, ".jsonl").slice("agent-".length), path, toolUseId });
+    const dir = dirname(path);
+    const run = basename(dirname(dir)) === "workflows" ? basename(dir) : undefined;
+    agents.push({ agentId: basename(path, ".jsonl").slice("agent-".length), path, toolUseId, run });
   }
   return agents;
 }
@@ -156,11 +162,14 @@ function callsIn(record: Record<string, unknown> | undefined): string[] {
 }
 
 /**
- * The call a subagent without a meta file answered: its result in the session
- * names the agent (`toolUseResult.agentId`), and the result names the call.
+ * The call a subagent answered when its meta file names none: its result in the
+ * session names the agent (`toolUseResult.agentId`), or a workflow's agent by
+ * its run (`runId`), and the result names the call.
  */
-function answeredCall(record: Record<string, unknown> | undefined, agentId: string): string | undefined {
-  if (!isObject(record?.toolUseResult) || record.toolUseResult.agentId !== agentId) return undefined;
+function answeredCall(record: Record<string, unknown> | undefined, agent: Subagent): string | undefined {
+  if (!isObject(record?.toolUseResult)) return undefined;
+  const { agentId, runId } = record.toolUseResult;
+  if (agentId !== agent.agentId && (agent.run === undefined || runId !== agent.run)) return undefined;
   const content = isObject(record.message) ? record.message.content : undefined;
   const result = Array.isArray(content)
     ? content.find((block) => isObject(block) && block.type === "tool_result")
@@ -237,7 +246,7 @@ export async function* sessionLines(sessionPath: string): AsyncGenerator<string>
   const unlinked = agents.filter((agent) => agent.toolUseId === undefined);
   const placed = new Set<string>();
 
-  /** The subagents a record starts: by the call it makes, or by the result that names one with no meta file. */
+  /** The subagents a record starts: by the call it makes, or by the result that names one whose meta file names no call. */
   const startedBy = (record: Record<string, unknown> | undefined): { agent: Subagent; call: string }[] => {
     const started: { agent: Subagent; call: string }[] = [];
     for (const call of callsIn(record)) {
@@ -245,7 +254,7 @@ export async function* sessionLines(sessionPath: string): AsyncGenerator<string>
     }
     for (const agent of unlinked) {
       if (placed.has(agent.agentId)) continue;
-      const call = answeredCall(record, agent.agentId);
+      const call = answeredCall(record, agent);
       if (call !== undefined) started.push({ agent, call });
     }
     return started;
