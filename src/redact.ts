@@ -241,13 +241,21 @@ function learnRoot(record: Record<string, unknown>, context: RedactContext): voi
  * Claude Code 2.1.30x also records the request it sends: `api-request-shape`
  * carries the system prompt and the tool definitions, `api-request-blob` the
  * context blocks sent beside the conversation — memory, CLAUDE.md, the email
- * again. The parser reads neither, so only the fields that name them go.
+ * again — and `api-request` the parameters, whose `safeguards` hand a
+ * classifier the account's user name, home directory and permission rules.
  * `bridge-session` and `artifact-autoreact-ledger` are cut the same way: one
  * names the account and organisation that own the session's bridge, the other
- * the account, and the parser reads neither past its type.
+ * the account. The parser reads none of them past their type, so only the
+ * fields that name them go.
  */
 const REQUEST_RECORD_KEYS = new Set(["type", "uuid", "parentUuid", "sessionId", "timestamp", "version", "shapeHash", "hash"]);
-const STRIPPED_RECORD_TYPES = new Set(["api-request-shape", "api-request-blob", "bridge-session", "artifact-autoreact-ledger"]);
+const STRIPPED_RECORD_TYPES = new Set([
+  "api-request",
+  "api-request-shape",
+  "api-request-blob",
+  "bridge-session",
+  "artifact-autoreact-ledger",
+]);
 
 function stripAttachment(record: Record<string, unknown>, context: RedactContext): void {
   if (typeof record.type === "string" && STRIPPED_RECORD_TYPES.has(record.type)) {

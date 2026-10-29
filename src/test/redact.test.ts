@@ -256,16 +256,16 @@ test("a recorded request keeps only the fields that name it", () => {
   const records = [
     { type: "api-request-shape", sessionId: "s1", shapeHash: "h1", timestamp: "2026-10-29T20:00:00.000Z", version: "2.1.312", shape: { system: [{ type: "text", text: "You are Claude Code. # claudeMd ..." }], tools: [{ name: "Bash", description: "..." }] } },
     { type: "api-request-blob", sessionId: "s1", hash: "h2", message: { role: "user", content: [{ type: "text", text: "The user's email address is alice@example.org." }] } },
-    { type: "api-request", sessionId: "s1", id: "r1", params: { model: "claude-opus-5-5", max_tokens: 64000 }, tail: ["h2"] },
+    { type: "api-request", sessionId: "s1", id: "r1", timestamp: "2026-10-29T20:00:01.000Z", version: "2.1.312", shapeHash: "h1", params: { model: "claude-opus-5-5", max_tokens: 64000, safeguards: [{ type: "classifier", classifier_context: "User: alice. Home: /home/alice. Allow: Bash(npm test)" }] }, tail: ["h2"] },
   ];
   const { lines } = summaryFor(records);
   const out = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
 
-  assert.deepEqual(out.slice(0, 2), [
+  assert.deepEqual(out, [
     { type: "api-request-shape", sessionId: "s1", shapeHash: "h1", timestamp: "2026-10-29T20:00:00.000Z", version: "2.1.312" },
     { type: "api-request-blob", sessionId: "s1", hash: "h2" },
+    { type: "api-request", sessionId: "s1", timestamp: "2026-10-29T20:00:01.000Z", version: "2.1.312", shapeHash: "h1" },
   ]);
-  assert.deepEqual(out[2], records[2]);
 });
 
 test("bridge and artifact records go up without the account and organisation they name", () => {
