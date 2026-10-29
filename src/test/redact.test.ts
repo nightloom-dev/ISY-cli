@@ -88,6 +88,18 @@ test("masks connection string passwords for every supported scheme", () => {
   }
 });
 
+test("masks the password in a URL of any scheme, and an armored PGP private key", () => {
+  const masked = marker("connection_string");
+  assert.equal(redactOne("rediss://default:hunter2000@cache.internal:6380"), `rediss://default:${masked}@cache.internal:6380`);
+  assert.equal(redactOne("amqps://app:secretpass@mq.internal/vhost"), `amqps://app:${masked}@mq.internal/vhost`);
+  assert.equal(redactOne("curl https://admin:hunter2000@10.0.0.5:8443/api"), `curl https://admin:${masked}@10.0.0.5:8443/api`);
+  // A port is not a password: nothing in this URL is masked.
+  assert.equal(redactOne("https://example.com:8080/a/@scope/pkg"), "https://example.com:8080/a/@scope/pkg");
+
+  const pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF0abcd\n=AbCd\n-----END PGP PRIVATE KEY BLOCK-----";
+  assert.equal(redactOne(`key:\n${pgp}\ndone`), `key:\n${marker("private_key")}\ndone`);
+});
+
 test("masks the value of a sensitive assignment and keeps the key", () => {
   assert.equal(redactOne('password = "hunter2000"'), `password = "${marker("assignment")}"`);
   assert.equal(redactOne("API_KEY: abcdefgh12345"), `API_KEY: ${marker("assignment")}`);

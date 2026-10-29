@@ -56,7 +56,8 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!-?\d[\d.,eE+-]*(?![^\s"'{}(
 export const BUILTIN_RULES: RedactionRule[] = [
   {
     type: "private_key",
-    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
+    // `BLOCK` is how PGP armors one.
+    pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
     replacement: marker("private_key"),
   },
   {
@@ -118,8 +119,10 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: `$1${marker("bearer_token")}`,
   },
   {
+    // Any scheme: a password in a URL is one whatever speaks it — rediss,
+    // amqps, https to a bare IP.
     type: "connection_string",
-    pattern: /\b(postgres|postgresql|mysql|mongodb\+srv|mongodb|redis|amqp):\/\/([^\s:/@]+):([^\s/@]+)@/g,
+    pattern: /\b([A-Za-z][A-Za-z0-9+.-]*):\/\/([^\s:/@]+):([^\s/@]+)@/g,
     replacement: `$1://$2:${marker("connection_string")}@`,
   },
   {
