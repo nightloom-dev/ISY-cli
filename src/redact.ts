@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { fileLines } from "./lines.js";
+import { commandSegments, withoutHeredocs } from "./parser.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
@@ -220,6 +221,25 @@ function isDotenvPath(filePath: unknown): boolean {
   return typeof filePath === "string" && basename(filePath).startsWith(".env");
 }
 
+/** Commands that print a file they are given, or load it into the shell. */
+const SHELL_READER =
+  /^\s*(?:sudo\s+)?(?:cat|head|tail|less|more|bat|nl|grep|egrep|fgrep|rg|sed|awk|jq|xxd|od|diff|source|\.|git\s+(?:show|diff|log|blame)|get-content|gc|type)(?:\s|$)/i;
+
+/**
+ * `cat .env`, `grep KEY config/.env.local`, `source .env`: a shell call that
+ * reads a dotenv file is as much a read of it as `Read {file_path}` is, and
+ * its output is the file. The command itself stays — it names the file, not
+ * what is in it.
+ */
+function readsDotenv(command: unknown): boolean {
+  if (typeof command !== "string" || !command.includes(".env")) return false;
+  return commandSegments(withoutHeredocs(command)).some(
+    (segment) =>
+      SHELL_READER.test(segment) &&
+      segment.trim().split(/\s+/).slice(1).some((word) => isDotenvPath(word.replace(/["'`]/g, "").replace(/^\w*:/, ""))),
+  );
+}
+
 function cutDotenvInput(input: Record<string, unknown>, context: RedactContext): void {
   for (const field of EDIT_INPUT_FIELDS) {
     if (typeof input[field] === "string") {
@@ -240,6 +260,10 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
     if (block.type === "tool_use") {
       const input = isObject(block.input) ? block.input : undefined;
       if (!input) continue;
+      if ((block.name === "Bash" || block.name === "PowerShell") && readsDotenv(input.command)) {
+        if (typeof block.id === "string") context.envToolUseIds.add(block.id);
+        continue;
+      }
       if (!isDotenvPath(input.file_path) && !isDotenvPath(input.notebook_path)) continue;
       if (typeof block.id === "string") context.envToolUseIds.add(block.id);
       cutDotenvInput(input, context);

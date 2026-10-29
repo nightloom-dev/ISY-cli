@@ -240,6 +240,35 @@ test("cuts dotenv content written through a Write tool call", () => {
   assert.equal(record.message.content[0]?.input.content, marker("dotenv"));
 });
 
+test("cuts the result of a shell command that reads a dotenv file, and keeps the command", () => {
+  const commands = [
+    "cat .env.local",
+    "grep -v '^#' config/.env.production | head -5",
+    "set -a && source ./.env && npm run dev",
+    "git show HEAD:.env",
+    "ls -la .env*",
+  ];
+  const records = commands.flatMap((command, i) => [
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { command } }] } },
+    {
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: "STRIPE_LIVE=pk_live_totally_real" }] },
+      toolUseResult: { stdout: "STRIPE_LIVE=pk_live_totally_real", stderr: "", interrupted: false },
+    },
+  ]);
+  const out = summaryFor(records).lines.map((line) => JSON.parse(line) as {
+    message: { content: { input?: { command: string }; content?: string }[] };
+    toolUseResult?: unknown;
+  });
+
+  for (let i = 0; i < commands.length; i += 1) {
+    assert.equal(out[i * 2]!.message.content[0]!.input!.command, commands[i]);
+    const cut = i < commands.length - 1;
+    assert.equal(out[i * 2 + 1]!.message.content[0]!.content === marker("dotenv"), cut, commands[i]);
+    assert.equal(out[i * 2 + 1]!.toolUseResult === marker("dotenv"), cut, commands[i]);
+  }
+});
+
 test("leaves a tool_result alone when the file is not a dotenv file", () => {
   const { lines } = summaryFor([
     {
