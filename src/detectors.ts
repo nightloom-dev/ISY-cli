@@ -847,9 +847,10 @@ export function detectUnverifiedFix(session: ParsedSession): Candidate[] {
 /**
  * Silencing rather than fixing. `test_modified_to_pass` covers the test-file
  * half of this; here it is production code, where a suppression comment has no
- * failing test to explain it and simply removes the warning from view.
+ * failing test to explain it and simply removes the warning from view. Whole
+ * files go through these, so every run is bounded or has one way to match.
  */
-const SUPPRESSORS: { pattern: RegExp; detail: string }[] = [
+export const SUPPRESSORS: { pattern: RegExp; detail: string }[] = [
   { pattern: /@ts-(?:ignore|nocheck|expect-error)\b/g, detail: "a TypeScript error was suppressed" },
   { pattern: /eslint-disable(?:-next-line|-line)?\b/g, detail: "an ESLint rule was disabled" },
   { pattern: /#\s*type:\s*ignore\b/g, detail: "a type error was suppressed" },
@@ -857,9 +858,9 @@ const SUPPRESSORS: { pattern: RegExp; detail: string }[] = [
   { pattern: /#\s*pylint:\s*disable\b/g, detail: "a pylint rule was disabled" },
   { pattern: /@SuppressWarnings\b/g, detail: "a compiler warning was suppressed" },
   { pattern: /#\[allow\(/g, detail: "a Rust lint was allowed" },
-  { pattern: /except[^\n:]*:\s*(?:#[^\n]*)?\n\s*pass\b/g, detail: "an exception is caught and dropped" },
-  { pattern: /catch\s*(?:\([^)]*\))?\s*\{\s*\}/g, detail: "an exception is caught and dropped" },
-  { pattern: /rescue\s*(?:=>\s*\w+\s*)?\n\s*end\b/g, detail: "an exception is caught and dropped" },
+  { pattern: /except[^\n:]{0,200}:\s{0,200}(?:#[^\n]{0,400})?\n\s{0,200}pass\b/g, detail: "an exception is caught and dropped" },
+  { pattern: /catch\s{0,200}(?:\([^)]{0,200}\)\s{0,200})?\{\s{0,200}\}/g, detail: "an exception is caught and dropped" },
+  { pattern: /rescue\s{0,200}(?:=>\s{0,200}\w+\s{0,200})?\n\s{0,200}end\b/g, detail: "an exception is caught and dropped" },
 ];
 
 /**

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { parseLines } from "../parser.js";
 import {
   LOG_ONLY_CATCHES,
+  SUPPRESSORS,
   detectAbandonedApproach,
   detectDestructiveCommand,
   detectErrorSuppressed,
@@ -777,6 +778,39 @@ test("the rules for a catch that only logs get through 200 KB of text built to s
   ];
   for (const text of shapes) {
     for (const { pattern } of LOG_ONLY_CATCHES) {
+      const started = performance.now();
+      text.match(pattern);
+      const took = performance.now() - started;
+      assert.ok(took < 1000, `took ${Math.round(took)}ms on ${JSON.stringify(text.slice(0, 24))}…`);
+    }
+  }
+});
+
+test("the rules for a dropped exception get through 200 KB of text built to stall them", () => {
+  const size = 200_000;
+  const fill = (unit: string): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+  const shapes = [
+    `catch${" ".repeat(size)}`,
+    `catch${"\n".repeat(size)}`,
+    fill("catch("),
+    `catch(x)${" ".repeat(size)}`,
+    `catch{${" ".repeat(size)}`,
+    fill(`catch${" ".repeat(400)}`),
+    `except:${"\n".repeat(size)}`,
+    `except:${" ".repeat(size)}`,
+    `except:\n${"\n".repeat(size)}`,
+    fill("except x"),
+    fill("except:#"),
+    fill(`except:${"\n".repeat(400)}`),
+    `rescue${"\n".repeat(size)}`,
+    `rescue${" ".repeat(size)}`,
+    `rescue =>${" ".repeat(size)}`,
+    `rescue => a${"\n".repeat(size)}`,
+    fill("rescue => a"),
+    fill(`rescue${"\n".repeat(400)}`),
+  ];
+  for (const text of shapes) {
+    for (const { pattern } of SUPPRESSORS) {
       const started = performance.now();
       text.match(pattern);
       const took = performance.now() - started;
