@@ -157,6 +157,30 @@ export const BUILTIN_RULES: RedactionRule[] = [
     ),
     replacement: `$1$2$3$4${marker("assignment")}`,
   },
+  {
+    // `--password hunter2000`, `--api-key "…"`: a name like any other, with a
+    // space where `=` goes. `--password-file /x` has a tail no secret's name has,
+    // and what starts with a dash is the next flag.
+    type: "assignment",
+    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])(-${secretName()})([ \t]+)(["']?)(?!-)${SECRET_VALUE}`, "g"),
+    replacement: `$1$2$3${marker("assignment")}`,
+  },
+  {
+    // `curl -u admin:hunter2000`. What precedes the flag is capped, as every
+    // `curl` starts a new scan of the rest of its line, and a name may be a
+    // marker already: an address is one by now.
+    type: "assignment",
+    pattern: /\b(curl\b[^\n;|]{0,200}?\s(?:-[uU]\s*|--(?:proxy-)?user[=\s]\s*)["']?(?:\[ISY_REDACTED:\w+\]|(?!\[ISY_REDACTED)[^\s:"']+):)(?!\[ISY_REDACTED)[^\s"'$][^\s"']*/g,
+    replacement: `$1${marker("assignment")}`,
+  },
+  {
+    // Tools that take the password on a flag of one letter, which says nothing
+    // anywhere else: `-p` is a port to `ssh`, a directory's parents to `mkdir`,
+    // and to `mysql` with a space after it only a prompt. Capped as above.
+    type: "assignment",
+    pattern: /\b((?:sshpass\b[^\n;|]{0,200}?\s-p\s*|(?:docker|podman)\s+login\b[^\n;|]{0,200}?\s-p\s+|redis-cli\b[^\n;|]{0,200}?\s-a\s+|(?:mysql|mariadb|mysqldump|mysqladmin)\b[^\n;|]{0,200}?\s-p(?=[^\s=]))["']?)(?!\[ISY_REDACTED)[^\s"'$][^\s"']*/g,
+    replacement: `$1${marker("assignment")}`,
+  },
 ];
 
 /** A JSON key is data, never code, so any spelling of a secret's name counts. */

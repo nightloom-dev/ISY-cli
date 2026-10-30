@@ -119,6 +119,61 @@ test("masks the value of a sensitive assignment and keeps the key", () => {
   assert.equal(redactOne("private-key=abcdefghijkl"), `private-key=${marker("assignment")}`);
 });
 
+test("masks a password passed on a command line, and nothing else on it", () => {
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    ["app --password Zq8vR2mK9xLp --port 80", `app --password ${m} --port 80`],
+    [`app --password "Zq8vR2mK9xLp"`, `app --password "${m}"`],
+    ["app --password 'Zq8vR2mK9xLp'", `app --password '${m}'`],
+    ["app --token Zq8vR2mK9xLp", `app --token ${m}`],
+    ["app --api-key Zq8vR2mK9xLp", `app --api-key ${m}`],
+    ["app --apiKey Zq8vR2mK9xLp", `app --apiKey ${m}`],
+    ["app --client-secret Zq8vR2mK9xLp", `app --client-secret ${m}`],
+    ["Connect-App -Password Zq8vR2mK9xLp", `Connect-App -Password ${m}`],
+    ["curl -u admin:Zq8vR2 http://127.0.0.1/", `curl -u admin:${m} http://127.0.0.1/`],
+    ["curl -uadmin:Zq8vR2 http://127.0.0.1/", `curl -uadmin:${m} http://127.0.0.1/`],
+    [`curl -u "admin:Zq8vR2" http://127.0.0.1/`, `curl -u "admin:${m}" http://127.0.0.1/`],
+    ["curl --user admin:Zq8vR2 http://127.0.0.1/", `curl --user admin:${m} http://127.0.0.1/`],
+    ["curl --user=admin:Zq8vR2 http://127.0.0.1/", `curl --user=admin:${m} http://127.0.0.1/`],
+    [`curl -s "http://127.0.0.1/?a=1&b=2" -u admin:Zq8vR2`, `curl -s "http://127.0.0.1/?a=1&b=2" -u admin:${m}`],
+    ["curl -U proxy:Zq8vR2 http://127.0.0.1/", `curl -U proxy:${m} http://127.0.0.1/`],
+    ["curl -u me@example.com:Zq8vR2 http://127.0.0.1/", `curl -u ${marker("email")}:${m} http://127.0.0.1/`],
+    ["mysql -h db -uroot -pZq8vR2 app", `mysql -h db -uroot -p${m} app`],
+    ["mysqldump -pZq8vR2 app", `mysqldump -p${m} app`],
+    ["sshpass -p Zq8vR2 ssh host", `sshpass -p ${m} ssh host`],
+    ["sshpass -pZq8vR2 ssh host", `sshpass -p${m} ssh host`],
+    ["redis-cli -h cache -a Zq8vR2 ping", `redis-cli -h cache -a ${m} ping`],
+    ["docker login -u me -p Zq8vR2 ghcr.io", `docker login -u me -p ${m} ghcr.io`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+
+  for (const text of [
+    "app --password $APP_PASSWORD",
+    `app --password "$APP_PASSWORD"`,
+    "app --password-file /run/secrets/app",
+    "docker login --password-stdin",
+    "app --password --verbose",
+    "app --token short",
+    "app --max-tokens 1000000",
+    `spawn("app", ["--password", password])`,
+    "mkdir -p src/lib/deep",
+    "ssh -p 2222 host",
+    "mysql -p app",
+    "docker run -p 8080:80 app",
+    `curl -u "$API_USER:$API_PASS" http://127.0.0.1/`,
+    "curl -u admin: http://127.0.0.1/",
+    "curl -u admin http://127.0.0.1/",
+    "curl http://127.0.0.1/ && grep -p x",
+    "tar -xf a.tar -C out -p",
+    "redis-cli -h cache ping",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+});
+
 test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });
@@ -886,6 +941,36 @@ test("every rule gets through long runs it has nothing to match in", () => {
       applyRules(text, [rule]);
       const took = performance.now() - started;
       assert.ok(took < 1000, `${rule.type} took ${Math.round(took)}ms on ${text.slice(0, 6)}…`);
+    }
+  }
+});
+
+test("every rule gets through text shaped almost like what it matches", () => {
+  const fill = (unit: string) => unit.repeat(Math.ceil(200_000 / unit.length));
+  const shapes = [
+    fill("--password "),
+    fill("--password-"),
+    `--password${" ".repeat(200_000)}`,
+    `--password ${"a".repeat(200_000)}"`,
+    fill("curl "),
+    fill("curl -u "),
+    fill("curl -u a "),
+    `curl -u ${"a".repeat(200_000)}`,
+    `curl -u ${" ".repeat(200_000)}`,
+    fill("curl --user "),
+    fill("mysql "),
+    fill("mysql -p "),
+    fill("sshpass "),
+    fill("sshpass -p "),
+    fill("docker login "),
+    fill("redis-cli -a "),
+  ];
+  for (const text of shapes) {
+    for (const rule of BUILTIN_RULES) {
+      const started = performance.now();
+      applyRules(text, [rule]);
+      const took = performance.now() - started;
+      assert.ok(took < 1000, `${rule.pattern.source.slice(0, 30)} took ${Math.round(took)}ms on ${text.slice(0, 12)}…`);
     }
   }
 });
