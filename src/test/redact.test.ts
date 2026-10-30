@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseLines, parseTranscriptFile } from "../parser.js";
-import { BUILTIN_RULES, REDACTION_MARKER, applyRules, marker, redactLines, redactTranscriptFile } from "../redact.js";
+import { BUILTIN_RULES, REDACTION_MARKER, applyRules, marker, redactLineStream, redactLines, redactTranscriptFile } from "../redact.js";
 
 function redactOne(text: string, extraPatterns?: string[]): string {
   const record = { type: "user", message: { role: "user", content: text } };
@@ -428,6 +428,117 @@ test("keeps the result of a command that names a dotenv file and prints none of 
   }
 });
 
+/** A session that says the value everywhere it can be said, and shows a dotenv file between. */
+function sessionAround(dotenvCall: Record<string, unknown>[]) {
+  const value = "Zq8vR2mK9xLp";
+  const said = (uuid: string) => [
+    { type: "user", uuid: `${uuid}-prompt`, message: { role: "user", content: `use ${value} for the mailer` } },
+    { type: "assistant", uuid: `${uuid}-text`, message: { role: "assistant", content: [{ type: "text", text: `The phrase is ${value}.` }] } },
+    { type: "assistant", uuid: `${uuid}-call`, message: { role: "assistant", content: [{ type: "tool_use", id: `${uuid}-t`, name: "Bash", input: { command: `node send.js ${value}` } }] } },
+    { type: "user", uuid: `${uuid}-out`, message: { role: "user", content: [{ type: "tool_result", tool_use_id: `${uuid}-t`, content: `sent with ${value}` }] }, toolUseResult: { stdout: `sent with ${value}` } },
+  ];
+  return { value, records: [...said("before"), ...dotenvCall, ...said("after")] };
+}
+
+const callAndResult = (name: string, input: Record<string, unknown>, output: unknown) => [
+  { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "env", name, input }] } },
+  { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "env", content: output }] }, toolUseResult: output },
+];
+
+test("a value a dotenv file showed goes from the whole session, before the read and after it", () => {
+  const dotenv = "MAILER_PHRASE=Zq8vR2mK9xLp\nNODE_ENV=production\n";
+  const ways: [string, Record<string, unknown>[]][] = [
+    ["Read", callAndResult("Read", { file_path: "/repo/.env" }, `     1\u2192MAILER_PHRASE=Zq8vR2mK9xLp\n     2\u2192NODE_ENV=production\n`)],
+    ["Read in blocks", callAndResult("Read", { file_path: "/repo/.env" }, [{ type: "text", text: dotenv }])],
+    ["Grep", callAndResult("Grep", { pattern: "PHRASE", path: ".env", output_mode: "content" }, "MAILER_PHRASE=Zq8vR2mK9xLp")],
+    ["cat", callAndResult("Bash", { command: "cat .env" }, dotenv)],
+    ["node -e", callAndResult("Bash", { command: `node -e "console.log(fs.readFileSync('.env','utf8'))"` }, dotenv)],
+    ["quoted", callAndResult("Bash", { command: "cat .env" }, `export MAILER_PHRASE="Zq8vR2mK9xLp"\n`)],
+    ["cut, a value with no name", callAndResult("Bash", { command: "cut -d= -f2 .env" }, "Zq8vR2mK9xLp\nproduction\n")],
+    ["Write", callAndResult("Write", { file_path: "/repo/.env", content: dotenv }, "ok")],
+    ["Edit", callAndResult("Edit", { file_path: "/repo/.env", old_string: "x", new_string: dotenv }, "ok")],
+    ["MultiEdit", callAndResult("MultiEdit", { file_path: "/repo/.env", edits: [{ old_string: "x", new_string: dotenv }] }, "ok")],
+    ["echo into it", callAndResult("Bash", { command: `echo "MAILER_PHRASE=Zq8vR2mK9xLp" >> .env` }, "")],
+    ["heredoc into it", callAndResult("Bash", { command: `cat > .env <<'EOF'\n${dotenv}EOF` }, "")],
+    ["printf into it", callAndResult("Bash", { command: "printf 'MAILER_PHRASE=Zq8vR2mK9xLp\\nA=1\\n' > .env" }, "")],
+    ["a ! command", [
+      { type: "user", message: { role: "user", content: "<bash-input>cat .env</bash-input>" } },
+      { type: "user", message: { role: "user", content: `<bash-stdout>${dotenv}</bash-stdout><bash-stderr></bash-stderr>` } },
+    ]],
+  ];
+  for (const [way, call] of ways) {
+    const { value, records } = sessionAround(call);
+    const { lines, summary } = summaryFor(records);
+    const out = lines.join("\n");
+    assert.ok(!out.includes(value), `${way} left the value in the session`);
+    assert.equal(out.split(marker("dotenv")).length - 1 >= 8, true, way);
+    assert.ok((summary.counts.dotenv ?? 0) >= 8, way);
+    const parsed = lines.map((line) => JSON.parse(line) as { message: { content: unknown } });
+    assert.equal(parsed[0]!.message.content, `use ${marker("dotenv")} for the mailer`, way);
+    const again = redactLines(lines);
+    assert.deepEqual(again.lines, lines, `${way}: a second pass changes nothing`);
+  }
+});
+
+test("a command that only names a dotenv file teaches nothing from its own text", () => {
+  const value = "Zq8vR2mK9xLp";
+  for (const command of [
+    `python3 - <<'PY'\nMAILER_PHRASE="${value}"\nprint(open('.env').read())\nPY`,
+    `MAILER_PHRASE=${value} node --env-file=.env send.js`,
+  ]) {
+    const { lines } = summaryFor([
+      ...callAndResult("Bash", { command }, "plain output"),
+      { type: "user", message: { role: "user", content: `use ${value} for the mailer` } },
+    ]);
+    assert.ok(lines.at(-1)!.includes(value), command);
+  }
+});
+
+test("a value learned as a stream goes the same way", async () => {
+  const { value, records } = sessionAround(callAndResult("Read", { file_path: "/repo/.env" }, "MAILER_PHRASE=Zq8vR2mK9xLp"));
+  const stream = (async function* () {
+    for (const record of records) yield JSON.stringify(record);
+  })();
+  const { lines } = await redactLineStream(stream);
+  assert.ok(!lines.join("\n").includes(value));
+  assert.equal(lines.length, records.length);
+});
+
+test("what a dotenv file holds in plain view does not shred the session", () => {
+  const dotenv = [
+    "NODE_ENV=production",
+    "PORT=3000",
+    "BASE_URL=http://localhost:3000",
+    "API_URL=https://api.example.com/v1",
+    "APP_DIR=/srv/app/current/release/public",
+    "POSTGRES_PASSWORD=password",
+    "ADMIN_PASSWORD=changeme",
+    "DEBUG=true",
+    "ROLE=assistant",
+    "PAGE_TITLE=Transcript",
+    "SHORT=Zq8vR2m",
+    "ANTHROPIC_MODEL=claude-opus-5-5",
+    "CHECKOUT_DIR=/repo/src/payments-module",
+    "PIN_CODE=1234567890123",
+    "CLIENT_REGION=eu-central-1",
+    `const MARKER = "<!-- isy:comment:v1 -->";`,
+  ].join("\n");
+  const text = "In production the password is read at http://localhost:3000 and https://api.example.com/v1 for /srv/app/current/release/public, unless true: changeme, Transcript, Zq8vR2m, 3000, 1234567890123, claude-opus-5-5 in eu-central-1 under <!-- isy:comment:v1 -->.";
+  const records = [
+    { type: "user", uuid: "u1", sessionId: "s1", gitBranch: "claude-opus-5-5", cwd: "/repo", message: { role: "user", content: text } },
+    { type: "assistant", uuid: "a1", sessionId: "s1", message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/repo/src/payments-module/a.ts", old_string: "a", new_string: "b" } }] } },
+    ...callAndResult("Read", { file_path: "/repo/.env" }, dotenv),
+  ];
+  const { lines } = summaryFor(records);
+  const parsed = lines.map((line) => JSON.parse(line) as { type: string; gitBranch?: string; message: { role: string; model?: string; content: { input: { file_path: string } }[] | string } });
+  assert.equal(parsed[0]!.message.content, text);
+  assert.equal(parsed[0]!.gitBranch, "claude-opus-5-5");
+  assert.equal(parsed[1]!.type, "assistant");
+  assert.equal(parsed[1]!.message.role, "assistant");
+  assert.equal(parsed[1]!.message.model, "claude-opus-5-5");
+  assert.equal((parsed[1]!.message.content as { input: { file_path: string } }[])[0]!.input.file_path, "src/payments-module/a.ts");
+});
+
 test("cuts what a shell command writes into a dotenv file, and what it printed", () => {
   const m = marker("dotenv");
   const cases: [string, string][] = [
@@ -455,20 +566,18 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     ['echo "DB_PASS=Zq8vR2mK9xLp" \\\n  >> .env', `${m} > .env`],
     ['node -e "console.log(process.env.DB_PASS)" > env.txt', 'node -e "console.log(process.env.DB_PASS)" > env.txt'],
   ];
-  const records = cases.flatMap(([command], i) => [
-    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { command } }] } },
-    {
-      type: "user",
-      message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: "DB_PASS=Zq8vR2mK9xLp" }] },
-      toolUseResult: { stdout: "DB_PASS=Zq8vR2mK9xLp", stderr: "", interrupted: false },
-    },
-  ]);
-  const { lines } = summaryFor(records);
-
-  for (const [i, [command, expected]] of cases.entries()) {
-    const call = JSON.parse(lines[i * 2]!) as { message: { content: { input: { command: string } }[] } };
+  for (const [command, expected] of cases) {
+    const { lines } = summaryFor([
+      { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } },
+      {
+        type: "user",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "DB_PASS=Zq8vR2mK9xLp" }] },
+        toolUseResult: { stdout: "DB_PASS=Zq8vR2mK9xLp", stderr: "", interrupted: false },
+      },
+    ]);
+    const call = JSON.parse(lines[0]!) as { message: { content: { input: { command: string } }[] } };
     assert.equal(call.message.content[0]!.input.command, expected);
-    assert.equal(lines[i * 2 + 1]!.includes("Zq8vR2mK9xLp"), command === expected, command);
+    assert.equal(lines[1]!.includes("Zq8vR2mK9xLp"), command === expected, command);
   }
 });
 
@@ -972,6 +1081,38 @@ test("every rule gets through text shaped almost like what it matches", () => {
       const took = performance.now() - started;
       assert.ok(took < 1000, `${rule.pattern.source.slice(0, 30)} took ${Math.round(took)}ms on ${text.slice(0, 12)}…`);
     }
+  }
+});
+
+test("learning a dotenv file's values gets through what looks almost like one", () => {
+  const fill = (unit: string) => unit.repeat(Math.ceil(200_000 / unit.length));
+  const shapes = [
+    fill("A="),
+    fill('A="'),
+    fill("A='"),
+    fill(`A="B='`),
+    `A=${" ".repeat(200_000)}`,
+    `A${" ".repeat(200_000)}`,
+    `A="${"b".repeat(200_000)}`,
+    fill("a b "),
+    fill("="),
+    fill("a="),
+    fill("\\n"),
+    `${"a".repeat(200_000)}=`,
+    `${"a".repeat(100_000)}${"=".repeat(100_000)}b`,
+    fill("KEY=Zq8vR2mK9xLp\n"),
+    Array.from({ length: 9_000 }, (_, i) => `KEY=Zq8vR2mK9xLp${i}\n`).join(""),
+  ];
+  for (const text of shapes) {
+    const started = performance.now();
+    const { lines } = redactLines([
+      JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: ".env" } }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: text }] } }),
+      JSON.stringify({ type: "user", message: { role: "user", content: text } }),
+    ]);
+    const took = performance.now() - started;
+    assert.equal(lines.length, 3);
+    assert.ok(took < 5000, `took ${Math.round(took)}ms on ${text.slice(0, 12)}…`);
   }
 });
 

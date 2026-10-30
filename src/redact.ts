@@ -202,6 +202,8 @@ interface RedactContext {
   envToolUseIds: Set<string>;
   /** The last `!` command typed in Claude Code read or wrote a dotenv file. */
   bashInputTouchedDotenv: boolean;
+  /** What dotenv files held, as far as the session showed them (`learnValues`). */
+  learned: Set<string>;
   /**
    * Mutable: a transcript names its own working directory on every record, so a
    * caller that did not pass one still gets repository-relative paths. The
@@ -251,6 +253,124 @@ export function applyRules(
     result = result.replace(rule.pattern, rule.replacement);
   }
   return result;
+}
+
+/** `NAME=value` as a dotenv file or a shell write spells it; code puts spaces round its `=`. */
+const DOTENV_PAIR = /(?<![\w.$-])([A-Za-z_][A-Za-z0-9_]*)=("[^"\n]*"|'[^'\n]*'|[^\s"']+)/g;
+/** A line that is one value and nothing else: `cut -d= -f2 .env`, `node -p process.env.X`. */
+const BARE_VALUE = /^[^\s"'{}[\]<>=]+=*$/;
+/** A word or a number: `password`, `changeme`, `production` and `12345678` are all through normal text. */
+const PLAIN_WORD = /^(?:[A-Z]?[a-z]+|[A-Z]+|\d+)$/;
+const MIN_LEARNED_VALUE = 12;
+/**
+ * ponytail: the sweep costs this times the session's size, and a session names far
+ * fewer. The first ones win; an Aho-Corasick scan is the way up.
+ */
+const MAX_LEARNED_VALUES = 500;
+
+/**
+ * A value worth cutting wherever it turns up. Under a secret's name it only has to
+ * be no plain word. Under any other, it has to be long and not plainly public:
+ * `BASE_URL=http://localhost:3000`, `APP_DIR=/srv/app`, `HOST=api.example.com`, or a
+ * name in lower case: `MODEL=claude-opus-5-5`, `REGION=eu-central-1`. Nothing generated
+ * has twelve letters and digits in a row and still looks like any of those.
+ */
+function worthLearning(name: string | undefined, value: string): boolean {
+  if (value.length < MIN_SENSITIVE_VALUE || value.startsWith("$")) return false;
+  if (value.includes(REDACTION_MARKER) || PLAIN_WORD.test(value)) return false;
+  if (name !== undefined && SENSITIVE_KEY.test(name)) return true;
+  if (value.length < MIN_LEARNED_VALUE) return false;
+  if (/^[~.]{0,2}\/[\w./-]*$/.test(value)) return false;
+  const named = /[/.:]/.test(value) ? /^[\w.:/-]*$/.test(value) : /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/.test(value);
+  return !named || /[A-Za-z0-9]{12}/.test(value);
+}
+
+/**
+ * What a dotenv file holds is a secret by where it sits, whatever it looks like
+ * and whatever it is called, so the rules cannot be asked to know it: `MAILER_PHRASE`
+ * names nothing they know, and the value quoted in a later sentence has no name
+ * at all. What a dotenv call read or wrote is searched for values here, and they go
+ * from the whole session at the end (`cutLearnedValues`). Only names written the way
+ * such files write them count, so that a test run under `--env-file` does not teach
+ * its log's `id=…`.
+ *
+ * ponytail: only what the session showed. A value printed by a script that read
+ * the file itself, or typed in a prompt, is known to nothing here; so is one under
+ * the floors above, which keep short values from shredding the text.
+ */
+function learnValues(value: unknown, context: RedactContext): void {
+  if (Array.isArray(value)) return value.forEach((item) => learnValues(item, context));
+  if (isObject(value)) return Object.values(value).forEach((item) => learnValues(item, context));
+  if (typeof value !== "string") return;
+  // `printf 'A=1\nB=2\n' > .env` holds its lines as written.
+  const text = value.replace(/\\n/g, "\n");
+  const learn = (name: string | undefined, found: string): void => {
+    if (context.learned.size < MAX_LEARNED_VALUES && worthLearning(name, found)) context.learned.add(found);
+  };
+  for (const [, name, written] of text.matchAll(DOTENV_PAIR)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(name!) && !SENSITIVE_KEY.test(name!)) continue;
+    learn(name, /^["']/.test(written!) ? written!.slice(1, -1) : written!);
+  }
+  for (const line of text.split("\n")) {
+    const bare = line.trim();
+    if (BARE_VALUE.test(bare) && /[A-Za-z]/.test(bare) && /\d/.test(bare)) learn(undefined, bare);
+  }
+}
+
+/** What says what a record is, not what anybody said: the parse reads these, and they stay. */
+const NOT_SAID = new Set([
+  ...PATH_KEYS,
+  "type",
+  "role",
+  "uuid",
+  "parentUuid",
+  "sessionId",
+  "id",
+  "tool_use_id",
+  "name",
+  "model",
+  "timestamp",
+  "version",
+  "gitBranch",
+]);
+
+function withoutValues(value: unknown, values: readonly string[], context: RedactContext, key?: string): unknown {
+  if (typeof value === "string") {
+    if (key !== undefined && NOT_SAID.has(key)) return value;
+    let text = value;
+    for (const secret of values) {
+      if (!text.includes(secret)) continue;
+      const parts = text.split(secret);
+      count(context, "dotenv", parts.length - 1);
+      text = parts.join(marker("dotenv"));
+    }
+    return text;
+  }
+  if (Array.isArray(value)) return value.map((item) => withoutValues(item, values, context));
+  if (!isObject(value)) return value;
+  const result: Record<string, unknown> = {};
+  for (const [entryKey, entry] of Object.entries(value)) result[entryKey] = withoutValues(entry, values, context, entryKey);
+  return result;
+}
+
+/**
+ * After the whole session, because a value can be quoted long before the read that
+ * shows what it is. A line is parsed only if it holds one, and in its JSON form so
+ * that a match can never land across an escape.
+ */
+function cutLearnedValues(lines: string[], context: RedactContext): string[] {
+  if (context.learned.size === 0) return lines;
+  // Longest first: a value inside another must not leave the rest of that one.
+  const values = [...context.learned].sort((a, b) => b.length - a.length);
+  const inJson = values.map((value) => JSON.stringify(value).slice(1, -1));
+  return lines.map((line) => {
+    if (!inJson.some((value) => line.includes(value))) return line;
+    try {
+      return JSON.stringify(withoutValues(JSON.parse(line), values, context));
+    } catch {
+      return withoutValues(line, values, context) as string;
+    }
+  });
 }
 
 function isDotenvPath(filePath: unknown): boolean {
@@ -349,7 +469,7 @@ const GROUP_WRITE = /(?:[})]|\b(?:done|fi|esac))\s*(?:\d?>|&>|\|)/;
  * itself (`python - <<PY` opening `.env`) — and the statement keeps its target,
  * so `sed -i` beside it is still an edit and the parse still sees a write.
  */
-function cutDotenvWrites(command: string): string {
+function cutDotenvWrites(command: string, context: RedactContext): string {
   if (!command.includes(".env")) return command;
   const lines = command.split("\n");
   const kept: string[] = [];
@@ -368,6 +488,7 @@ function cutDotenvWrites(command: string): string {
           if (target === undefined) return part;
           writes = true;
           written ??= target;
+          learnValues(part, context);
           if (GROUP_WRITE.test(part)) spread = true;
           return `${/^\s*/.exec(part)![0]}${marker("dotenv")} > ${target}`;
         })
@@ -379,6 +500,7 @@ function cutDotenvWrites(command: string): string {
     if (end === -1) end = lines.length;
     const body = lines.slice(i + 1, end);
     if (writes) {
+      learnValues(body.join("\n"), context);
       i = end;
       continue;
     }
@@ -389,7 +511,10 @@ function cutDotenvWrites(command: string): string {
   // A group or a quoted string over several lines holds the values outside the
   // statement that names the file (`{ echo A=1; echo B=2; } > .env`), so the
   // whole command goes, and only the write is left for the parse to see.
-  if (written !== undefined && spread) return `${marker("dotenv")} > ${written}`;
+  if (written !== undefined && spread) {
+    learnValues(command, context);
+    return `${marker("dotenv")} > ${written}`;
+  }
   return kept.join("\n");
 }
 
@@ -397,6 +522,7 @@ function cutDotenvWrites(command: string): string {
 function cutDotenvInput(input: Record<string, unknown>, context: RedactContext): void {
   for (const field of EDIT_INPUT_FIELDS) {
     if (typeof input[field] === "string") {
+      learnValues(input[field], context);
       input[field] = marker("dotenv");
       count(context, "dotenv", 1);
     }
@@ -434,7 +560,7 @@ function callNamesDotenv(name: unknown, input: Record<string, unknown>): boolean
 function scanBashMode(message: Record<string, unknown>, content: string, context: RedactContext): void {
   const input = /^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/.exec(content)?.[1];
   if (input !== undefined) {
-    const cut = cutDotenvWrites(input);
+    const cut = cutDotenvWrites(input, context);
     context.bashInputTouchedDotenv = cut !== input || readsDotenv(input);
     if (cut !== input) {
       message.content = `<bash-input>${cut}</bash-input>`;
@@ -444,6 +570,7 @@ function scanBashMode(message: Record<string, unknown>, content: string, context
   }
   if (!context.bashInputTouchedDotenv || !content.trimStart().startsWith("<bash-stdout>")) return;
   context.bashInputTouchedDotenv = false;
+  learnValues(content.replace(/<\/?bash-std(?:out|err)>/g, "\n"), context);
   message.content = marker("dotenv");
   count(context, "dotenv", 1);
 }
@@ -461,7 +588,7 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
       const input = isObject(block.input) ? block.input : undefined;
       if (!input) continue;
       const command = input.command;
-      const cut = typeof command === "string" ? cutDotenvWrites(command) : command;
+      const cut = typeof command === "string" ? cutDotenvWrites(command, context) : command;
       if (cut !== command) {
         input.command = cut;
         count(context, "dotenv", 1);
@@ -476,9 +603,11 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
     if (block.type === "tool_result") {
       const id = block.tool_use_id;
       if (typeof id !== "string" || !context.envToolUseIds.has(id)) continue;
+      learnValues(block.content, context);
       block.content = marker("dotenv");
       count(context, "dotenv", 1);
       if (record.toolUseResult !== undefined) {
+        learnValues(record.toolUseResult, context);
         record.toolUseResult = marker("dotenv");
         count(context, "dotenv", 1);
       }
@@ -659,6 +788,7 @@ function createContext(options: RedactOptions, invalid: string[]): RedactContext
     counts: {},
     envToolUseIds: new Set(),
     bashInputTouchedDotenv: false,
+    learned: new Set(),
     // The home directory is this machine's and is never in the transcript's
     // gift, so it is read here rather than passed by every caller.
     roots: resolveRoots({ cwd: options.cwd, home: options.home ?? homedir() }),
@@ -729,7 +859,8 @@ export function redactLines(
     output.push(result.line);
   }
 
-  return { lines: output, summary: summarize(context, total, unparsed, invalid) };
+  const clean = cutLearnedValues(output, context);
+  return { lines: clean, summary: summarize(context, total, unparsed, invalid) };
 }
 
 /**
@@ -756,7 +887,8 @@ export async function redactLineStream(
     output.push(result.line);
   }
 
-  return { lines: output, summary: summarize(context, total, unparsed, invalid) };
+  const clean = cutLearnedValues(output, context);
+  return { lines: clean, summary: summarize(context, total, unparsed, invalid) };
 }
 
 export function redactTranscriptFile(
