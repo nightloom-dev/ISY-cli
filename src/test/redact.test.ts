@@ -208,6 +208,53 @@ test("masks an assigned secret whole when it holds a dollar sign or a bracket", 
   assert.equal(redactOne("token: getToken()"), `token: ${m}()`);
 });
 
+test("masks a value under PASS, PWD and the other names a credential goes by, not under words that hold them", () => {
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    ["DB_PASS=Zq8vR2mK9xLp some-command", `DB_PASS=${m} some-command`],
+    ["SMTP_PASS=Zq8vR2mK9xLp", `SMTP_PASS=${m}`],
+    ["db-pass: Zq8vR2mK9xLp", `db-pass: ${m}`],
+    ["pass=Zq8vR2mK9xLp", `pass=${m}`],
+    ["PASS=Zq8vR2mK9xLp", `PASS=${m}`],
+    ["dbPass=Zq8vR2mK9xLp", `dbPass=${m}`],
+    [`{"dbPass":"Zq8vR2mK9xLp"}`, `{"dbPass":"${m}"}`],
+    ["DB_PWD=Zq8vR2mK9xLp", `DB_PWD=${m}`],
+    ["MYSQL_PWD=Zq8vR2mK9xLp mysql app", `MYSQL_PWD=${m} mysql app`],
+    ["Server=db;Uid=sa;Pwd=Zq8vR2mK9xLp", `Server=db;Uid=sa;Pwd=${m}`],
+    ["AUTH=Zq8vR2mK9xLp", `AUTH=${m}`],
+    ["CREDENTIALS=Zq8vR2mK9xLp", `CREDENTIALS=${m}`],
+    ["SERVICE_CREDENTIAL=Zq8vR2mK9xLp", `SERVICE_CREDENTIAL=${m}`],
+    ["GPG_PASSPHRASE=Zq8vR2mK9xLp", `GPG_PASSPHRASE=${m}`],
+    ["SESSION_COOKIE=Zq8vR2mK9xLp", `SESSION_COOKIE=${m}`],
+    [`{"auth":"Zq8vR2mK9xLp"}`, `{"auth":"${m}"}`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+
+  for (const text of [
+    "compass=northbynorthwest",
+    "COMPASS=northbynorthwest",
+    "encompass: northbynorthwest",
+    "bypass: northbynorthwest",
+    "BYPASS=northbynorthwest",
+    "byPass=northbynorthwest",
+    "passes: northbynorthwest",
+    "PWD=/srv/app/current",
+    "OLDPWD=/srv/app/current",
+    `{"pwd":"/srv/app/current"}`,
+    "AUTHOR=northbynorthwest",
+    "author: northbynorthwest",
+    "AUTH_URL=https://example.com/login",
+    "authenticated: northbynorthwest",
+    `credentials: "include"`,
+    "cookies: northbynorthwest",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+});
+
 test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });
@@ -605,8 +652,8 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
       { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } },
       {
         type: "user",
-        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "DB_PASS=Zq8vR2mK9xLp" }] },
-        toolUseResult: { stdout: "DB_PASS=Zq8vR2mK9xLp", stderr: "", interrupted: false },
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "MAILER_PHRASE=Zq8vR2mK9xLp" }] },
+        toolUseResult: { stdout: "MAILER_PHRASE=Zq8vR2mK9xLp", stderr: "", interrupted: false },
       },
     ]);
     const call = JSON.parse(lines[0]!) as { message: { content: { input: { command: string } }[] } };
@@ -1107,6 +1154,13 @@ test("every rule gets through text shaped almost like what it matches", () => {
     fill("sshpass -p "),
     fill("docker login "),
     fill("redis-cli -a "),
+    fill("pass"),
+    fill("_pass_"),
+    fill("aPass"),
+    fill("byPass"),
+    fill("_pwd"),
+    fill("auth-"),
+    fill("cookie."),
     fill("PASSWORD=a$"),
     fill("PASSWORD=a("),
     fill("password=aaaaaaaa("),

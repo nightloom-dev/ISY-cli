@@ -29,7 +29,16 @@ function anyCase(source: string): string {
   return source.replace(/[a-z]/g, (letter) => `[${letter}${letter.toUpperCase()}]`);
 }
 
-const SECRET_WORD = anyCase("(?:password|passwd|secret|token|api[-_]?key|private[-_]?key|access[-_]?key)");
+/**
+ * `pass` and `pwd` count only as a word of their own, as `compass`, `bypass`, and the
+ * shell's `PWD` and `OLDPWD` are all over a transcript: `DB_PASS`, `db-pass`, `dbPass`,
+ * `DB_PWD`, `Uid=sa;Pwd=…`.
+ */
+const SECRET_WORD = [
+  anyCase("password|passwd|passphrase|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|credentials?|authorization|auth|cookie"),
+  `(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?<![bB][yY])(?=[A-Z]))${anyCase("pass")}`,
+  `(?:(?<=[;_])|(?<=[a-z0-9])(?=[A-Z]))${anyCase("pwd")}`,
+].join("|");
 
 /**
  * A name that holds a secret: one of the words, wherever it sits in an
@@ -40,7 +49,7 @@ const SECRET_WORD = anyCase("(?:password|passwd|secret|token|api[-_]?key|private
  * in a real corpus as often as the secrets do, and none of them is one.
  */
 function secretName(atWord = ""): string {
-  return String.raw`[A-Za-z0-9_.-]*?${atWord}${SECRET_WORD}${anyCase("(?:[-_]?key)?(?:[-_]?base)?")}(?![A-Za-z0-9_.-])`;
+  return String.raw`[A-Za-z0-9_.-]*?${atWord}(?:${SECRET_WORD})${anyCase("(?:[-_]?key)?(?:[-_]?base)?")}(?![A-Za-z0-9_.-])`;
 }
 
 /** The word glued to what came before, but not as a camelCase hump. */
