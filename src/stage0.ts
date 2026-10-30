@@ -48,12 +48,13 @@ function order(a: Candidate, b: Candidate): number {
  * script — has nothing to say to a pull request. Masking decides it the way the
  * upload does: under the session's directory a path turns relative, under the
  * home it turns `~/…`, and only what stays absolute lies outside both. The
- * server reads transcripts already masked, `cwd` included (it reads `.`), so
- * there the paths are judged as they are.
+ * server reads transcripts already masked, `cwd` included (it reads `.` or a
+ * subdirectory), so there the paths are judged as they are.
  *
- * ponytail: a repository outside the home, with the session started in one of
- * its subdirectories, loses findings on sibling directories; the git root
- * recorded at upload is the way up.
+ * ponytail: a transcript masked with no repository to root at — by `isy
+ * analyze`, or by a client older than that rooting — from a session started in
+ * a subdirectory of a repository outside the home, loses findings on sibling
+ * directories. Pass `git.ts:maskRootsFor` to `isy analyze` if that shows up.
  */
 function inTree(candidate: Candidate, cwd: string | undefined): boolean {
   if (candidate.filePath === undefined || cwd === undefined) return true;

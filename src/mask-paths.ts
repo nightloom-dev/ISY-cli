@@ -8,7 +8,7 @@
  * the second segment is the leak; the rest is information a reviewer wants.
  * So a path is rewritten rather than blanked:
  *
- *   inside the working directory  → `src/a.ts`
+ *   inside the repository         → `src/a.ts`
  *   elsewhere under a home        → `~/.config/gh/hosts.yml`
  *   anywhere else                 → left alone
  *
@@ -35,7 +35,7 @@ const MASK_HOST = marker("host");
 const MASK_PROJECT = marker("project");
 
 export interface MaskRoots {
-  /** Where the session ran. Paths under it become repository-relative. */
+  /** The top of the session's repository. Paths under it become repository-relative. */
   cwd?: string;
   /** The developer's home. Paths under it become `~/…`. */
   home?: string;
@@ -403,12 +403,13 @@ export const PATH_KEYS: ReadonlySet<string> = new Set([
  * other path in that transcript is relative to. One rule, two callers: the
  * client learns it while redacting, the server while reading a transcript back
  * off disk — and they must agree, or a comment and a report page would spell
- * the same file two ways.
+ * the same file two ways. One that is not absolute was masked before it was
+ * stored, and taken for a root it would eat the same word out of other paths.
  */
 export function rootOf(record: unknown): string | undefined {
   if (typeof record !== "object" || record === null) return undefined;
   const cwd = (record as { cwd?: unknown }).cwd;
-  return typeof cwd === "string" && cwd.length > 0 ? cwd : undefined;
+  return typeof cwd === "string" && looksAbsolute(cwd) ? cwd : undefined;
 }
 
 /**

@@ -3,6 +3,7 @@ import { access, readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { parkAlert, withParkedAlerts } from "../alert.js";
+import { maskRootsFor } from "../git.js";
 import { installHookIn, installedHooksIn, removeHookIn } from "../hook.js";
 import type { HookFile } from "../hook.js";
 import { parseLines } from "../parser.js";
@@ -209,7 +210,10 @@ export const codexAgent: Agent = {
     options: { extraPatterns?: readonly string[]; cwd?: string },
   ): Promise<string[]> {
     const records = await codexRecords(path, options.cwd);
-    return redactLines(records, { extraPatterns: options.extraPatterns, cwd: options.cwd }).lines;
+    return redactLines(records, {
+      extraPatterns: options.extraPatterns,
+      ...(await maskRootsFor(options.cwd)),
+    }).lines;
   },
 
   hooksInstalled: () => installedHooksIn(hookFile()),

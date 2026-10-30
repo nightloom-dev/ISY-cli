@@ -55,10 +55,13 @@ database or to a model.
 - **Nothing is quoted verbatim out of a transcript** — not developer prompts,
   not `thinking` blocks. Anything printed or sent goes through `mask-paths`
   first, which is idempotent: applying it twice is safe.
-- **Absolute paths are rewritten, not blanked.** Under the working directory a
-  path becomes repo-relative, elsewhere under home it becomes `~/…`, and
-  `/etc`, `/usr`, `/root` are left alone. The root comes from the transcript,
-  not from wherever this process happens to stand.
+- **Absolute paths are rewritten, not blanked.** Under the repository a path
+  becomes repo-relative, elsewhere under home it becomes `~/…`, and `/etc`,
+  `/usr`, `/root` are left alone. The root is the top of the repository the
+  session ran in (`git.ts:maskRootsFor`), whichever subdirectory it started in,
+  never wherever this process happens to stand; with no repository known, the
+  first absolute `cwd` the transcript records. A stored transcript's `cwd` is
+  already relative (`.`, `pkg`) and is no root (`mask-paths.ts:rootOf`).
 - **`ponytail:` marks a deliberate simplification** with a named ceiling and a
   way up. It is not a TODO; do not "fix" it blind.
 - **A Claude session is its file and its subagents' files.** Claude Code 2.1

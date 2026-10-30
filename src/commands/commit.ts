@@ -46,7 +46,7 @@ export async function runCommit(
   const config = await readConfig();
   const lines = await newest.agent.redactedLines(newest.file.path, {
     extraPatterns: config.extraRedactPatterns,
-    cwd,
+    cwd: newest.file.cwd ?? cwd,
   });
   const session = parseLines(lines);
   report.records = session.records.length;

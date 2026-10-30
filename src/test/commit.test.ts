@@ -32,7 +32,7 @@ let claudeConfig: string;
 let server: Server;
 let baseUrl: string;
 
-const uploads: { sessionId: string; contentHash: string; commits?: unknown }[] = [];
+const uploads: { sessionId: string; contentHash: string; commits?: unknown; transcript?: string }[] = [];
 
 const saved = {
   home: process.env.ISY_HOME,
@@ -154,11 +154,7 @@ before(async () => {
     req.on("end", () => {
       const raw = Buffer.concat(chunks);
       if (req.url?.endsWith("/sessions")) {
-        const body = JSON.parse(gunzipSync(raw).toString("utf8")) as {
-          sessionId: string;
-          contentHash: string;
-          commits?: unknown;
-        };
+        const body = JSON.parse(gunzipSync(raw).toString("utf8")) as (typeof uploads)[number];
         uploads.push(body);
       }
       res.writeHead(200, { "content-type": "application/json" });
@@ -669,4 +665,84 @@ test("a session elsewhere in the tree counts only as far back as a sweep looks",
   assert.equal((await runCommit({ noUpload: true }, top)).sessionId, "sess-old-here");
   assert.equal((await runUpload({ silent: true, all: true }, top)).sent, 1);
   assert.deepEqual(uploads.map((upload) => upload.sessionId), ["sess-old-here"]);
+});
+
+/** The paths a transcript went up with, as `sent` lines of JSON. */
+function sentRecords(upload: { transcript?: string }): Record<string, unknown>[] {
+  const jsonl = gunzipSync(Buffer.from(upload.transcript ?? "", "base64")).toString("utf8");
+  return jsonl.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function editedPaths(records: Record<string, unknown>[]): string[] {
+  const paths: string[] = [];
+  for (const entry of records) {
+    const content = (entry.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content as { input?: { file_path?: string } }[]) {
+      if (block.input?.file_path) paths.push(block.input.file_path);
+    }
+  }
+  return paths;
+}
+
+test("a session started in a subdirectory uploads its paths from the top of the repository", async () => {
+  const top = await realpath(await newRepo("isy-commit-root-"));
+  const pkg = join(top, "pkg");
+  await mkdir(pkg);
+  const path = await writeSession(pkg, "sess-root", "left-pad");
+  // A sibling of the directory it started in, the way a monorepo session reaches one.
+  await writeFile(
+    path,
+    `${await readFile(path, "utf8")}\n${record({
+      type: "assistant",
+      uuid: "sess-root-sibling",
+      parentUuid: "sess-root-manifest",
+      sessionId: "sess-root",
+      timestamp: "2026-08-16T10:30:00Z",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "t-sibling", name: "Edit", input: { file_path: join(top, "test/x.test.ts"), old_string: "a", new_string: "b" } },
+        ],
+      },
+    })}`,
+  );
+
+  // The commit reads it the same way, and what it prints is from the top too.
+  const committed = await runCommit({ noUpload: true }, top);
+  assert.ok(committed.candidates.some((candidate) => candidate.filePath === "pkg/package.json"));
+
+  // From the hook's directory, the session's own hook and the sweep: three routes, one set of bytes.
+  const hashes = new Set<string>();
+  for (const send of [
+    () => runUpload({ silent: true, all: true }, top),
+    () => runUpload({ silent: true }, pkg),
+    () => runUpload({ silent: true, sweep: true }, tmpdir()),
+  ]) {
+    await writeFile(sessionStatePath(), "{}\n");
+    uploads.length = 0;
+    await send();
+    const sent = uploads.find((upload) => upload.sessionId === "sess-root");
+    assert.ok(sent);
+    hashes.add(sent.contentHash);
+
+    const records = sentRecords(sent);
+    assert.equal(records[0]!.cwd, "pkg");
+    const edited = editedPaths(records);
+    assert.ok(edited.includes("pkg/src/f0.ts"), "under the directory it started in");
+    assert.ok(edited.includes("pkg/package.json"));
+    assert.ok(edited.includes("test/x.test.ts"), "beside it");
+  }
+  assert.equal(hashes.size, 1);
+});
+
+test("a session at the top of the repository is masked as it always was", async () => {
+  const top = await realpath(await newRepo("isy-commit-root-top-"));
+  await writeSession(top, "sess-top", "left-pad");
+
+  await runUpload({ silent: true, all: true }, top);
+
+  const records = sentRecords(uploads[0]!);
+  assert.equal(records[0]!.cwd, ".");
+  assert.ok(editedPaths(records).includes("src/f0.ts"));
 });

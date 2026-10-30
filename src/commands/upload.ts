@@ -295,7 +295,7 @@ async function sendOne(
     {
       extraPatterns: config.extraRedactPatterns,
       // A swept session ran where the transcript says it ran, not where this
-      // process happens to stand: masking is rooted on it.
+      // process happens to stand: masking starts from it.
       cwd: target.cwd ?? workingDir,
       commits: state[target.path]?.commits,
     },

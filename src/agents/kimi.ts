@@ -4,6 +4,7 @@ import { access, mkdir, readFile, readdir, realpath, stat, writeFile } from "nod
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { parkAlert } from "../alert.js";
+import { maskRootsFor } from "../git.js";
 import { parseLines } from "../parser.js";
 import { firstLine, firstLines, lastActive, pendingAlertPath } from "../paths.js";
 import { redactLines } from "../redact.js";
@@ -844,7 +845,10 @@ export const kimiAgent: Agent = {
     options: { extraPatterns?: readonly string[]; cwd?: string },
   ): Promise<string[]> {
     const records = await kimiRecords(path, options.cwd);
-    return redactLines(records, { extraPatterns: options.extraPatterns, cwd: options.cwd }).lines;
+    return redactLines(records, {
+      extraPatterns: options.extraPatterns,
+      ...(await maskRootsFor(options.cwd)),
+    }).lines;
   },
 
   // Every Kimi home gets its own hooks, as its CLI runs them: a hook counts as

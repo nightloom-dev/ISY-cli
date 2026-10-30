@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
+import { promisify } from "node:util";
 import { detectAgent } from "../agents/index.js";
 import { codexAgent, codexHooksPath, codexSessionsDir } from "../agents/codex.js";
 import { isCodexTranscript, parseApplyPatch, toClaudeRecords } from "../agents/codex-records.js";
@@ -779,4 +781,26 @@ test("picks Codex only when told to: its payload looks exactly like Claude's", (
   assert.equal(detectAgent(undefined, "codex").id, "codex");
   assert.equal(detectAgent({ transcript_path: "/x.jsonl", session_id: "s", cwd: "/repo" }).id, "claude");
   assert.equal(detectAgent({ transcript_path: "/x.jsonl" }, "codex").id, "codex");
+});
+
+test("a Codex session in a subdirectory names its files from the top of the repository", async () => {
+  const top = await realpath(await mkdtemp(join(tmpdir(), "isy-codex-root-")));
+  await promisify(execFile)("git", ["init", "-q"], { cwd: top });
+  const pkg = join(top, "pkg");
+  await mkdir(pkg);
+  const path = await writeRollout("2026-08-21", "019dc36a-3ce7-7163-8d38-416ea68327d6", [
+    metaFor(pkg, "sess-sub"),
+    say("user", "go"),
+    item({
+      type: "custom_tool_call",
+      name: "apply_patch",
+      call_id: "call-1",
+      input: ["*** Begin Patch", "*** Update File: src/a.ts", "@@", "-a", "+b", "*** End Patch"].join("\n"),
+    }),
+  ]);
+
+  const session = parseLines(await codexAgent.redactedLines(path, { cwd: pkg }));
+
+  assert.equal(session.meta.cwd, "pkg");
+  assert.deepEqual([...session.fileEdits.keys()], ["pkg/src/a.ts"]);
 });

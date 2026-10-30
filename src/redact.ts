@@ -1,10 +1,11 @@
 import { homedir } from "node:os";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileLines } from "./lines.js";
 import { HEREDOC, commandSegments, withoutHeredocs } from "./parser.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
+  looksAbsolute,
   marker,
   maskPath,
   maskPaths,
@@ -184,6 +185,8 @@ interface RedactContext {
    * directories is judged from where it started.
    */
   roots: PreparedRoots;
+  /** What a relative name in a path field is relative to, when not the root. */
+  base?: string;
   /** Whether the working directory was given rather than read off a record. */
   rootGiven: boolean;
 }
@@ -425,6 +428,17 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
   }
 }
 
+/**
+ * Codex and Kimi pass a tool the name the agent typed, relative to where the
+ * session stood. Read from a root above that it would be another file, so it is
+ * made whole here and masking spells it from the root like any other.
+ */
+function fromBase(value: string, base: string | undefined): string {
+  if (base === undefined || value.length === 0) return value;
+  if (looksAbsolute(value) || value.startsWith("~") || value.includes("://")) return value;
+  return resolve(base, value);
+}
+
 function redactValue(value: unknown, context: RedactContext, key?: string): unknown {
   if (typeof value === "string") {
     if (key && SENSITIVE_KEY.test(key) && value.length >= MIN_SENSITIVE_VALUE) {
@@ -437,8 +451,10 @@ function redactValue(value: unknown, context: RedactContext, key?: string): unkn
     );
     // Paths last: a secret already replaced by its marker must not then be read
     // as a directory, and `[ISY_REDACTED:…]` carries no slash to be read as one.
-    const mask = key && PATH_KEYS.has(key) ? maskPath : maskPaths;
-    return mask(secretsGone, context.roots, (amount) => count(context, "path", amount));
+    const onMask = (amount: number): void => count(context, "path", amount);
+    return key && PATH_KEYS.has(key)
+      ? maskPath(fromBase(secretsGone, context.base), context.roots, onMask)
+      : maskPaths(secretsGone, context.roots, onMask);
   }
 
   if (Array.isArray(value)) return value.map((item) => redactValue(item, context));
@@ -575,6 +591,8 @@ function redactRecord(
 
 export interface RedactOptions extends MaskRoots {
   extraPatterns?: readonly string[];
+  /** Where the session stood, when that is below `cwd`: `git.ts:maskRootsFor`. */
+  base?: string;
 }
 
 function createContext(options: RedactOptions, invalid: string[]): RedactContext {
@@ -587,6 +605,7 @@ function createContext(options: RedactOptions, invalid: string[]): RedactContext
     // gift, so it is read here rather than passed by every caller.
     roots: resolveRoots({ cwd: options.cwd, home: options.home ?? homedir() }),
     rootGiven: Boolean(options.cwd),
+    base: options.base,
   };
 }
 

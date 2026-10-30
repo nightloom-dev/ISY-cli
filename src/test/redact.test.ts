@@ -596,6 +596,46 @@ test("the working directory the caller names wins over the one on the record", (
   assert.equal(parsed.message.content, "src/a.ts");
 });
 
+test("a stored transcript's relative working directory is no root to learn", () => {
+  // Masked on the client: the session started in `src`, and these are other files.
+  const content = "cat ./src/a.ts ../src/b.ts /src/c.ts";
+  const stored = JSON.stringify({ type: "user", cwd: "src", message: { role: "user", content } });
+  const { lines } = redactLines([stored], { home: "" });
+  const parsed = JSON.parse(lines[0]!) as { cwd: string; message: { content: string } };
+  assert.equal(parsed.message.content, content);
+  assert.equal(parsed.cwd, "src");
+});
+
+test("a relative name in a path field is read from where the session stood", () => {
+  const input = {
+    file_path: "src/a.ts",
+    path: "../test/b.ts",
+    file: "/home/alice/repo/pkg/c.ts",
+    notebook_path: "~/notes.ipynb",
+    filePath: "https://example.com/d.ts",
+    command: "cat src/a.ts",
+  };
+  const stored = JSON.stringify({ type: "assistant", cwd: "/home/alice/repo/pkg", message: { content: [{ type: "tool_use", input }] } });
+  const options = { cwd: "/home/alice/repo", base: "/home/alice/repo/pkg" };
+  const { lines } = redactLines([stored], options);
+  const parsed = JSON.parse(lines[0]!) as { cwd: string; message: { content: { input: typeof input }[] } };
+
+  assert.equal(parsed.cwd, "pkg");
+  assert.deepEqual(parsed.message.content[0]!.input, {
+    file_path: "pkg/src/a.ts",
+    path: "test/b.ts",
+    file: "pkg/c.ts",
+    notebook_path: "~/notes.ipynb",
+    filePath: "https://example.com/d.ts",
+    command: "cat src/a.ts",
+  });
+
+  // Standing at the root there is nothing to read them from: left as they were typed.
+  const atRoot = redactLines([stored], { cwd: "/home/alice/repo" });
+  const typed = JSON.parse(atRoot.lines[0]!) as typeof parsed;
+  assert.equal(typed.message.content[0]!.input.file_path, "src/a.ts");
+});
+
 test("masks a home path in a transcript that never says where it ran", () => {
   const out = redactOne("failed to open /Users/dave/Library/Caches/pnpm/store");
   assert.equal(out, "failed to open ~/Library/Caches/pnpm/store");

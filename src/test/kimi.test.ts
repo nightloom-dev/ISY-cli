@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
+import { promisify } from "node:util";
 import { detectAgent } from "../agents/index.js";
 import { collectStatus, formatStatus } from "../commands/status.js";
 import { kimiAgent, kimiConfigPath, kimiSessionsRoot } from "../agents/kimi.js";
@@ -472,4 +474,33 @@ test("a block that lost its end marker is replaced, not stacked", async () => {
 
   assert.equal(await kimiAgent.removeHooks(), "removed");
   assert.doesNotMatch(await readFile(kimiConfigPath(), "utf8"), /isy:begin|\[\[hooks\]\]/);
+});
+
+test("a Kimi session in a subdirectory names its files from the top of the repository", async () => {
+  const top = await realpath(await mkdtemp(join(tmpdir(), "isy-kimi-root-")));
+  await promisify(execFile)("git", ["init", "-q"], { cwd: top });
+  const pkg = join(top, "pkg");
+  await mkdir(pkg);
+
+  const dir = join(kimiSessionsRoot(), "wd_sub_deadbeef1234", "session_sub");
+  await mkdir(join(dir, "agents", "main"), { recursive: true });
+  await writeFile(join(dir, "state.json"), JSON.stringify({ id: "session_sub", cwd: pkg }));
+  const loop = (event: unknown) => ({ type: "context.append_loop_event", agentId: "main", event });
+  const wire = join(dir, "agents", "main", "wire.jsonl");
+  await writeFile(
+    wire,
+    `${[
+      { type: "metadata", protocol_version: "1.5" },
+      { type: "context.append_message", message: { role: "user", content: [{ type: "text", text: "go" }] } },
+      loop({ type: "tool.call", toolCallId: "Edit_0", name: "Edit", args: { path: "src/a.ts", old_string: "a", new_string: "b" } }),
+      loop({ type: "tool.result", toolCallId: "Edit_0", result: { output: "ok" } }),
+    ]
+      .map(json)
+      .join("\n")}\n`,
+  );
+
+  const session = parseLines(await kimiAgent.redactedLines(wire, { cwd: pkg }));
+
+  assert.equal(session.meta.cwd, "pkg");
+  assert.deepEqual([...session.fileEdits.keys()], ["pkg/src/a.ts"]);
 });

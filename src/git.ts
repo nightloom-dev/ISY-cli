@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -91,15 +92,29 @@ export async function headSha(cwd: string): Promise<string | undefined> {
 }
 
 /**
- * The top of the work tree a directory belongs to, however that directory was
- * reached. Asked with git's own variables out of the way: a post-commit hook in
- * a linked worktree inherits `GIT_DIR`, and git then takes any directory it
- * stands in for the top of the tree.
+ * For a question about a directory, which may not be the one a hook runs in: a
+ * post-commit hook in a linked worktree inherits `GIT_DIR`, and git then takes
+ * any directory it stands in for the top of the tree.
  */
+function withoutHookEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+}
+
+/** The top of the work tree a directory belongs to, however that directory was reached. */
 export async function workTreeTop(cwd: string): Promise<string | undefined> {
-  return git(cwd, ["rev-parse", "--show-toplevel"], {
-    ...process.env,
-    GIT_DIR: undefined,
-    GIT_WORK_TREE: undefined,
-  });
+  return git(cwd, ["rev-parse", "--show-toplevel"], withoutHookEnv());
+}
+
+/**
+ * The roots a session's transcript is masked by: the top of its repository, the
+ * form GitHub and every other session use, whichever subdirectory it started in.
+ * Counted up from `cwd` rather than asked for outright, because the toplevel git
+ * reports has its symlinks resolved and the transcript's paths may not.
+ */
+export async function maskRootsFor(
+  cwd: string | undefined,
+): Promise<{ cwd?: string; base?: string }> {
+  if (!cwd) return {};
+  const up = await git(cwd, ["rev-parse", "--show-cdup"], withoutHookEnv());
+  return up ? { cwd: resolve(cwd, up), base: cwd } : { cwd };
 }

@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import { parkAlert, withParkedAlerts } from "../alert.js";
+import { maskRootsFor } from "../git.js";
 import { ISY_HOOKS, installHook, installedHooks, removeHook, repairHooks, settingsLocation } from "../hook.js";
 import { parseLineStream } from "../parser.js";
 import {
@@ -75,7 +76,7 @@ export const claudeAgent: Agent = {
     // whole session and the server parses one transcript, as it always has.
     const { lines } = await redactLineStream(sessionLines(path), {
       extraPatterns: options.extraPatterns,
-      cwd: options.cwd,
+      ...(await maskRootsFor(options.cwd)),
     });
     return lines;
   },

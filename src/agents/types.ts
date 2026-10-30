@@ -76,7 +76,8 @@ export interface Agent {
   /**
    * Redacted, Claude-record-shaped JSONL lines, ready for parseLines and upload.
    * Agents whose native format differs normalize here, so everything downstream
-   * — including the server's own parseLines — sees one shape.
+   * — including the server's own parseLines — sees one shape. `cwd` is where the
+   * session ran; paths come out from the top of the repository around it.
    */
   redactedLines(
     path: string,
