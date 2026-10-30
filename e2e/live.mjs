@@ -37,6 +37,7 @@ import {
   CredentialsReplaced,
   ISY_CLI,
   WORK,
+  askSum,
   blocksOf,
   claudeP,
   claudePty,
@@ -368,10 +369,7 @@ async function a6() {
   await dropHook(ptyBare, "SessionEnd");
   const steps = [
     READY,
-    { send: "Create a file hello.txt containing the single word hi using the Write tool, then reply with the word done written in uppercase letters." },
-    { sleep: 0.5 },
-    { send: "\r" },
-    { wait: "DONE", timeout: 180 },
+    ...askSum(1200, 34, "Create a file hello.txt containing the single word hi using the Write tool, then reply with"),
     { sleep: 2 },
     { mark: "exit-sent" },
     ...EXIT,
@@ -418,10 +416,7 @@ async function a7() {
   ];
   const steps = [
     READY,
-    { send: "Reply with the word pong written in uppercase letters, nothing else." },
-    { sleep: 0.5 },
-    { send: "\r" },
-    { wait: "PONG", timeout: 180 },
+    ...askSum(1200, 34),
     { sleep: 2 },
     { mark: "clear-sent" },
     { send: "/clear" },
@@ -430,10 +425,7 @@ async function a7() {
     { wait: "SessionStart:clear says:\\s*E2E-START", timeout: 120 },
     { mark: "clear-done" },
     { snap: "clear" },
-    { send: "Reply with the word ping written in uppercase letters, nothing else." },
-    { sleep: 0.5 },
-    { send: "\r" },
-    { wait: "PING", timeout: 180 },
+    ...askSum(5600, 78),
     { sleep: 2 },
     { send: "/resume" },
     { sleep: 0.5 },

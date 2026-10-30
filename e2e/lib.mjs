@@ -489,6 +489,22 @@ export function toolUses(records) {
   );
 }
 
+/**
+ * Steps that ask the TUI for a sum and wait for it. The screen keeps what was
+ * typed, so a wait for a word of the prompt ends on its echo, and one for that
+ * word in capitals never ends when the model answers in lower case. A number the
+ * prompt does not contain has no echo and no case; give each question of a
+ * session its own, or an answer still on screen ends the next wait.
+ */
+export function askSum(a, b, lead = "Reply with") {
+  return [
+    { send: `${lead} the sum of ${a} and ${b} as plain digits, nothing else.` },
+    { sleep: 0.5 },
+    { send: "\r" },
+    { wait: String(a + b), timeout: 180 },
+  ];
+}
+
 /** The notes a `commit --hook` run printed; the shim log writes its line ends as `|`. */
 export function noteRows(out) {
   return (out ?? "").split("|").filter((line) => line.startsWith("  ")).map((line) => line.trim());

@@ -52,3 +52,11 @@ test("a note any later commit prints again is a repeat, past an amend that print
   assert.deepEqual(lib.repeatedNotes([{ out: note }, { out: "" }, { out: note }]), [row]);
   assert.deepEqual(lib.repeatedNotes([{ out: note }, {}, { out: "ISY: 1 possible signal in this session|  known_gap  a.ts  other" }]), []);
 });
+
+test("a typed question's echo cannot end the wait for its answer", () => {
+  const [prompt, , enter, answer] = lib.askSum(1200, 34, "Write a file, then reply with");
+  assert.match(prompt.send, /^Write a file, then reply with the sum of 1200 and 34/);
+  assert.equal(enter.send, "\r");
+  assert.doesNotMatch(prompt.send, new RegExp(answer.wait));
+  assert.match("● 1234", new RegExp(answer.wait));
+});
