@@ -293,6 +293,86 @@ test("cuts the result of a shell command that reads a dotenv file, and keeps the
   }
 });
 
+test("cuts the result of any shell command that names a dotenv file, and keeps the command", () => {
+  const commands = [
+    `node -e "console.log(require('fs').readFileSync('.env','utf8'))"`,
+    `python3 -c "print(open('.env').read())"`,
+    `python3 -c "\nimport re\nprint(re.findall('X', open('config/.env.local').read()))\n"`,
+    "cut -d= -f2 .env.local",
+    "tr -d x < .env",
+    "sort .env",
+    "base64 config/.env",
+    "ssh host cat /app/.env",
+    "docker exec app cat /app/.env",
+    "if [ -f .env ]; then cat .env; fi",
+    "(cat .env)",
+    "timeout 5 cat .env",
+    "time cat .env",
+    "sudo -u app cat .env",
+    "git show origin/main:.env",
+    "git show HEAD:config/.env.local",
+    "while read -r line; do echo \"$line\"; done < .env",
+    "for f in .env*; do cut -d= -f2 \"$f\"; done",
+    "F=.env; node -p \"require('dotenv').parse(require('fs').readFileSync('$F'))\"",
+    "docker compose --env-file .env config",
+    "node --env-file=.env -p process.env.MAILER_PHRASE",
+    "echo `cat .env`",
+    "echo \"$(tail -1 .env)\"",
+    "Select-String -Path .env -Pattern PHRASE",
+  ];
+  for (const command of commands) {
+    const out = throughCall("Bash", { command });
+    assert.equal(out.content, marker("dotenv"), command);
+    assert.equal(out.toolUseResult, marker("dotenv"), command);
+    assert.equal(out.input.command, command);
+  }
+  assert.equal(throughCall("Monitor", { command: "tail -f .env" }).content, marker("dotenv"));
+  assert.equal(throughCall("PowerShell", { command: "Get-Content .env" }).content, marker("dotenv"));
+  assert.equal(throughCall("REPL", { code: "fs.readFileSync('.env', 'utf8')" }).content, marker("dotenv"));
+  assert.equal(throughCall("exec", { script: "print(open('config/.env').read())" }).content, marker("dotenv"));
+  assert.equal(throughCall("mcp__shell__run", { cmd: "cut -d= -f2 .env" }).content, marker("dotenv"));
+  assert.equal(throughCall("Workflow", { script: "agent('cat .env and report')" }, "plain output").content, "plain output");
+});
+
+test("keeps the result of a command that names a dotenv file and prints none of it, or only names the word", () => {
+  const commands = [
+    "ls -la .env*",
+    "ls -la .env* && git status",
+    "ls -la config/.env.local",
+    "stat .env",
+    "file .env",
+    "wc -l .env",
+    "test -f .env",
+    "[ -f .env ] && echo yes",
+    "if [ -f .env ]; then echo yes; fi",
+    "if ! test -f .env; then echo no; fi",
+    "echo .env >> .gitignore",
+    "printf '%s\\n' .env",
+    "git add .env.example",
+    "git rm --cached .env",
+    "git commit -m 'stop tracking .env'",
+    "git check-ignore -v .env",
+    "git status --short .env",
+    "git ls-files .env",
+    "chmod 600 .env && npm test",
+    "cp .env.example .env && npm test",
+    "mv .env .env.bak; npm test; mv .env.bak .env",
+    "rm -f .env && npm test",
+    "touch .env && npm run build",
+    `node -e "console.log(process.env.MAILER_PHRASE)"`,
+    "npm test -- src/env.test.ts",
+    "cat src/load-env.ts",
+    "grep -rn 'import.meta.env.VITE_X' src",
+    "rg '\\.env' src",
+  ];
+  for (const command of commands) {
+    const out = throughCall("Bash", { command }, "plain output");
+    assert.equal(out.content, "plain output", command);
+    assert.deepEqual(out.toolUseResult, { stdout: "plain output" }, command);
+    assert.equal(out.input.command, command);
+  }
+});
+
 test("cuts what a shell command writes into a dotenv file, and what it printed", () => {
   const m = marker("dotenv");
   const cases: [string, string][] = [

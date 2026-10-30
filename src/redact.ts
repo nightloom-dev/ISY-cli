@@ -233,22 +233,35 @@ function isDotenvPath(filePath: unknown): boolean {
   return typeof filePath === "string" && basename(filePath).startsWith(".env");
 }
 
-/** Commands that print a file they are given, or load it into the shell. */
-const SHELL_READER =
-  /^\s*(?:sudo\s+)?(?:cat|head|tail|less|more|bat|nl|grep|egrep|fgrep|rg|sed|awk|jq|xxd|od|diff|source|\.|git\s+(?:show|diff|log|blame)|get-content|gc|type)(?:\s|$)/i;
+/**
+ * Commands that can name a dotenv file without printing any of it. The list runs
+ * this way round because the other one has no end: `cut`, `node -e`, `python -c`,
+ * `docker exec … cat`, anything behind `ssh` or `timeout`. A backtick still runs
+ * what it holds, so a segment with one is judged as any other.
+ */
+const SHELL_NO_READ =
+  /^\s*(?:(?:sudo|if|then|elif|else|while|until|do)\s+|[!{(]\s*)*(?:ls|ll|stat|file|wc|test|test-path|\[\[?|echo|printf|touch|chmod|chown|mkdir|rm|mv|cp|ln|cd|git\s+(?:add|rm|mv|status|commit|check-ignore|ls-files))(?:\s|$)/i;
+
+/** Where a shell line, or the code it hands an interpreter, ends one word and starts the next. */
+const WORD_BREAK = /[\s"'`(){}=,;|&<>]+/;
 
 /**
- * `cat .env`, `grep KEY config/.env.local`, `source .env`: a shell call that
- * reads a dotenv file is as much a read of it as `Read {file_path}` is, and
- * its output is the file. The command itself stays — it names the file, not
- * what is in it.
+ * `cat .env`, `cut -d= -f2 config/.env.local`, `node -e "…readFileSync('.env')…"`,
+ * `source .env`: a shell call that names a dotenv file is as much a read of it as
+ * `Read {file_path}` is, and what it prints may be any of the file. The command
+ * itself stays — it names the file, not what is in it. A revision goes with its
+ * word: `git show origin/main:.env`.
+ *
+ * ponytail: by the name in the command. `node scripts/x.js` opening the file
+ * itself, or `load_dotenv()` with no path, still goes up; scrubbing the file's
+ * values at upload is the way up.
  */
 function readsDotenv(command: unknown): boolean {
   if (typeof command !== "string" || !command.includes(".env")) return false;
   return commandSegments(withoutHeredocs(command)).some(
     (segment) =>
-      SHELL_READER.test(segment) &&
-      segment.trim().split(/\s+/).slice(1).some((word) => isDotenvPath(word.replace(/["'`]/g, "").replace(/^\w*:/, ""))),
+      (!SHELL_NO_READ.test(segment) || segment.includes("`")) &&
+      segment.split(WORD_BREAK).some((word) => isDotenvPath(word.replace(/^.*:/, ""))),
   );
 }
 
@@ -345,7 +358,7 @@ function cutDotenvWrites(command: string): string {
       i = end;
       continue;
     }
-    const namesDotenv = body.some((line) => line.split(/[\s"'`()=,;|&<>]+/).some(isDotenvPath));
+    const namesDotenv = body.some((line) => line.split(WORD_BREAK).some(isDotenvPath));
     kept.push(...(namesDotenv ? [marker("dotenv")] : body), ...lines.slice(end, end + 1));
     i = end;
   }
@@ -373,7 +386,8 @@ function cutDotenvInput(input: Record<string, unknown>, context: RedactContext):
  * says what it works on: `Read {file_path}`, `Grep {path}`, a filesystem
  * server's `read_file {path}`. A glob reads a gitignored file as well as a named
  * one, however it is spelled (`{.env,.env.local}`, `*.env`), so any mention
- * counts, and the worst of that is one search's result on `*.envelope.ts`.
+ * counts, and the worst of that is one search's result on `*.envelope.ts`. Code
+ * a tool runs (`REPL {code}`, `exec {script}`) is read as a shell line is.
  *
  * ponytail: by what the call names. A search that names no file (`Grep
  * {pattern}`, `grep -r KEY .`) still goes up when `.env` is not ignored; reading
@@ -381,8 +395,10 @@ function cutDotenvInput(input: Record<string, unknown>, context: RedactContext):
  */
 const FILE_ARGUMENT = /^(?:file_?path|filePath|notebook_path|(?:relative_)?path|paths|file|files|filename|target_file)$/;
 
-function callNamesDotenv(input: Record<string, unknown>): boolean {
+function callNamesDotenv(name: unknown, input: Record<string, unknown>): boolean {
   if (typeof input.glob === "string" && input.glob.includes(".env")) return true;
+  // A workflow's script hands out prompts: it reads nothing by itself.
+  if (readsDotenv(input.code) || readsDotenv(input.cmd) || (name !== "Workflow" && readsDotenv(input.script))) return true;
   return Object.entries(input).some(([key, value]) => FILE_ARGUMENT.test(key) && [value].flat().some(isDotenvPath));
 }
 
@@ -420,20 +436,17 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
     if (block.type === "tool_use") {
       const input = isObject(block.input) ? block.input : undefined;
       if (!input) continue;
-      if (block.name === "Bash" || block.name === "PowerShell") {
-        const command = input.command;
-        const cut = typeof command === "string" ? cutDotenvWrites(command) : command;
-        if (cut === command && !readsDotenv(command)) continue;
-        if (typeof block.id === "string") context.envToolUseIds.add(block.id);
-        if (cut !== command) {
-          input.command = cut;
-          count(context, "dotenv", 1);
-        }
-        continue;
+      const command = input.command;
+      const cut = typeof command === "string" ? cutDotenvWrites(command) : command;
+      if (cut !== command) {
+        input.command = cut;
+        count(context, "dotenv", 1);
       }
-      if (!callNamesDotenv(input)) continue;
-      if (typeof block.id === "string") context.envToolUseIds.add(block.id);
-      cutDotenvInput(input, context);
+      const named = callNamesDotenv(block.name, input);
+      if (named) cutDotenvInput(input, context);
+      if ((named || cut !== command || readsDotenv(command)) && typeof block.id === "string") {
+        context.envToolUseIds.add(block.id);
+      }
     }
 
     if (block.type === "tool_result") {
