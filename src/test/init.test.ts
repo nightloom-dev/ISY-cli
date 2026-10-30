@@ -108,6 +108,7 @@ test("isy init signs in again when the key it holds is no longer taken", async (
 test("isy init answers the alerts that sent the reader to it and keeps the rest", async () => {
   await writeFile(join(home, "config.json"), JSON.stringify({ token: "isy_held", apiBaseUrl: baseUrl }));
   await parkAlert("ISY: authentication rejected (401), run: isy init");
+  await parkAlert("ISY: authentication rejected (401), run: isy init · 1 session(s) given up on");
   await parkAlert("ISY: this month's analyses are used up");
 
   await quietly(() => runInit({}, cwd));
