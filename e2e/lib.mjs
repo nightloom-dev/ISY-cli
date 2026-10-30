@@ -489,6 +489,22 @@ export function toolUses(records) {
   );
 }
 
+/** The notes a `commit --hook` run printed; the shim log writes its line ends as `|`. */
+export function noteRows(out) {
+  return (out ?? "").split("|").filter((line) => line.startsWith("  ")).map((line) => line.trim());
+}
+
+/** Notes a commit run printed that an earlier run had printed already. */
+export function repeatedNotes(commits) {
+  const printed = new Set();
+  return commits.flatMap(({ out }) => {
+    const rows = noteRows(out);
+    const repeated = rows.filter((row) => printed.has(row));
+    for (const row of rows) printed.add(row);
+    return repeated;
+  });
+}
+
 /** The run's shim.log, one entry per line: when, which process, what it ran, and what it saw. */
 export async function shimLog(run) {
   let text;

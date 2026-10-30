@@ -45,3 +45,10 @@ test("a tool call copied into an API request record is not listed a second time"
   // A blob has no uuid, so a lookup by it would take a real edit for one off the main path.
   assert.equal(uses[0].record.uuid, "a1");
 });
+
+test("a note any later commit prints again is a repeat, past an amend that printed none", () => {
+  const row = "external_dependency  package.json  added to package.json: left-pad";
+  const note = `ISY: 1 possible signal in this session|  ${row}`;
+  assert.deepEqual(lib.repeatedNotes([{ out: note }, { out: "" }, { out: note }]), [row]);
+  assert.deepEqual(lib.repeatedNotes([{ out: note }, {}, { out: "ISY: 1 possible signal in this session|  known_gap  a.ts  other" }]), []);
+});

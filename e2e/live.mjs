@@ -44,9 +44,11 @@ import {
   exec,
   isy,
   keepTranscripts,
+  noteRows,
   prepareRun,
   readJsonl,
   readSettings,
+  repeatedNotes,
   shimLog,
   startMock,
   toolUses,
@@ -771,13 +773,13 @@ async function a13() {
   );
   const evidence = [agent.out, join(run.dir, "shim.log"), join(run.isy, "sessions.json")];
   const commits = (await shimLog(run)).filter((entry) => entry.args === "commit --hook" && entry.exit !== undefined);
-  const rows = (out) => (out ?? "").split("|").filter((line) => line.startsWith("  ")).map((line) => line.trim());
   const details = { commits: commits.map((entry) => entry.out) };
   const call = toolUses(await readJsonl(transcriptPath(run, agent.sessionId))).find((use) => use.name === "Agent");
   if (!call?.input.run_in_background) return inconclusive("no background subagent", evidence, details);
   if (commits.length < 2) return inconclusive(`${commits.length} commit(s), not two`, evidence, details);
   if (!/external_dependency/.test(commits[0].out ?? "")) return inconclusive("the first commit printed no stage 0 note", evidence, details);
-  const repeated = rows(commits[1].out).filter((row) => rows(commits[0].out).includes(row));
+  // Every later run against all before it: an agent that amends puts a run between the first commit and the next.
+  const repeated = repeatedNotes(commits);
   // Was the fix needed? The note's record index as the session stood at the first commit, and at the end:
   // an index that moved is a key isy 1.0 would not have recognised.
   const path = transcriptPath(run, agent.sessionId);
@@ -786,10 +788,10 @@ async function a13() {
     atFirstCommit: index(await candidatesAsOf(run, path, commits[0].at)),
     atEnd: index(runStage0(await claudeAgent.parsedSession(path)).candidates),
   };
-  if (repeated.length > 0) return fail(`the second commit printed again: ${repeated.join(" / ")}`, evidence, details);
+  if (repeated.length > 0) return fail(`a later commit printed again: ${repeated.join(" / ")}`, evidence, details);
   const moved = details.recordIndex.atFirstCommit !== details.recordIndex.atEnd;
   return pass(
-    `first commit: ${rows(commits[0].out).length} note(s); second: ${rows(commits[1].out).length}, none repeated; ` +
+    `first commit: ${noteRows(commits[0].out).length} note(s); ${commits.length - 1} later: ${commits.slice(1).flatMap((entry) => noteRows(entry.out)).length}, none repeated; ` +
       (moved ? `the note's record index moved ${details.recordIndex.atFirstCommit} → ${details.recordIndex.atEnd}, so a 1.0 key would have printed it again` : "the note's record index did not move, so 1.0 would have passed too"),
     evidence,
     details,
