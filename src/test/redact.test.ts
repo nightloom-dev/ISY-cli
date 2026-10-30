@@ -174,6 +174,40 @@ test("masks a password passed on a command line, and nothing else on it", () => 
   }
 });
 
+test("masks an assigned secret whole when it holds a dollar sign or a bracket", () => {
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    ["PASSWORD='abc$REST12345678'", `PASSWORD='${m}'`],
+    ["PASSWORD=abcdefghij$TAILKEEP12", `PASSWORD=${m}`],
+    ["export ADMIN_PASSWORD='abc$Qw7rTy2uIo9pAs4dFg1h'", `export ADMIN_PASSWORD='${m}'`],
+    ["PASSWORD=abc(def)ghi12345", `PASSWORD=${m}`],
+    ["PASSWORD='abc(defghij12345'", `PASSWORD='${m}'`],
+    ["PASSWORD='$ecretPassw0rd'", `PASSWORD='${m}'`],
+    [`{"password": "abc$def(ghi)12345"}`, `{"password": "${m}"}`],
+    ["app --password abc$Qw7rTy2uIo9pAs4", `app --password ${m}`],
+    [`{"accessToken":"abc$Qw7rTy2uIo9pAs4"}`, `{"accessToken":"${m}"}`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+
+  for (const text of [
+    "PASSWORD=$PASSWORD",
+    `PASSWORD="$DB_PASS"`,
+    "TOKEN=$(cat f)",
+    "password=prefix${X}",
+    "password = hash(input)",
+    "token: foo(bar),",
+    "secret: env('SECRET')",
+    "password = md5($x);",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+  // A call's long name goes, and what it is called with stays, as it always has.
+  assert.equal(redactOne("token: getToken()"), `token: ${m}()`);
+});
+
 test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });
@@ -1073,6 +1107,19 @@ test("every rule gets through text shaped almost like what it matches", () => {
     fill("sshpass -p "),
     fill("docker login "),
     fill("redis-cli -a "),
+    fill("PASSWORD=a$"),
+    fill("PASSWORD=a("),
+    fill("password=aaaaaaaa("),
+    fill("password=aaaaaaaa()"),
+    fill("password=a.b("),
+    fill("password='"),
+    fill("password='$"),
+    `PASSWORD=${"a$".repeat(100_000)}`,
+    `PASSWORD=${"(".repeat(200_000)}`,
+    `PASSWORD=a${"(".repeat(200_000)}`,
+    `password=${"a".repeat(200_000)}(`,
+    `password=${"a.".repeat(100_000)}`,
+    `password=a(${"b".repeat(200_000)}`,
   ];
   for (const text of shapes) {
     for (const rule of BUILTIN_RULES) {
