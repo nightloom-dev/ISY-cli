@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { fileLines } from "./lines.js";
-import { commandSegments, withoutHeredocs } from "./parser.js";
+import { HEREDOC, commandSegments, withoutHeredocs } from "./parser.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
@@ -247,6 +247,86 @@ function readsDotenv(command: unknown): boolean {
   );
 }
 
+/** Commands that write the file they are given: `tee` and PowerShell's own. */
+const SHELL_WRITER = /^\s*(?:sudo\s+)?(?:tee|set-content|sc|add-content|ac|out-file)(?:\s|$)/i;
+
+const unquoted = (word: string): string => word.replace(/["'`]/g, "");
+
+/** The dotenv file a statement redirects or tees into, if it writes one. */
+function dotenvTarget(statement: string): string | undefined {
+  for (const segment of commandSegments(statement)) {
+    for (const redirect of segment.matchAll(/>\|?\s*([^\s;&|<>]+)/g)) {
+      if (isDotenvPath(unquoted(redirect[1]!))) return unquoted(redirect[1]!);
+    }
+    if (!SHELL_WRITER.test(segment)) continue;
+    const named = segment.trim().split(/\s+/).slice(1).map(unquoted).find(isDotenvPath);
+    if (named) return named;
+  }
+  return undefined;
+}
+
+/** A line cut where `&&`, `||` or `;` end a statement outside quotes, the separators kept. */
+function statements(line: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let quote: string | undefined;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]!;
+    if (quote !== undefined) {
+      if (char === quote && (quote === "'" || line[i - 1] !== "\\")) quote = undefined;
+    } else if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+    } else if (char === ";" || ((char === "&" || char === "|") && line[i + 1] === char)) {
+      const width = char === ";" ? 1 : 2;
+      parts.push(line.slice(start, i), line.slice(i, i + width));
+      start = i + width;
+      i += width - 1;
+    }
+  }
+  parts.push(line.slice(start));
+  return parts;
+}
+
+/**
+ * `cat > .env << 'EOF'`, `echo "KEY=…" >> .env.local`, `… | tee .env`: a shell
+ * call that writes a dotenv file holds what it writes, so unlike a read the
+ * command is cut too. Only what carries the values goes — the statement that
+ * writes, with the heredoc it feeds, and a heredoc body that names the file
+ * itself (`python - <<PY` opening `.env`) — and the statement keeps its target,
+ * so `sed -i` beside it is still an edit and the parse still sees a write.
+ */
+function cutDotenvWrites(command: string): string {
+  if (!command.includes(".env")) return command;
+  const lines = command.split("\n");
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    let writes = false;
+    kept.push(
+      statements(lines[i]!)
+        .map((part) => {
+          const target = dotenvTarget(part);
+          if (target === undefined) return part;
+          writes = true;
+          return `${/^\s*/.exec(part)![0]}${marker("dotenv")} > ${target}`;
+        })
+        .join(""),
+    );
+    const terminator = HEREDOC.exec(lines[i]!)?.[2];
+    if (terminator === undefined) continue;
+    let end = lines.findIndex((line, j) => j > i && line.trim() === terminator);
+    if (end === -1) end = lines.length;
+    const body = lines.slice(i + 1, end);
+    if (writes) {
+      i = end;
+      continue;
+    }
+    const namesDotenv = body.some((line) => line.split(/[\s"'`()=,;|&<>]+/).some(isDotenvPath));
+    kept.push(...(namesDotenv ? [marker("dotenv")] : body), ...lines.slice(end, end + 1));
+    i = end;
+  }
+  return kept.join("\n");
+}
+
 function cutDotenvInput(input: Record<string, unknown>, context: RedactContext): void {
   for (const field of EDIT_INPUT_FIELDS) {
     if (typeof input[field] === "string") {
@@ -267,8 +347,15 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
     if (block.type === "tool_use") {
       const input = isObject(block.input) ? block.input : undefined;
       if (!input) continue;
-      if ((block.name === "Bash" || block.name === "PowerShell") && readsDotenv(input.command)) {
+      if (block.name === "Bash" || block.name === "PowerShell") {
+        const command = input.command;
+        const cut = typeof command === "string" ? cutDotenvWrites(command) : command;
+        if (cut === command && !readsDotenv(command)) continue;
         if (typeof block.id === "string") context.envToolUseIds.add(block.id);
+        if (cut !== command) {
+          input.command = cut;
+          count(context, "dotenv", 1);
+        }
         continue;
       }
       if (!isDotenvPath(input.file_path) && !isDotenvPath(input.notebook_path)) continue;

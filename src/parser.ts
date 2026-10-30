@@ -208,7 +208,7 @@ function pushLookup(state: ParseState, use: ToolUse): void {
  * A heredoc opener: `<<EOF`, `<<-EOF`, `<<'PY'`. The delimiter is what ends the
  * body, and quoting it changes nothing about where the body stops.
  */
-const HEREDOC = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
+export const HEREDOC = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
 
 /**
  * The command with every heredoc body cut out.

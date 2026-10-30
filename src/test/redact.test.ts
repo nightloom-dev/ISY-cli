@@ -280,6 +280,35 @@ test("cuts the result of a shell command that reads a dotenv file, and keeps the
   }
 });
 
+test("cuts what a shell command writes into a dotenv file, and what it printed", () => {
+  const m = marker("dotenv");
+  const cases: [string, string][] = [
+    ["cat > .env << 'EOF'\nDB_PASS=Zq8vR2mK9xLp\nAPP_KEY=base64:Zq8vR2mK9xLpWq7=\nEOF", `${m} > .env`],
+    ["python3 - <<'PY'\nopen('.env', 'w').write('DB_PASS=Zq8vR2mK9xLp')\nPY", `python3 - <<'PY'\n${m}\nPY`],
+    ['echo "DB_PASS=Zq8vR2mK9xLp" > .env', `${m} > .env`],
+    // The edit beside the write is still an edit.
+    ["cd app && sed -i 's/a/b/' src/a.ts && printf 'DB_PASS=%s\\n' Zq8vR2mK9xLp >> config/.env.local", `cd app && sed -i 's/a/b/' src/a.ts && ${m} > config/.env.local`],
+    ["echo DB_PASS=Zq8vR2mK9xLp | sudo tee -a .env", `${m} > .env`],
+    ["Set-Content -Path .env -Value 'DB_PASS=Zq8vR2mK9xLp'", `${m} > .env`],
+    ['node -e "console.log(process.env.DB_PASS)" > env.txt', 'node -e "console.log(process.env.DB_PASS)" > env.txt'],
+  ];
+  const records = cases.flatMap(([command], i) => [
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { command } }] } },
+    {
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: `t${i}`, content: "DB_PASS=Zq8vR2mK9xLp" }] },
+      toolUseResult: { stdout: "DB_PASS=Zq8vR2mK9xLp", stderr: "", interrupted: false },
+    },
+  ]);
+  const { lines } = summaryFor(records);
+
+  for (const [i, [command, expected]] of cases.entries()) {
+    const call = JSON.parse(lines[i * 2]!) as { message: { content: { input: { command: string } }[] } };
+    assert.equal(call.message.content[0]!.input.command, expected);
+    assert.equal(lines[i * 2 + 1]!.includes("Zq8vR2mK9xLp"), command === expected, command);
+  }
+});
+
 test("leaves a tool_result alone when the file is not a dotenv file", () => {
   const { lines } = summaryFor([
     {
