@@ -305,8 +305,8 @@ const MAX_LEARNED_VALUES = 500;
  * A value worth cutting wherever it turns up. Under a secret's name it only has to
  * be no plain word. Under any other, it has to be long and not plainly public:
  * `BASE_URL=http://localhost:3000`, `APP_DIR=/srv/app`, `HOST=api.example.com`, or a
- * name in lower case: `MODEL=claude-opus-5-5`, `REGION=eu-central-1`. Nothing generated
- * has twelve letters and digits in a row and still looks like any of those.
+ * name in lower case: `MODEL=claude-opus-5-5`, `REGION=eu-central-1`. A generated value
+ * gives itself away with twelve letters and digits in a row, which none of those has.
  */
 function worthLearning(name: string | undefined, value: string): boolean {
   if (value.length < MIN_SENSITIVE_VALUE || value.startsWith("$")) return false;
@@ -388,8 +388,8 @@ function withoutValues(value: unknown, values: readonly string[], context: Redac
 
 /**
  * After the whole session, because a value can be quoted long before the read that
- * shows what it is. A line is parsed only if it holds one, and in its JSON form so
- * that a match can never land across an escape.
+ * shows what it is. A line is parsed only if it holds one, and the cut is made on
+ * its strings, as one made in the JSON could land across an escape.
  */
 function cutLearnedValues(lines: string[], context: RedactContext): string[] {
   if (context.learned.size === 0) return lines;
@@ -604,6 +604,8 @@ function cutDotenvInput(input: Record<string, unknown>, context: RedactContext):
   for (const edit of input.edits) if (isObject(edit)) cutDotenvInput(edit, context);
 }
 
+const FILE_ARGUMENT = /^(?:file_?path|filePath|notebook_path|(?:relative_)?path|paths|file|files|filename|target_file)$/;
+
 /**
  * Whether a call that is no shell works on a dotenv file, by the argument that
  * says what it works on: `Read {file_path}`, `Grep {path}`, a filesystem
@@ -616,8 +618,6 @@ function cutDotenvInput(input: Record<string, unknown>, context: RedactContext):
  * {pattern}`, `grep -r KEY .`) still goes up when `.env` is not ignored; reading
  * its result's lines for a dotenv path is the way up.
  */
-const FILE_ARGUMENT = /^(?:file_?path|filePath|notebook_path|(?:relative_)?path|paths|file|files|filename|target_file)$/;
-
 function callNamesDotenv(name: unknown, input: Record<string, unknown>): boolean {
   if (typeof input.glob === "string" && input.glob.includes(".env")) return true;
   // A workflow's script hands out prompts: it reads nothing by itself.
