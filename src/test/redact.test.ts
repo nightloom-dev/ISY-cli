@@ -717,6 +717,33 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
   }
 });
 
+test("a redirect or a tee inside a quoted argument writes nothing, unless the command runs that argument", () => {
+  for (const command of [
+    `echo "add this > .env"`,
+    `echo 'then pipe it | tee .env'`,
+    `printf 'a > .env\\n'`,
+    `git commit -m "stop writing > .env from the hook"`,
+    `git commit -m 'stop piping | tee .env'`,
+    `grep -n "> .env" deploy.sh`,
+    `gh pr comment 1 --body "write > .env first"`,
+  ]) {
+    assert.equal(throughCall("Bash", { command }, "plain output").input.command, command);
+  }
+
+  const m = marker("dotenv");
+  const cases: [string, string][] = [
+    [`echo "K=Zq8vR2mK9xLp > x" > .env`, `${m} > .env`],
+    [`echo "K=Zq8vR2mK9xLp" > ".env"`, `${m} > .env`],
+    [`echo "K=Zq8vR2mK9xLp" | tee .env`, `${m} > .env`],
+    [`sudo sh -c 'echo K=Zq8vR2mK9xLp >> .env'`, `${m} > .env`],
+    [`bash -c "echo K=Zq8vR2mK9xLp > .env"`, `${m} > .env`],
+    [`ssh host "echo K=Zq8vR2mK9xLp > /app/.env"`, `${m} > /app/.env`],
+  ];
+  for (const [command, expected] of cases) {
+    assert.equal(throughCall("Bash", { command }).input.command, expected);
+  }
+});
+
 test("an in-place edit of a dotenv file loses its script, and stays an edit", () => {
   const m = marker("dotenv");
   const cases: [string, string, string][] = [
@@ -1288,6 +1315,17 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `${fill("a=")} $a > .env`,
     `${Array.from({ length: 30_000 }, (_, i) => `$a${i}`).join("")} > .env`,
     `${Array.from({ length: 30_000 }, (_, i) => `a${i}=`).join("")} $b > .env`,
+    `echo ${fill('\\"')} > .env`,
+    `echo "${fill('\\"')} > .env`,
+    `echo ${fill("'")} > .env`,
+    `echo ${fill('"')} > .env`,
+    `echo ${fill('"\\')} > .env`,
+    `echo ${fill('> "')} .env`,
+    `echo ${fill("> a'")} .env`,
+    `echo ${fill(">")} .env`,
+    `echo >${" ".repeat(200_000)}.env`,
+    `echo ${fill("> ")}.env`,
+    `tee ${fill("a ")} .env`,
   ];
   for (const command of shapes) {
     const started = performance.now();

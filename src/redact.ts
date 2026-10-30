@@ -450,13 +450,26 @@ const TEE = /(?:^|[\s/])(?:tee|tee-object)(?=\s|$)/i;
 /** A word as the shell hands it over: quotes gone, `\ ` a plain space; a Windows `\` stays. */
 const unquoted = (word: string): string => word.replace(/\\( )|["'`]/g, "$1");
 
+/** A quoted or escaped word keeps its spaces: `> "My Projects/.env"`. */
+const REDIRECT = String.raw`>\|?\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)`;
+const ANY_REDIRECT = new RegExp(REDIRECT, "g");
+/** Quotes go first and run to the end if they never close, so nothing is scanned twice. */
+const REDIRECT_PAST_QUOTES = new RegExp(String.raw`'[^']*(?:'|$)|"(?:[^"\\]|\\[\s\S]?)*(?:"|$)|${REDIRECT}`, "g");
+/**
+ * Commands whose quoted arguments are only text: `git commit -m "x > .env"` writes
+ * nothing. What runs its argument is not here, as `sh -c`, `ssh` and `sudo` hold a
+ * real write in those quotes.
+ */
+const TEXT_ARGUMENTS = /^\s*(?:echo|printf|grep|egrep|fgrep|rg|git\s+(?:commit|tag|log|grep)|gh)(?:\s|$)/i;
+
 /** The dotenv file a statement redirects or tees into, if it writes one. */
 function dotenvTarget(statement: string): string | undefined {
   for (const segment of commandSegments(statement)) {
-    // A quoted or escaped word keeps its spaces: `> "My Projects/.env"`.
-    for (const redirect of segment.matchAll(/>\|?\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)/g)) {
-      if (isDotenvPath(unquoted(redirect[1]!))) return unquoted(redirect[1]!);
+    const text = TEXT_ARGUMENTS.test(segment);
+    for (const redirect of segment.matchAll(text ? REDIRECT_PAST_QUOTES : ANY_REDIRECT)) {
+      if (redirect[1] !== undefined && isDotenvPath(unquoted(redirect[1]))) return unquoted(redirect[1]);
     }
+    if (text) continue;
     const writer = SHELL_WRITER.exec(segment) ?? TEE.exec(segment);
     if (!writer) continue;
     const after = segment.slice(writer.index + writer[0].length);
