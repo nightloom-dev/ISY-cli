@@ -837,6 +837,37 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     ["export VALUE=Zq8vR2mK9xLp\ncat > .env <<EOF\nK=$VALUE\nEOF", `${m} > .env`],
     // A redirect that overrides `noclobber`.
     ["echo DB_PASS=Zq8vR2mK9xLp >| .env", `${m} > .env`],
+    // The file in a variable, or a loop's.
+    ["F=.env; echo K=Zq8vR2mK9xLp > $F", `${m} > .env`],
+    ['F=.env; echo K=Zq8vR2mK9xLp > "$F"', `${m} > .env`],
+    ['F=".env.local"; echo K=Zq8vR2mK9xLp > ${F}', `${m} > .env.local`],
+    ["F=.env; cat > $F <<EOF\nK=Zq8vR2mK9xLp\nEOF", `${m} > .env`],
+    ["for f in .env .env.local; do echo K=Zq8vR2mK9xLp >> $f; done", `${m} > .env`],
+    ['for v in Zq8vR2mK9xLp; do echo "K=$v" > .env; done', `${m} > .env`],
+    // The values where the write does not name them.
+    ["exec 3>.env; echo K=Zq8vR2mK9xLp >&3", `${m} > .env`],
+    ["export X=Zq8vR2mK9xLp; envsubst < tpl > .env", `${m} > .env`],
+    // A heredoc's delimiter quoted the other way.
+    ["cat > .env <<\\EOF\nK=Zq8vR2mK9xLp\nEOF", `${m} > .env`],
+    // A script fed to a shell, the value set outside it.
+    ['X=Zq8vR2mK9xLp; ssh host <<EOF\necho "K=$X" >> /app/.env\nEOF', `${m} > /app/.env`],
+    // A write in a quoted remote command.
+    ["ssh host 'tee /app/.env' <<EOF\nK=Zq8vR2mK9xLp\nEOF", `${m} > /app/.env`],
+    ['echo K=Zq8vR2mK9xLp | ssh host "tee -a /app/.env"', `${m} > /app/.env`],
+    // An interpreter's one-liner, which opens the file to write it.
+    [`python3 -c "open('.env','w').write('K=Zq8vR2mK9xLp')"`, `${m} > .env`],
+    [`python3 -c "with open('.env', mode='a') as f: f.write('K=Zq8vR2mK9xLp')"`, `${m} > .env`],
+    [`python3 -c "open(\\".env\\", \\"w\\").write(\\"K=Zq8vR2mK9xLp\\")"`, `${m} > .env`],
+    [`python3 -c "from pathlib import Path; Path('.env').write_text('K=Zq8vR2mK9xLp')"`, `${m} > .env`],
+    [`node -e "fs.writeFileSync('.env','K=Zq8vR2mK9xLp')"`, `${m} > .env`],
+    [`node -e "require('fs').appendFileSync('.env','K=Zq8vR2mK9xLp')"`, `${m} > .env`],
+    [`ruby -e "File.write('.env','K=Zq8vR2mK9xLp')"`, `${m} > .env`],
+    [`php -r "file_put_contents('.env','K=Zq8vR2mK9xLp');"`, `${m} > .env`],
+    [`F=.env; node -e "fs.writeFileSync('$F','K=Zq8vR2mK9xLp')"`, `${m} > .env`],
+    // What comes on stdin, copied there.
+    ["dd of=.env <<< K=Zq8vR2mK9xLp", `${m} > .env`],
+    ["cp /dev/stdin .env <<< K=Zq8vR2mK9xLp", `${m} > .env`],
+    ["install /dev/stdin .env <<< K=Zq8vR2mK9xLp", `${m} > .env`],
     ['node -e "console.log(process.env.DB_PASS)" > env.txt', 'node -e "console.log(process.env.DB_PASS)" > env.txt'],
   ];
   // A variable the command does not set holds nothing the command could show.
@@ -881,6 +912,63 @@ test("a value written into a dotenv file is learned without the shell operator b
   ]);
   assert.ok(!lines.join("\n").includes("aZ9bY8cX7"));
   assert.ok(!lines.join("\n").includes("fU4"));
+});
+
+test("what a command wrote into a dotenv file goes from the rest of the session, however it was written", () => {
+  const value = "Zq8vR2mK9xLp";
+  for (const command of [
+    `F=.env; echo K=${value} > $F`,
+    `F=.env; sed -i 's/a/${value}/' $F`,
+    `for f in .env .env.local; do echo K=${value} >> $f; done`,
+    `exec 3>.env; echo K=${value} >&3`,
+    `export X=${value}; envsubst < tpl > .env`,
+    `cat > .env <<\\EOF\nK=${value}\nEOF`,
+    `ssh host 'tee /app/.env' <<EOF\nK=${value}\nEOF`,
+    `echo K=${value} | ssh host "tee -a /app/.env"`,
+    `python3 -c "open('.env','w').write('K=${value}')"`,
+    `node -e "fs.writeFileSync('.env','K=${value}')"`,
+    `dd of=.env <<< K=${value}`,
+    `cp /dev/stdin .env <<< K=${value}`,
+    // A shell or an interpreter fed a script that writes the file.
+    `ssh host <<'REMOTE'\ncat > /app/.env <<'EOF'\nK=${value}\nEOF\nREMOTE`,
+    `ssh host bash <<'REMOTE'\necho K=${value} >> /app/.env\nREMOTE`,
+    `bash <<'SH'\necho K=${value} > .env\nSH`,
+    `bash <<'SH'\necho K=${value} > prod.env\nSH`,
+    `bash <<'SH'\nF=.env; echo K=${value} > $F\nSH`,
+    `python3 - <<'PY'\nopen('.env','w').write('K=${value}')\nPY`,
+    // In-place editors other than sed.
+    `ruby -pi -e 'sub("a","${value}")' .env`,
+    `ruby -i.bak -pe 'sub("a","${value}")' .env`,
+    `awk -i inplace '{print "K=${value}"}' .env`,
+    `gawk --include=inplace '{print "K=${value}"}' .env`,
+    `perl -p -i -e 's/a/${value}/' .env`,
+    `perl -0pi -e 's/a/${value}/' .env`,
+  ]) {
+    const { lines } = summaryFor([
+      ...callAndResult("Bash", { command }, "done"),
+      { type: "user", message: { role: "user", content: `the key is ${value}` } },
+    ]);
+    assert.ok(!lines.join("\n").includes(value), command);
+  }
+
+  // Reading it, in the same forms, or writing something else, leaves the command as it was.
+  for (const command of [
+    `python3 -c "print(open('.env').read())"`,
+    `python3 -c "print(open('.env','r').read())"`,
+    `python3 -c "print(open('.env', encoding='ascii').read())"`,
+    `python3 -c "open('a.txt','w').write('.env')"`,
+    `node -e "console.log(fs.readFileSync('.env','utf8'))"`,
+    `ruby -e "puts File.read('.env')"`,
+    "ruby -ne 'puts $_' .env",
+    "awk '{print}' .env",
+    "awk -i lib.awk '{print}' .env",
+    "dd if=.env of=copy.txt",
+    "install -m 600 a.txt .env",
+    "F=a.txt; echo K=Zq8vR2mK9xLp > $F; cat .env",
+    "for f in a.txt b.txt; do echo K=Zq8vR2mK9xLp > $f; done; cat .env",
+  ]) {
+    assert.equal(throughCall("Bash", { command }, "plain output").input.command, command);
+  }
 });
 
 test("a redirect or a tee inside a quoted argument writes nothing, unless the command runs that argument", () => {
@@ -1029,6 +1117,18 @@ test("an in-place edit of a dotenv file loses its script, and stays an edit", ()
     ["sed -i -e '$a KEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
     ["sed -i '1iKEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
     ["sed -i '/^KEY=/cKEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    // Named by a variable, or from one.
+    ["F=.env; sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' $F", `sed -i ${m} .env`, ".env"],
+    [`F=.env; sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' "$F"`, `sed -i ${m} .env`, ".env"],
+    [`sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' "$HOME/.env"`, `sed -i ${m} .env`, ".env"],
+    [`for f in .env*; do sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' "$f"; done`, `sed -i ${m} .env`, ".env"],
+    ["for f in a b; do sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env; done", `for f in a b; sed -i ${m} .env; done`, ".env"],
+    // Its script in a heredoc.
+    ["sed -i -f - .env <<EOF\ns/^KEY=.*/KEY=Zq8vR2mK9xLp/\nEOF", `sed -i ${m} .env`, ".env"],
+    // The other in-place editors.
+    ["perl -p -i -e 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env", `sed -i ${m} .env`, ".env"],
+    [`ruby -pi -e 'sub("a","Zq8vR2mK9xLp")' .env`, `sed -i ${m} .env`, ".env"],
+    [`awk -i inplace '{print "KEY=Zq8vR2mK9xLp"}' .env`, `sed -i ${m} .env`, ".env"],
   ];
   for (const [command, expected, path] of cases) {
     const out = throughCall("Bash", { command, description: "set the key" });
@@ -1743,9 +1843,47 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     fill('echo "$X" > .env\n'),
     fill("sed -i s/$X/b/ .env\n"),
     fill('a=b echo "$X" > .env\n'),
+    `${fill("F=.env;")} echo $F > $F`,
+    fill("F=.env; echo K=v > $F\n"),
+    `for f in ${fill(".env ")}; do echo $f > $f; done`,
+    fill("for f in .env; "),
+    `${fill("for ")}.env`,
+    `for${" ".repeat(200_000)}.env`,
+    `for f in${" ".repeat(200_000)}.env`,
+    fill("exec 3>.env;"),
+    `python3 -c "${fill("open('.env',")}"`,
+    `python3 -c "${fill("open(")}.env"`,
+    `python3 -c "${fill('open(\\"')}.env"`,
+    `python3 -c "${fill("open('.env', mode=")}"`,
+    `python3 -c "${fill("open('.env', mode='")}"`,
+    `python3 -c "${fill("open('a','")}.env"`,
+    `python3 -c "open(\\"${"a".repeat(200_000)}.env"`,
+    `${fill("Path('")}.env`,
+    `${fill("Path('a')")}.env`,
+    `sed -i $${"a".repeat(200_000)} .env`,
+    `sed -i ${fill("${a")} .env`,
+    `sed -i ${fill("$")} .env`,
+    fill("for a  in .env "),
+    `open(${" ".repeat(200_000)}.env`,
+    `open('.env'${" ".repeat(200_000)}`,
+    `python3 -c "open('${"a".repeat(200_000)}.env','w')"`,
+    `${fill("writeFileSync('")}.env`,
+    fill("Path('.env')"),
+    `Path('.env')${" ".repeat(200_000)}`,
+    fill("dd of=.env "),
+    `dd of=${"a".repeat(200_000)}.env`,
+    `cp ${fill("a ")}/dev/stdin .env`,
+    `${fill("cp /dev/stdin\n")}.env`,
+    `${fill("cp a\n")}.env`,
+    `awk -i${" ".repeat(200_000)}inplace .env`,
+    `ruby ${fill("-a ")}.env`,
+    `bash <<SH\n${fill("echo K=v > .env\n")}SH`,
+    `echo ${fill("K=v;")} > .env`,
+    `echo ${fill("K=a>")}.env`,
     `echo K=${fill("a;")}>.env`,
     `echo K=${"a".repeat(200_000)}>.env`,
     `${fill("K=aZ9bY8cX7;\n")}>.env`,
+    `${fill("tee '")} .env`,
     // Each heredoc here looks for where it ends.
     `${fill("cat <<a\na\n")}.env`,
     `${fill("cat > .env <<a\na\n")}`,

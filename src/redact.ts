@@ -511,10 +511,10 @@ function readsDotenv(command: unknown): boolean {
   return commandSegments(text).some((segment) => (!SHELL_NO_READ.test(segment) || /`|\$\(/.test(segment)) && names(segment));
 }
 
-/** Commands that write the file they are given: `tee` and PowerShell's own. */
-const SHELL_WRITER = /^\s*(?:sudo\s+)?(?:tee|set-content|sc|add-content|ac|out-file|new-item)(?:\s|$)/i;
-/** `tee` behind whatever runs it — `sudo -u app`, `doas`, `ssh host`, `/usr/bin/` — still writes. */
-const TEE = /(?:^|[\s/])(?:tee|tee-object)(?=\s|$)/i;
+/** Commands that write the file they are given: `tee`, PowerShell's own, `dd of=`, and `cp` from stdin. */
+const SHELL_WRITER = /^\s*(?:sudo\s+)?(?:tee|set-content|sc|add-content|ac|out-file|new-item|dd|(?:cp|install)(?=\s.*\/dev\/stdin))(?:\s|$)/i;
+/** `tee` behind whatever runs it — `sudo -u app`, `doas`, `ssh host 'tee …'`, `/usr/bin/` — still writes. */
+const TEE = /(?:^|[\s/"'])(?:tee|tee-object)(?=\s|$)/i;
 
 /** A word as the shell hands it over: quotes gone, `\ ` a plain space; a Windows `\` stays. */
 const unquoted = (word: string): string => word.replace(/\\( )|["'`]/g, "$1");
@@ -534,7 +534,24 @@ const TEXT_ARGUMENTS = /^\s*(?:echo|printf|grep|egrep|fgrep|rg|git\s+(?:commit|t
 /** `git commit -m "$(cat <<'EOF'`: what such a heredoc holds is a message. */
 const TAKES_MESSAGE = /^\s*(?:git\s+(?:commit|tag)|gh)\s/;
 
-/** The dotenv file a statement redirects or tees into, if it writes one. */
+/** A path as a call's first argument, in quotes a shell may have had to escape. */
+const PATH_ARGUMENT = String.raw`\(\s{0,8}\\?["'\`]([^"'\`\\\n]{1,256})\\?["'\`]`;
+/**
+ * What a one-liner calls to write a file it names: `fs.writeFileSync('.env', …)`,
+ * `Path('.env').write_text(…)`, and `open('.env', 'w')`, as `open` alone only reads.
+ *
+ * ponytail: a literal path, in the usual calls. A path in the script's own variable,
+ * or a call not listed, leaves the one-liner as it was; parsing each language is the
+ * way up.
+ */
+const WRITE_CALL = new RegExp(
+  String.raw`\b(?:(?:write|append)File(?:Sync)?|createWriteStream|file_put_contents|(?:File|IO)\.write)${PATH_ARGUMENT}` +
+    String.raw`|\bf?open${PATH_ARGUMENT}\s{0,8},\s{0,8}(?:mode\s{0,8}=\s{0,8})?\\?["'][a-z]{0,2}[wax+]` +
+    String.raw`|\bPath${PATH_ARGUMENT}\s{0,8}\)\.write_`,
+  "g",
+);
+
+/** The dotenv file a statement redirects, tees or opens to write, if it writes one. */
 function dotenvTarget(statement: string): string | undefined {
   // `>|` overrides `noclobber` and is no pipe.
   for (const segment of commandSegments(statement.replace(/>\|/g, ">"))) {
@@ -543,10 +560,14 @@ function dotenvTarget(statement: string): string | undefined {
       if (redirect[1] !== undefined && isDotenvPath(unquoted(redirect[1]))) return unquoted(redirect[1]);
     }
     if (text) continue;
+    for (const call of segment.matchAll(WRITE_CALL)) {
+      const path = call[1] ?? call[2] ?? call[3];
+      if (isDotenvPath(path)) return path;
+    }
     const writer = SHELL_WRITER.exec(segment) ?? TEE.exec(segment);
     if (!writer) continue;
     const after = segment.slice(writer.index + writer[0].length);
-    const named = after.trim().split(/\s+/).map(unquoted).find(isDotenvPath);
+    const named = after.trim().split(/\s+/).map((word) => unquoted(word).replace(/^of=/, "")).find(isDotenvPath);
     if (named) return named;
   }
   return undefined;
@@ -585,9 +606,29 @@ function expandsAssigned(statement: string, assigned: ReadonlySet<string>): bool
 
 /** A write that closes a group or a substitution: `{ …; } > .env`, `(…) | tee .env`, `done > .env`. */
 const GROUP_WRITE = /(?:[})]|\b(?:done|fi|esac))\s*(?:\d?>|&>|\|)/;
+/** A write whose values come later or from around it: `exec 3>.env; echo K=v >&3`, `export K=v; envsubst < t > .env`. */
+const WRITES_FROM_AROUND = /^\s*exec\b|\benvsubst\b/;
+
+/** `F=.env`, and a loop over a list: both say what `$F` is, and that `F` was set. */
+const ASSIGNMENT = /(?<![\w$])([A-Za-z_]\w*)=([^\s;&|]*)/g;
+const FOR_LOOP = /\bfor\s+([A-Za-z_]\w*)\s+in\s([^\n;]{0,2000})/g;
+const VARIABLE = /\$\{?([A-Za-z_]\w*)\}?/g;
+/** What says only where a path starts: `$HOME/.env`. */
+const VARIABLE_DIR = /\$\{?\w+\}?\//g;
 
 /** What sed's `a`, `i` and `c` open with, right against the text: `$aK=v`, `1iK=v`, `/^K=/cK=v`. */
 const SED_TEXT_COMMAND = /(?<=^|['"\s])(?:\$|\d{1,12}|\/[^/\n]{0,256}\/)[ \t]{0,8}[aic]\\?[ \t]{0,8}/g;
+
+/**
+ * The text of an edit's script: `s|a|b|` and `s#a#b#` split where `s/a/b/` does, and
+ * `sub("a","b")`, whose values have no name to go by, at its quotes.
+ */
+function learnEdit(statement: string, context: RedactContext): void {
+  const script = statement.replace(SED_TEXT_COMMAND, "\n");
+  const lines = script.replaceAll(/(?<![\w-])s([^\w\s\\])/.exec(script)?.[1] ?? "/", "\n");
+  learnValues(lines, context);
+  learnValues(lines.replace(/["']/g, "\n"), context);
+}
 
 /**
  * `cat > .env << 'EOF'`, `echo "KEY=…" >> .env.local`, `… | tee .env`: a shell
@@ -600,7 +641,16 @@ const SED_TEXT_COMMAND = /(?<=^|['"\s])(?:\$|\d{1,12}|\/[^/\n]{0,256}\/)[ \t]{0,
 function cutDotenvWrites(command: string, context: RedactContext): string {
   if (!command.includes(".env")) return command;
   // Once, as a statement asking for itself would rescan the command for each one.
-  const assigned = new Set([...command.matchAll(/(?<![\w$])([A-Za-z_]\w*)=/g)].map((match) => match[1]!));
+  const assigned = new Set<string>();
+  const files = new Map<string, string>();
+  for (const [, name, list] of [...command.matchAll(ASSIGNMENT), ...command.matchAll(FOR_LOOP)]) {
+    assigned.add(name!);
+    const file = list!.split(/\s+/).map(unquoted).find(isDotenvPath);
+    // A glob in the list is that file as far as a write goes.
+    if (file !== undefined) files.set(name!, file.replace(/[*?]/g, ""));
+  }
+  const resolved = (text: string): string => text.replace(VARIABLE, (whole, name: string) => files.get(name) ?? whole);
+  const editedFile = (text: string): string | undefined => shellEditPaths(resolved(text).replace(VARIABLE_DIR, "")).find(isDotenvPath);
   const lines = command.split("\n");
   const kept: string[] = [];
   let written: string | undefined;
@@ -615,14 +665,13 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
       parts
         .map((part) => {
           const indent = /^\s*/.exec(part)![0];
-          const target = dotenvTarget(part);
+          const target = dotenvTarget(resolved(part));
           if (target === undefined) {
             // The script holds the value, and the parse needs only to see an edit.
-            const edited = shellEditPaths(part).find(isDotenvPath);
+            const edited = editedFile(part);
             if (edited === undefined) return part;
-            // `s|a|b|` and `s#a#b#` split where `s/a/b/` does.
-            const script = part.replace(SED_TEXT_COMMAND, "\n");
-            learnValues(script.replaceAll(/(?<![\w-])s([^\w\s\\])/.exec(script)?.[1] ?? "/", "\n"), context);
+            writes = true;
+            learnEdit(part, context);
             const edit = `sed -i ${marker("dotenv")} ${edited}`;
             if (expandsAssigned(part, assigned)) {
               spread = true;
@@ -634,7 +683,7 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
           writes = true;
           written ??= write;
           learnValues(part, context);
-          if (GROUP_WRITE.test(part) || expandsAssigned(part, assigned)) spread = true;
+          if (GROUP_WRITE.test(part) || WRITES_FROM_AROUND.test(part) || expandsAssigned(part, assigned)) spread = true;
           return `${indent}${write}`;
         })
         .join(""),
@@ -650,9 +699,25 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
       i = end;
       continue;
     }
-    // A body is code as often as not, where `cfg.env` is a property and not a file.
     const message = commandSegments(parts.find((part) => HEREDOC.test(part))!).every((segment) => TAKES_MESSAGE.test(segment));
-    const namesDotenv = !message && body.some((line) => line.split(WORD_BREAK).some((word) => basename(word).startsWith(".env")));
+    // A shell or an interpreter fed a script that writes the file: what the script
+    // holds is written as surely as what `cat > .env` is fed.
+    let bodyWrites: string | undefined;
+    for (const line of message ? [] : body) {
+      const edited = editedFile(line);
+      if (edited !== undefined) learnEdit(line, context);
+      bodyWrites ??= dotenvTarget(resolved(line)) ?? edited;
+    }
+    if (bodyWrites !== undefined) {
+      learnValues(body.join("\n"), context);
+      if (expandsAssigned(body.join("\n"), assigned)) {
+        spread = true;
+        written ??= `${marker("dotenv")} > ${bodyWrites}`;
+      }
+    }
+    // A body is code as often as not, where `cfg.env` is a property and not a file.
+    const namesDotenv =
+      bodyWrites !== undefined || (!message && body.some((line) => line.split(WORD_BREAK).some((word) => basename(word).startsWith(".env"))));
     // One at a time: spread, a body of a few hundred thousand lines overflows the stack.
     for (const line of namesDotenv ? [marker("dotenv")] : body) kept.push(line);
     if (end < lines.length) kept.push(lines[end]!);
