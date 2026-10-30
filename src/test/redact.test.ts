@@ -4,7 +4,7 @@ import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/pro
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseLines, parseTranscriptFile } from "../parser.js";
+import { parseLines, parseTranscriptFile, shellEditPaths } from "../parser.js";
 import { BUILTIN_RULES, REDACTION_MARKER, applyRules, marker, redactLineStream, redactLines, redactTranscriptFile } from "../redact.js";
 
 function redactOne(text: string, extraPatterns?: string[]): string {
@@ -715,6 +715,31 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     assert.equal(call.message.content[0]!.input.command, expected);
     assert.equal(lines[1]!.includes("Zq8vR2mK9xLp"), command === expected, command);
   }
+});
+
+test("an in-place edit of a dotenv file loses its script, and stays an edit", () => {
+  const m = marker("dotenv");
+  const cases: [string, string, string][] = [
+    ["sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env", `sed -i ${m} .env`, ".env"],
+    ["sed -i.bak 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' config/.env.local", `sed -i ${m} config/.env.local`, "config/.env.local"],
+    ["sed -i -e 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env", `sed -i ${m} .env`, ".env"],
+    ["perl -pi -e 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env", `sed -i ${m} .env`, ".env"],
+    ["cd app && sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env && npm test", `cd app && sed -i ${m} .env && npm test`, "app/.env"],
+  ];
+  for (const [command, expected, path] of cases) {
+    const out = throughCall("Bash", { command, description: "set the key" });
+    assert.equal(out.input.command, expected);
+    assert.equal(out.content, m, command);
+    assert.deepEqual(shellEditPaths(expected, "."), [path]);
+  }
+  const { lines } = summaryFor([
+    ...callAndResult("Bash", { command: "sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env" }, ""),
+    { type: "user", message: { role: "user", content: "the key is Zq8vR2mK9xLp" } },
+  ]);
+  assert.ok(!lines.join("\n").includes("Zq8vR2mK9xLp"), "and the value it set goes from the session");
+
+  const kept = "sed -i 's/a/b/' src/env.ts";
+  assert.equal(throughCall("Bash", { command: kept }, "plain output").input.command, kept);
 });
 
 test("cuts what a ! command typed in Claude Code printed from a dotenv file, or wrote into one", () => {

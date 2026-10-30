@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { fileLines } from "./lines.js";
-import { HEREDOC, commandSegments, withoutHeredocs } from "./parser.js";
+import { HEREDOC, commandSegments, shellEditPaths, withoutHeredocs } from "./parser.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
@@ -525,13 +525,20 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
     kept.push(
       parts
         .map((part) => {
+          const indent = /^\s*/.exec(part)![0];
           const target = dotenvTarget(part);
-          if (target === undefined) return part;
+          if (target === undefined) {
+            // The script holds the value, and the parse needs only to see an edit.
+            const edited = shellEditPaths(part).find(isDotenvPath);
+            if (edited === undefined) return part;
+            learnValues(part.replace(/\//g, "\n"), context);
+            return `${indent}sed -i ${marker("dotenv")} ${edited}${part.slice(part.trimEnd().length)}`;
+          }
           writes = true;
           written ??= target;
           learnValues(part, context);
           if (GROUP_WRITE.test(part) || expandsAssigned(part, command)) spread = true;
-          return `${/^\s*/.exec(part)![0]}${marker("dotenv")} > ${target}`;
+          return `${indent}${marker("dotenv")} > ${target}`;
         })
         .join(""),
     );
