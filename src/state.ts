@@ -47,6 +47,13 @@ export interface SessionState {
   shown?: string[];
   /** Record count at each commit, oldest first: maps a record index to a commit. */
   commits?: CommitMark[];
+  /**
+   * The branch this session belongs to, for telling its commits from someone
+   * else's: where its first upload found it, then where its latest mark landed.
+   * Not simply the last branch it was seen on, because a resume that only reads
+   * moves nothing, and Codex and Kimi record no branch at all.
+   */
+  branch?: string;
   /** Last write to this entry, for pruning. */
   touchedMs?: number;
 }

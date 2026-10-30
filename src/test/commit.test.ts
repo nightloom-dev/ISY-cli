@@ -4,12 +4,13 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { writeConfig } from "../config.js";
-import { formatCommit, runCommit } from "../commands/commit.js";
+import { formatCommit, runCommit, wordsOf } from "../commands/commit.js";
+import { currentBranch } from "../git.js";
 import { formatUploadAlert, runUpload } from "../commands/upload.js";
 import {
   COMMIT_COMMAND,
@@ -745,4 +746,214 @@ test("a session at the top of the repository is masked as it always was", async 
   const records = sentRecords(uploads[0]!);
   assert.equal(records[0]!.cwd, ".");
   assert.ok(editedPaths(records).includes("src/f0.ts"));
+});
+
+/** The session as Claude Code writes it: every record says which branch it ran on. */
+async function onBranch(path: string, branch: string): Promise<void> {
+  const lines = (await readFile(path, "utf8")).split("\n");
+  const stamped = lines.map((line) => record({ ...(JSON.parse(line) as object), gitBranch: branch }));
+  await writeFile(path, stamped.join("\n"));
+}
+
+/** A commit of one new or changed file, the way someone at a terminal makes one. */
+async function commitFile(cwd: string, file: string, content = "text"): Promise<void> {
+  await mkdir(join(cwd, dirname(file)), { recursive: true });
+  await writeFile(join(cwd, file), content);
+  await run("git", ["add", "."], { cwd });
+  await run("git", ["commit", "-q", "-m", file], { cwd });
+}
+
+async function appendTurn(path: string, sessionId: string, block: object, timestamp: string): Promise<void> {
+  const added = record({
+    type: "assistant",
+    uuid: `${sessionId}-${timestamp}`,
+    parentUuid: `${sessionId}-manifest`,
+    sessionId,
+    timestamp,
+    message: { role: "assistant", content: [block] },
+  });
+  await writeFile(path, `${await readFile(path, "utf8")}\n${added}`);
+}
+
+const OLD = "2026-08-16T11:00:00Z";
+const shell = (id: string, command: string) => ({ type: "tool_use", id, name: "Bash", input: { command } });
+
+test("a commit on a branch the session never worked on leaves it alone", async () => {
+  const cwd = await newRepo("isy-commit-other-");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  const path = await writeSession(cwd, "sess-feat", "left-pad");
+  await onBranch(path, "feat");
+
+  await commitFile(cwd, "own.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  await runUpload({ silent: true, all: true }, cwd);
+  uploads.length = 0;
+
+  // Long after it ended, on a branch made for something else.
+  await run("git", ["switch", "-q", "-c", "elsewhere", "main"], { cwd });
+  await commitFile(cwd, "README.md");
+  const report = await runCommit({ noUpload: true }, cwd);
+
+  assert.match(report.skipped ?? "", /another branch/);
+  assert.deepEqual(report.candidates, []);
+  const state = (await readState())[path]!;
+  assert.equal(state.commits?.length, 1);
+  assert.equal(state.branch, "feat");
+  // Nothing goes up that would move it there either.
+  assert.equal((await runUpload({ silent: true, all: true }, cwd)).sent, 0);
+
+  // Back on its own branch, a commit after it ended is its own, as it always was.
+  await run("git", ["switch", "-q", "feat"], { cwd });
+  await commitFile(cwd, "later.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  assert.equal((await readState())[path]!.commits?.length, 2);
+});
+
+test("a commit on a new branch holding what the session left uncommitted is its own", async () => {
+  const cwd = await newRepo("isy-commit-carried-");
+  const path = await writeSession(cwd, "sess-carried", "left-pad");
+  await onBranch(path, "main");
+
+  // The agent stopped with edits in the tree; the human branched and committed them.
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  await commitFile(cwd, "src/f0.ts");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  let state = (await readState())[path]!;
+  assert.equal(state.commits?.length, 1);
+  assert.equal(state.branch, "feat");
+
+  // That branch is its own now, whatever goes on it.
+  await commitFile(cwd, "unrelated.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  state = (await readState())[path]!;
+  assert.equal(state.commits?.length, 2);
+
+  // The same file on yet another branch is not: that edit is behind its last mark.
+  await run("git", ["switch", "-q", "-c", "other", "main"], { cwd });
+  await commitFile(cwd, "src/f0.ts", "someone else's");
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+  assert.equal((await readState())[path]!.commits?.length, 2);
+});
+
+test("a session in a subdirectory is matched against the commit from the top of the repository", async () => {
+  const top = await realpath(await newRepo("isy-commit-carried-sub-"));
+  await mkdir(join(top, "pkg"));
+  const path = await writeSession(join(top, "pkg"), "sess-carried-sub", "left-pad");
+  await onBranch(path, "main");
+
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd: top });
+  await commitFile(top, "pkg/src/f0.ts");
+
+  assert.equal((await runCommit({ noUpload: true }, top)).skipped, undefined);
+  assert.equal((await readState())[path]!.commits?.length, 1);
+});
+
+test("what a session wrote through the shell counts when the commit holds a file it mentions", async () => {
+  const cwd = await newRepo("isy-commit-shell-");
+  const path = await writeSession(cwd, "sess-shell", "left-pad");
+  await appendTurn(path, "sess-shell", shell("t-heredoc", "cat > docs/notes.md <<'EOF'\nhello\nEOF"), OLD);
+  await onBranch(path, "main");
+
+  await run("git", ["switch", "-q", "-c", "unrelated"], { cwd });
+  await commitFile(cwd, "other.md");
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+
+  await run("git", ["switch", "-q", "-c", "carried", "main"], { cwd });
+  await commitFile(cwd, "docs/notes.md");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+});
+
+test("a shell call that has not answered yet is the agent making this commit", async () => {
+  const cwd = await newRepo("isy-commit-running-");
+  const path = await writeSession(cwd, "sess-running", "left-pad");
+  await appendTurn(path, "sess-running", shell("t-commit", "git switch -c topic && git commit -am topic"), new Date().toISOString());
+  await onBranch(path, "main");
+
+  await run("git", ["switch", "-q", "-c", "topic"], { cwd });
+  await commitFile(cwd, "nothing-it-edited.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  assert.equal((await readState())[path]!.branch, "topic");
+
+  // The same call left unanswered days ago is a session that died, not one committing.
+  const dead = await newRepo("isy-commit-running-dead-");
+  const deadPath = await writeSession(dead, "sess-dead", "left-pad");
+  await appendTurn(deadPath, "sess-dead", shell("t-commit", "git switch -c topic && git commit -am topic"), OLD);
+  await onBranch(deadPath, "main");
+  await run("git", ["switch", "-q", "-c", "topic"], { cwd: dead });
+  await commitFile(dead, "nothing-it-edited.txt");
+  assert.match((await runCommit({ noUpload: true }, dead)).skipped ?? "", /another branch/);
+});
+
+test("a CLI that records no branch is judged by the one its upload found", async () => {
+  const cwd = await newRepo("isy-commit-nobranch-");
+  const path = await writeSession(cwd, "sess-nobranch", "left-pad");
+
+  await runUpload({ silent: true, all: true }, cwd);
+  assert.equal((await readState())[path]!.branch, "main");
+
+  await run("git", ["switch", "-q", "-c", "elsewhere"], { cwd });
+  await commitFile(cwd, "README.md");
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+  assert.equal((await readState())[path]!.commits, undefined);
+});
+
+test("a resume that only read from a branch does not make that branch its own", async () => {
+  const cwd = await newRepo("isy-commit-resume-");
+  const path = await writeSession(cwd, "sess-resume", "left-pad");
+  await onBranch(path, "main");
+  await commitFile(cwd, "own.txt");
+  await runCommit({ noUpload: true }, cwd);
+
+  await run("git", ["switch", "-q", "-c", "looking"], { cwd });
+  await appendTurn(path, "sess-resume", { type: "text", text: "that function is in a.txt" }, OLD);
+  await onBranch(path, "looking");
+  await commitFile(cwd, "README.md");
+
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+  const state = (await readState())[path]!;
+  assert.equal(state.commits?.length, 1);
+  assert.equal(state.branch, "main");
+});
+
+test("a rebase counts as the branch it rebases, not as no branch at all", async () => {
+  const cwd = await newRepo("isy-commit-rebase-");
+  await run("git", ["switch", "-q", "-c", "topic"], { cwd });
+  await commitFile(cwd, "a.txt", "topic's");
+  await run("git", ["switch", "-q", "main"], { cwd });
+  await commitFile(cwd, "a.txt", "main's");
+  await run("git", ["switch", "-q", "topic"], { cwd });
+  // Stops on the conflict: detached, the way every pick of a rebase fires the hook.
+  await assert.rejects(() => run("git", ["rebase", "main"], { cwd }));
+  assert.equal(await currentBranch(cwd), "topic");
+
+  const path = await writeSession(cwd, "sess-rebase", "left-pad");
+  await onBranch(path, "other");
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+
+  await onBranch(path, "topic");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  assert.equal((await readState())[path]!.branch, "topic");
+});
+
+test("a name is read out of a command as a whole word, however it is quoted or spelled", () => {
+  const words = wordsOf({ command: `cat > "docs/notes.md" <<'EOF'\nhello\nEOF\nprintf x>>src\\a.ts` });
+  for (const name of ["notes.md", "a.ts", "hello", "EOF"]) assert.ok(words.includes(name), name);
+  assert.ok(!words.includes("a"));
+  assert.ok(!words.includes("otes.md"));
+});
+
+test("reading the names out of a command stays linear", () => {
+  for (const text of [
+    "\\".repeat(200_000),
+    "/".repeat(200_000),
+    "\"".repeat(200_000),
+    "a/".repeat(100_000),
+    "a".repeat(200_000),
+    "\\ ".repeat(100_000),
+  ]) {
+    const started = performance.now();
+    wordsOf({ command: text });
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `took ${Math.round(took)} ms`);
+  }
 });

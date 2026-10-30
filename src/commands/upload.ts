@@ -323,6 +323,7 @@ async function sendOne(
       ...current,
       uploadedHash: payload.contentHash,
       uploadedCommit: payload.commits?.at(-1)?.sha,
+      branch: current.branch ?? git.branch,
       ...seen,
     }));
     await updateConfig({ lastUploadAt: new Date().toISOString() });

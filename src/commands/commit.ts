@@ -1,13 +1,14 @@
-import { relative } from "node:path";
+import { basename, relative } from "node:path";
 import { newestSession } from "../agents/index.js";
 import type { AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
-import { headSha } from "../git.js";
-import { parseLines } from "../parser.js";
+import { currentBranch, filesInHead, headSha } from "../git.js";
+import { mayWrite, parseLines, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
 import { candidateKey, readState, unseen, updateSession, withCommit } from "../state.js";
-import type { Candidate } from "../types.js";
+import type { SessionState } from "../state.js";
+import type { Candidate, ParsedSession, ToolUse } from "../types.js";
 
 export interface CommitReport {
   agent?: AgentId;
@@ -26,6 +27,92 @@ const COLUMN_GAP = 2;
 const MAX_LINES = 6;
 /** Past this, a category is one counted line rather than one line per file. */
 const MAX_PER_CATEGORY = 2;
+/** The longest Claude Code lets a shell call run, so how long one can read as running. */
+const SHELL_CALL_MS = 10 * 60_000;
+
+/** The transcript holds a shell call before the command starts, and its answer only after. */
+function isRunning(use: ToolUse): boolean {
+  return (
+    (use.name === "Bash" || use.name === "PowerShell") &&
+    use.result === undefined &&
+    Date.now() - Date.parse(use.timestamp ?? "") < SHELL_CALL_MS
+  );
+}
+
+/** A call that wrote files without naming them the way an edit tool does. */
+function writesUnnamed(use: ToolUse): boolean {
+  const { command } = use.input;
+  if (use.name === "Bash" && typeof command === "string" && shellWrites(command)) return true;
+  return mayWrite(use.name, use.input);
+}
+
+/**
+ * The words of a tool call's input that could be a file's name. By word, and
+ * looked up rather than searched for, because a commit of thousands of files
+ * against a long session is a search of minutes in a hook someone is waiting on.
+ */
+export function wordsOf(input: unknown): string[] {
+  return JSON.stringify(input).split(/\\.|[\s/"'`$=:;,|&<>(){}[\]*?!#]+/);
+}
+
+/**
+ * Whether HEAD holds what the session left uncommitted: an edit past its last
+ * mark to a file HEAD changed, or a write it could not name that mentions one.
+ *
+ * ponytail: by file, not by line, and for the unnamed writes by base name, so a
+ * commit that happens to touch such a file counts, and a script that writes files
+ * it never mentions or a name with a space in it does not. Compare with
+ * `FileEdit.newString` and read the redirect targets if either shows up.
+ */
+async function carriesItsWork(
+  session: ParsedSession,
+  state: SessionState,
+  cwd: string,
+): Promise<boolean> {
+  const since = state.commits?.at(-1)?.records ?? 0;
+  const files = await filesInHead(cwd);
+  const edited = files.some((file) =>
+    session.fileEdits.get(file)?.some((edit) => edit.recordIndex >= since),
+  );
+  if (edited) return true;
+
+  const names = new Set(files.map((file) => basename(file)));
+  return session.toolUses.some(
+    (use) =>
+      use.recordIndex >= since &&
+      writesUnnamed(use) &&
+      wordsOf(use.input).some((word) => names.has(word)),
+  );
+}
+
+/**
+ * Whether the commit just made belongs to this session. The hook only knows the
+ * newest session in the tree, and a commit is what moves a session to another
+ * pull request, so one that ended on another branch must not take every commit
+ * made here afterwards. It belongs if the agent is making it this moment, if it
+ * lands on the session's own branch, or, on any other, if it carries the
+ * session's work: an agent that edited on main and a human who branched and
+ * committed that.
+ *
+ * Its own branch is the one its row stands on (`SessionState.branch`) before the
+ * one its transcript last named, which a resume that only read has moved. No
+ * branch known, as with a session on a detached HEAD, is no reason to refuse.
+ *
+ * ponytail: only the newest session is asked, so a commit it refuses goes to no
+ * one, and a session older than that relies on the branch fallback on the server.
+ * Walk on through `sessionsInTree` if one of them ever needs the mark itself.
+ */
+async function isItsCommit(
+  session: ParsedSession,
+  state: SessionState,
+  branch: string | undefined,
+  cwd: string,
+): Promise<boolean> {
+  if (session.toolUses.some(isRunning)) return true;
+  const own = state.branch ?? session.meta.gitBranch;
+  if (!branch || !own || own === "HEAD" || own === branch) return true;
+  return carriesItsWork(session, state, cwd);
+}
 
 export async function runCommit(
   options: { json?: boolean; noUpload?: boolean },
@@ -51,15 +138,22 @@ export async function runCommit(
   const session = parseLines(lines);
   report.records = session.records.length;
 
+  const state = (await readState())[newest.file.path] ?? {};
+  const branch = await currentBranch(cwd);
+  if (!(await isItsCommit(session, state, branch, cwd))) {
+    report.skipped = "the newest session here is on another branch and this commit holds none of its work";
+    return report;
+  }
+
   // Stage 0 always sees the whole transcript: the detectors reason across the
   // session — an abandoned branch forks early, a revert compares a late edit
   // with an early one — so a window would cost exactly the signals worth having.
   const stage0 = runStage0(session);
-  const state = (await readState())[newest.file.path] ?? {};
   report.candidates = unseen(state, stage0.candidates);
 
   await updateSession(newest.file.path, (current) => ({
     ...current,
+    branch: branch ?? current.branch,
     shown: [...new Set([...(current.shown ?? []), ...stage0.candidates.map(candidateKey)])],
     // What the transcript held at this commit, so a record index can later be
     // told which commit it belongs to.

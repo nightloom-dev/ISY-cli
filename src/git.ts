@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -89,6 +90,29 @@ export async function collectGitMetadata(cwd: string): Promise<GitResult> {
  */
 export async function headSha(cwd: string): Promise<string | undefined> {
   return git(cwd, ["rev-parse", "HEAD"]);
+}
+
+/**
+ * The branch a commit made now lands on. A rebase runs detached and fires the
+ * post-commit hook for every pick, so there it is the branch being rebased,
+ * which git keeps beside the rebase's own state.
+ */
+export async function currentBranch(cwd: string): Promise<string | undefined> {
+  const branch = await git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== "HEAD") return branch;
+  const state = await git(cwd, ["rev-parse", "--git-path", "rebase-merge/head-name"]);
+  try {
+    const name = (await readFile(resolve(cwd, state ?? ""), "utf8")).trim();
+    return name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : branch;
+  } catch {
+    return branch;
+  }
+}
+
+/** The files HEAD changed, from the top of the repository wherever `cwd` is. */
+export async function filesInHead(cwd: string): Promise<string[]> {
+  const files = await git(cwd, ["show", "-z", "--format=", "--name-only", "--no-renames", "HEAD"]);
+  return files ? files.split("\0").filter(Boolean) : [];
 }
 
 /**
