@@ -873,7 +873,7 @@ const SUPPRESSORS: { pattern: RegExp; detail: string }[] = [
 export const LOG_ONLY_CATCHES: { pattern: RegExp; detail: string }[] = [
   {
     pattern:
-      /\bcatch\s*(?:\([^)]{0,200}\)\s*)?\{(?:\s*\/\/[^\n]*\n)*\s*(?:this\.)?(?:console|logger|log)\.(?:warn|warning|error|info|debug|log)\((?:[^;\n]{0,400}|[ \t]*\n[^;]{0,400}\n[ \t]*)\)(?:\s*;)?\s*(?:return(?:\s+(?:null|undefined|false|\[\]|\{\}))?(?:\s*;)?\s*)?\}/g,
+      /\bcatch\s*(?:\([^)]{0,200}\)\s*)?\{(?:[ \t\r\n]{0,200}\/\/[^\n]{0,400}\n){0,20}\s*(?:this\.)?(?:console|logger|log)\.(?:warn|warning|error|info|debug|log)\((?:[^;\n]{0,400}|[ \t]*\n[^;]{0,400}\n[ \t]*)\)(?:\s*;)?\s*(?:return(?:\s+(?:null|undefined|false|\[\]|\{\}))?(?:\s*;)?\s*)?\}/g,
     detail: "an exception is caught and only logged",
   },
   {
