@@ -25,13 +25,18 @@ const GIT_STASH = /\bgit\s+stash\b(?!\s+(pop|apply|list|show))/;
 const GIT_CHECKOUT = /\bgit\s+checkout\s+(?:--\s+)?(?<paths>[^&|;]+)/;
 const GIT_RESTORE = /\bgit\s+restore\s+(?<paths>[^&|;]+)/;
 
+// Trimmed without a regex: `\s+$` and `\n+$` rescan the rest of a run from
+// every character in it, and a file holding a long run of spaces or blank
+// lines took half a minute to digest.
 function normalize(content: string): string {
-  return content
+  const joined = content
     .replace(/\r\n/g, "\n")
     .split("\n")
-    .map((line) => line.replace(/\s+$/, ""))
-    .join("\n")
-    .replace(/\n+$/, "");
+    .map((line) => line.trimEnd())
+    .join("\n");
+  let end = joined.length;
+  while (end > 0 && joined.charCodeAt(end - 1) === 10) end -= 1;
+  return joined.slice(0, end);
 }
 
 function digest(content: string): string {

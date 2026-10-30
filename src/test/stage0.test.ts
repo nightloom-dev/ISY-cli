@@ -308,6 +308,18 @@ test("treats a repeated read with no edits between as unremarkable", () => {
   assert.deepEqual(detectAbandonedApproach(session), []);
 });
 
+test("a file of padding or blank lines is compared in linear time", () => {
+  for (const content of [`${" ".repeat(200_000)}x`, `${"\n".repeat(200_000)}x`]) {
+    const session = padded([
+      assistant("w", "pad19", [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: "/r/a.txt", content } }]),
+    ]);
+    const started = performance.now();
+    detectAbandonedApproach(session);
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `took ${Math.round(took)}ms on ${JSON.stringify(content.slice(0, 2))}…`);
+  }
+});
+
 test("flags edits thrown away by a git command", () => {
   for (const command of ["git checkout -- src/app.ts", "git restore src/app.ts", "git reset --hard", "git stash"]) {
     const session = padded([
