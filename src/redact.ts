@@ -49,7 +49,8 @@ const SECRET_WORD = [
  * in a real corpus as often as the secrets do, and none of them is one.
  */
 function secretName(atWord = ""): string {
-  return String.raw`[A-Za-z0-9_.-]*?${atWord}(?:${SECRET_WORD})${anyCase("(?:[-_]?key)?(?:[-_]?base)?")}(?![A-Za-z0-9_.-])`;
+  // This runs at every character of every word, so the letters the words start with go first.
+  return String.raw`[A-Za-z0-9_.-]*?(?=[aAcCpPsStT])${atWord}(?:${SECRET_WORD})${anyCase("(?:[-_]?key)?(?:[-_]?base)?")}(?![A-Za-z0-9_.-])`;
 }
 
 /** The word glued to what came before, but not as a camelCase hump. */
