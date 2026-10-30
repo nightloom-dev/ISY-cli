@@ -419,6 +419,11 @@ test("telling an in-place edit or a heredoc from anything else gets through 200 
     fill("<<\\"),
     `<<${" ".repeat(200_000)}`,
     `cat ${fill("<<-\\")}`,
+    `echo ${fill('\\"')} > a.txt`,
+    `echo "${fill('\\"')} > a.txt`,
+    `echo ${fill('"\\')} > a.txt`,
+    `sed -i ${fill('\\"')} a.txt`,
+    `sed -i "${fill('\\"')} a.txt`,
   ]) {
     const started = Date.now();
     shellWrites(command);
@@ -427,6 +432,14 @@ test("telling an in-place edit or a heredoc from anything else gets through 200 
     const took = Date.now() - started;
     assert.ok(took < 1000, `took ${took}ms on ${JSON.stringify(command.slice(0, 24))}`);
   }
+});
+
+test("an escaped quote opens nothing, so what follows it is no argument", () => {
+  assert.equal(shellWrites('echo \\"a\\" > b.txt'), true);
+  assert.equal(shellWrites("echo it\\'s > b.txt"), true);
+  assert.equal(shellWrites('echo "a \\" > b.txt"'), false);
+  assert.equal(shellWrites("sed 's/ -i //' a.ts"), false);
+  assert.deepEqual(shellEditPaths("sed -i 's/a/b/' my\\ dir/a.ts"), ["my\\ dir/a.ts"]);
 });
 
 test("a heredoc's body is cut whichever way its delimiter is quoted", () => {

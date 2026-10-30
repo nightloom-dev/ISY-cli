@@ -421,6 +421,15 @@ const PERL_IN_PLACE = /^\S+(?:\s+-\S+)*?\s+-\w*i/;
 const AWK_IN_PLACE = /(?:^|\s)(?:-i\s*|--include[=\s]\s*)inplace(?:\s|$)/;
 
 /**
+ * What quotes hold, emptied out: an operator in there is an argument, as in
+ * `grep "->" a`. An escaped quote opens nothing, and stepping over it first keeps a
+ * run of them from each scanning the rest of the text for a close that never comes.
+ */
+function withoutQuoted(segment: string): string {
+  return segment.replace(/\\.|'[^']*'|"(?:[^"\\]|\\.)*"/g, (match) => (match.startsWith("\\") ? match : "''"));
+}
+
+/**
  * Whether a segment, with what its quotes hold emptied out, runs an editor that
  * rewrites its files: `sed 's/ -i //' a.ts` only prints.
  */
@@ -456,8 +465,7 @@ export function shellWrites(command: string): boolean {
   if (INTERPRETER_HEREDOC.test(ran)) return true;
 
   for (const segment of commandSegments(ran)) {
-    // What sits inside quotes is an argument, not an operator: `grep "->" a`.
-    const bare = segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''");
+    const bare = withoutQuoted(segment);
     if (REDIRECT_WRITE.test(bare) || TEE_WRITE.test(bare) || FILE_MUTATORS.test(bare)) return true;
     if (editsInPlace(bare)) return true;
   }
@@ -510,8 +518,8 @@ export function shellReadPaths(command: string): string[] {
   return paths;
 }
 
-/** A shell word, quotes and all: `'s/a b/c/'` is one word, not two. */
-const SHELL_WORD = /(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"])+/g;
+/** A shell word, quotes and all: `'s/a b/c/'` is one word, not two. What is escaped goes first, as in `withoutQuoted`. */
+const SHELL_WORD = /(?:\\.|'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"])+/g;
 
 /**
  * Flags whose next word is the script, not a file. Only the bare ones for sed:
@@ -550,10 +558,10 @@ export function shellEditPaths(command: string, cwd?: string): string[] {
       else dir = dir === undefined || to === undefined || /^[~$-]/.test(to) ? undefined : posix.join(dir, to);
       continue;
     }
+    const called = segment.replace(LEADING_WORDS, "");
     // The same test `shellWrites` applies, on the same unquoted text, so the two
     // agree on what was written.
-    if (!editsInPlace(segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''"))) continue;
-    const called = segment.replace(LEADING_WORDS, "");
+    if (!IN_PLACE_EDITORS.test(called) || !editsInPlace(withoutQuoted(called))) continue;
     const scriptFlag = /^(?:perl|ruby)\b/.test(called) ? PERL_SCRIPT_FLAG : SED_SCRIPT_FLAG;
     const awk = /^g?awk\b/.test(called);
 
