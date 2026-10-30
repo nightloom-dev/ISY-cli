@@ -656,7 +656,9 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
       }
       const named = callNamesDotenv(block.name, input);
       if (named) cutDotenvInput(input, context);
-      if ((named || cut !== command || readsDotenv(command)) && typeof block.id === "string") {
+      const task = input.task_id ?? input.shell_id ?? input.bash_id;
+      const followsCut = typeof task === "string" && context.envToolUseIds.has(task);
+      if ((named || cut !== command || readsDotenv(command) || followsCut) && typeof block.id === "string") {
         context.envToolUseIds.add(block.id);
       }
     }
@@ -664,6 +666,10 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
     if (block.type === "tool_result") {
       const id = block.tool_use_id;
       if (typeof id !== "string" || !context.envToolUseIds.has(id)) continue;
+      // A command sent to the background goes on as a task: stopping that repeats
+      // the command, and reading it prints what the command printed.
+      const task = isObject(record.toolUseResult) ? record.toolUseResult.backgroundTaskId : undefined;
+      if (typeof task === "string") context.envToolUseIds.add(task);
       learnValues(block.content, context);
       block.content = marker("dotenv");
       count(context, "dotenv", 1);

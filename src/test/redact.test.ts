@@ -754,6 +754,35 @@ test("a here-string is no heredoc: the line after it is not its body", () => {
   );
 });
 
+test("a background command's task goes the way of the command", () => {
+  const value = "Zq8vR2mK9xLp";
+  const command = `echo MAILER_PHRASE=${value} > .env; sleep 100`;
+  const started = (id: string, task: string, run: string) => [
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: { command: run, run_in_background: true } }] } },
+    { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: `running as ${task}` }] }, toolUseResult: { backgroundTaskId: task } },
+  ];
+  const followed = (id: string, name: string, input: Record<string, unknown>, run: string) => [
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } },
+    { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: `stopped ${run}` }] }, toolUseResult: { message: "stopped", command: run, task_id: "any", task_type: "local_bash" } },
+  ];
+  const { lines } = summaryFor([
+    ...started("t1", "bg1", command),
+    ...followed("t2", "TaskStop", { task_id: "bg1" }, command),
+    ...followed("t3", "TaskOutput", { task_id: "bg1" }, command),
+    ...followed("t4", "BashOutput", { bash_id: "bg1" }, command),
+    ...followed("t5", "KillShell", { shell_id: "bg1" }, command),
+    ...started("t6", "bg2", "npm run dev"),
+    ...followed("t7", "TaskStop", { task_id: "bg2" }, "npm run dev"),
+  ]);
+  const out = lines.map((line) => JSON.parse(line) as { message: { content: { content: string }[] }; toolUseResult: unknown });
+  for (const i of [3, 5, 7, 9]) {
+    assert.equal(out[i]!.message.content[0]!.content, marker("dotenv"));
+    assert.equal(out[i]!.toolUseResult, marker("dotenv"));
+  }
+  assert.equal(out[13]!.message.content[0]!.content, "stopped npm run dev");
+  assert.ok(!lines.join("\n").includes(value));
+});
+
 test("an in-place edit of a dotenv file loses its script, and stays an edit", () => {
   const m = marker("dotenv");
   const cases: [string, string, string][] = [
