@@ -434,8 +434,7 @@ function isDotenvPath(filePath: unknown): boolean {
 /**
  * Commands that can name a dotenv file without printing any of it. The list runs
  * this way round because the other one has no end: `cut`, `node -e`, `python -c`,
- * `docker exec … cat`, anything behind `ssh` or `timeout`. A backtick still runs
- * what it holds, so a segment with one is judged as any other.
+ * `docker exec … cat`, anything behind `ssh` or `timeout`.
  */
 const SHELL_NO_READ =
   /^\s*(?:(?:sudo|if|then|elif|else|while|until|do)\s+|[!{(]\s*)*(?:ls|ll|stat|file|wc|test|test-path|\[\[?|echo|printf|touch|chmod|chown|mkdir|rm|mv|cp|ln|cd|git\s+(?:add|rm|mv|status|commit|check-ignore|ls-files))(?:\s|$)/i;
@@ -456,11 +455,12 @@ const WORD_BREAK = /[\s"'`(){}=,;|&<>]+/;
  */
 function readsDotenv(command: unknown): boolean {
   if (typeof command !== "string" || !command.includes(".env")) return false;
-  return commandSegments(withoutHeredocs(command)).some(
-    (segment) =>
-      (!SHELL_NO_READ.test(segment) || segment.includes("`")) &&
-      segment.split(WORD_BREAK).some((word) => isDotenvPath(word.replace(/^.*:/, ""))),
-  );
+  const names = (text: string): boolean => text.split(WORD_BREAK).some((word) => isDotenvPath(word.replace(/^.*:/, "")));
+  const text = withoutHeredocs(command);
+  // What a substitution or `xargs` turns up goes to whatever takes it: `cat $(ls .env*)`.
+  if ((text.match(/\$\([^()]*\)/g) ?? []).some(names) || (/\|\s*xargs\b/.test(text) && names(text))) return true;
+  // A backtick or a `$(` left in a segment still runs what it holds.
+  return commandSegments(text).some((segment) => (!SHELL_NO_READ.test(segment) || /`|\$\(/.test(segment)) && names(segment));
 }
 
 /** Commands that write the file they are given: `tee` and PowerShell's own. */

@@ -553,6 +553,11 @@ test("cuts the result of any shell command that names a dotenv file, and keeps t
     "echo `cat .env`",
     "echo \"$(tail -1 .env)\"",
     "Select-String -Path .env -Pattern PHRASE",
+    "cat $(ls .env*)",
+    "ls .env* | xargs cat",
+    "echo .env | xargs -n1 cut -d= -f2",
+    "echo \"$(<.env)\"",
+    "echo \"$(grep X \"$(dirname $0)/.env\")\"",
   ];
   for (const command of commands) {
     const out = throughCall("Bash", { command });
@@ -586,6 +591,8 @@ test("keeps the result of a command that names a dotenv file and prints none of 
     "git rm --cached .env",
     "git commit -m 'stop tracking .env'",
     "git check-ignore -v .env",
+    "git add .env.example && git commit -m \"$(date)\"",
+    "test -f .env && echo \"$(date)\"",
     "git status --short .env",
     "git ls-files .env",
     "chmod 600 .env && npm test",
@@ -1472,6 +1479,12 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `sed -i ${fill("a ")}.env`,
     `sed -i ${fill("s/a/b/ ")}.env`,
     `perl -pi -e ${fill("' ")}.env`,
+    `${fill("$(")}.env`,
+    `$(${"a".repeat(200_000)}.env`,
+    `${fill("$(a ")}.env`,
+    `${fill("| ")}.env`,
+    `|${" ".repeat(200_000)}.env`,
+    `${fill("|xarg")}.env`,
   ];
   for (const command of shapes) {
     const started = performance.now();
