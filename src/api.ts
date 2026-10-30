@@ -61,7 +61,9 @@ export type UploadOutcome =
       /** Where the account stands with its plan, as of this upload. */
       plan?: PlanStatus;
     }
-  | { status: "retry"; error: string }
+  // `rejected`: the server read the payload and refused it, so the same bytes
+  // would get the same answer at once.
+  | { status: "retry"; error: string; rejected?: boolean }
   | { status: "permanent"; error: string }
   // Too many uploads this hour. Not a failure: the session is kept as it is,
   // and the run stops rather than spending the retries of every session behind
@@ -130,7 +132,7 @@ function classify(status: number, body: string): UploadOutcome {
   // reads the same as one in the payload, and a session passed over until it
   // changes would be lost with every other that ended while the bug was live.
   if (status === 400 || status === 422) {
-    return { status: "retry", error: `server rejected the payload (${status}) ${body}`.trim() };
+    return { status: "retry", rejected: true, error: `server rejected the payload (${status}) ${body}`.trim() };
   }
   return { status: "retry", error: `server returned ${status} ${body}`.trim() };
 }

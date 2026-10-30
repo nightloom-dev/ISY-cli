@@ -352,19 +352,29 @@ async function sendOne(
     await enqueue(payload, outcome.error);
     report.queued += 1;
     logLine(`upload: queued ${payload.sessionId} for retry: ${outcome.error}`);
+    // Sent again by every run, a payload the server reads and refuses would
+    // spend an upload of the hour each time, since the allowance is counted
+    // before the payload is read. The queue retries it on its own schedule.
+    if (outcome.rejected) await passOver(target, payload);
   } else {
     report.abandoned += 1;
     logError(`upload: dropped ${payload.sessionId}: ${outcome.error}`);
-    // Refused for what it holds, so building it again only to hear the same is
-    // all the next sweep would do: it is passed over until it changes.
-    const seen = await fingerprint(target);
-    await updateSession(target.path, (current) => ({
-      ...current,
-      rejectedHash: payload.contentHash,
-      uploadedCommit: payload.commits?.at(-1)?.sha,
-      ...seen,
-    }));
+    await passOver(target, payload);
   }
+}
+
+/**
+ * Refused for what it holds, so building it again only to hear the same is all
+ * the next sweep would do: the transcript is passed over until it changes.
+ */
+async function passOver(target: Target, payload: UploadPayload): Promise<void> {
+  const seen = await fingerprint(target);
+  await updateSession(target.path, (current) => ({
+    ...current,
+    rejectedHash: payload.contentHash,
+    uploadedCommit: payload.commits?.at(-1)?.sha,
+    ...seen,
+  }));
 }
 
 export async function runUpload(
