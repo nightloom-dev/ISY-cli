@@ -126,8 +126,11 @@ function classify(status: number, body: string): UploadOutcome {
   // A backlog is drained over hours rather than given up on: a sweep can find
   // more sessions than an hour's allowance, and they are not at fault for it.
   if (status === 429) return { status: "throttled" };
+  // Retried rather than refused for good: a validation bug on the server's side
+  // reads the same as one in the payload, and a session passed over until it
+  // changes would be lost with every other that ended while the bug was live.
   if (status === 400 || status === 422) {
-    return { status: "permanent", error: `server rejected the payload (${status}) ${body}`.trim() };
+    return { status: "retry", error: `server rejected the payload (${status}) ${body}`.trim() };
   }
   return { status: "retry", error: `server returned ${status} ${body}`.trim() };
 }

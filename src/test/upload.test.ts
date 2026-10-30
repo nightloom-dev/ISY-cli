@@ -171,11 +171,11 @@ test("sends a gzip body with the bearer token and the documented fields", async 
   assert.match(body.contentHash, /^sha256:/);
 });
 
-test("treats size and payload failures as permanent", async () => {
-  for (const status of [413, 400, 422]) {
+test("treats a size failure as permanent and a payload failure as worth retrying", async () => {
+  for (const [status, expected] of [[413, "permanent"], [400, "retry"], [422, "retry"]] as const) {
     nextStatus = status;
     const outcome = await uploadSession(samplePayload(), { baseUrl, token: "test-token" });
-    assert.equal(outcome.status, "permanent", `status ${status}`);
+    assert.equal(outcome.status, expected, `status ${status}`);
   }
 });
 

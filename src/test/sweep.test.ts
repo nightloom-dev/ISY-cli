@@ -293,6 +293,16 @@ test("a session refused for its size is not rebuilt at every sweep, only once it
   assert.equal(grown.sent, 1);
 });
 
+test("a session the server refused as invalid is sent again at the next sweep", async () => {
+  nextStatus = 400;
+  const refused = await runUpload({ silent: true, sweep: true }, elsewhere);
+  nextStatus = 200;
+  assert.equal(refused.sent, 0);
+
+  const next = await runUpload({ silent: true, sweep: true }, elsewhere);
+  assert.equal(next.sent, 1);
+});
+
 test("a transcript nobody has touched in a fortnight is looked at and left alone", async () => {
   const path = await writeSession("-ancient", "ancient", repo);
   const old = new Date("2026-01-01T00:00:00Z");
