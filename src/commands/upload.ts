@@ -46,6 +46,8 @@ export interface UploadReport {
   updateNotice?: string;
   /** What a SessionEnd run did about this repository's git hooks, when it did anything. */
   gitHook?: "installed" | "shared-hooks";
+  /** Which repository, as owner/name: the line is parked, and read wherever the next session starts. */
+  gitHookRepository?: string;
   /** Set when the plan has nothing left: the next pull request will not be analysed. */
   planNotice?: string;
   /** Sessions a sweep looked at, across every CLI and every directory. */
@@ -467,6 +469,8 @@ export async function runUpload(
       const outcome = await autoInstallGitHook(workingDir);
       if (outcome === "installed" || outcome === "shared-hooks") {
         report.gitHook = outcome;
+        const git = await gitFor(workingDir);
+        report.gitHookRepository = git.ok ? git.metadata.remote : workingDir;
         logLine(`upload: git hooks ${outcome} in ${workingDir}`);
       }
     } catch (error) {
@@ -562,9 +566,9 @@ export function formatUploadAlert(report: UploadReport): string | undefined {
   if (report.throttled) parts.push("rate limited, the rest upload on the next run");
   if (report.unauthorized) parts.push(report.unauthorized);
   if (report.abandoned > 0) parts.push(`${report.abandoned} session(s) given up on`);
-  if (report.gitHook === "installed") parts.push("commit and push hooks added to this repository");
+  if (report.gitHook === "installed") parts.push(`commit and push hooks added to ${report.gitHookRepository}`);
   if (report.gitHook === "shared-hooks") {
-    parts.push("no git hooks here: they live in a shared directory, run isy init to add them");
+    parts.push(`no git hooks in ${report.gitHookRepository}: they live in a shared directory, run isy init there to add them`);
   }
   if (report.planNotice) parts.push(report.planNotice);
   if (report.updateNotice) parts.push(report.updateNotice);

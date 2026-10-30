@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { writeConfig } from "../config.js";
 import { formatCommit, runCommit } from "../commands/commit.js";
-import { runUpload } from "../commands/upload.js";
+import { formatUploadAlert, runUpload } from "../commands/upload.js";
 import {
   COMMIT_COMMAND,
   PUSH_COMMAND,
@@ -553,4 +553,20 @@ test("a session hook wires the commit hook with nothing on stdin, the way Codex 
   const report = await runUpload({ silent: true, all: true, hook: true }, cwd);
   assert.equal(report.gitHook, "installed");
   assert.equal(await gitHookInstalled(cwd), true);
+  // The line is parked and read wherever the next session starts: "this repository" would be wrong there.
+  assert.match(formatUploadAlert(report) ?? "", /hooks added to unwinned\/ISY/);
+});
+
+test("a parked line about a shared hooks directory names the repository, and outlives an init run elsewhere", async () => {
+  const cwd = await newRepo("isy-commit-hookflag-shared-");
+  await mkdir(join(cwd, ".husky"), { recursive: true });
+  await run("git", ["config", "core.hooksPath", ".husky"], { cwd });
+  await writeSession(cwd, "sess-hookflag-shared", "left-pad");
+
+  const report = await runUpload({ silent: true, all: true, hook: true }, cwd);
+  assert.equal(report.gitHook, "shared-hooks");
+  const line = formatUploadAlert(report) ?? "";
+  assert.match(line, /no git hooks in unwinned\/ISY/);
+  // `isy init` drops a parked part with this wording, and an init in another repository answers nothing here.
+  assert.doesNotMatch(line, /run: isy init/);
 });
