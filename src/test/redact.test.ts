@@ -145,6 +145,17 @@ test("leaves what is said about a secret alone, and code that only names one", (
   }
 });
 
+test("a secret made of digits is still a secret", () => {
+  const masked = marker("assignment");
+  const cases: [string, string][] = [
+    ["DB_PASSWORD=1234567890123", `DB_PASSWORD=${masked}`],
+    ["MYSQL_ROOT_PASSWORD: 12345678", `MYSQL_ROOT_PASSWORD: ${masked}`],
+    [`SECRET=${"1234567890".repeat(3)}12`, `SECRET=${masked}`],
+    ['{"password": "12345678"}', `{"password": "${masked}"}`],
+  ];
+  for (const [input, expected] of cases) assert.equal(redactOne(input), expected, input);
+});
+
 test("an assistant record keeps its usage numbers, as JSON and as text", () => {
   const usage = { input_tokens: 3, cache_creation_input_tokens: 12345678, cache_read_input_tokens: 123456789, output_tokens: 87654321, max_tokens: 64000000 };
   const record = {

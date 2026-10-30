@@ -49,10 +49,12 @@ const CAMEL_NAME = secretName("(?<=[a-z0-9])(?=[A-Z])");
 
 /**
  * What an assigned secret looks like: long enough to be one, and not code. A
- * number never is — usage counts sit under names like these in every record,
- * and stdout quotes them as JSON text.
+ * bare number under a quoted name is JSON's own (`"token": 1234567890`), where a
+ * secret would be a string; anywhere else a number is a password like any other
+ * — `DB_PASSWORD=1234567890123`, `MYSQL_ROOT_PASSWORD: 12345678`. The digit is
+ * looked for first so the lookbehind runs only where a number starts.
  */
-const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))[^\s"'{}()[\]<>$]{8,}`;
+const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))[^\s"'{}()[\]<>$]{8,}`;
 
 export const BUILTIN_RULES: RedactionRule[] = [
   {
