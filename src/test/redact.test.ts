@@ -761,6 +761,9 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     ['VALUE=Zq8vR2mK9xLp\necho "K=$VALUE" > .env', `${m} > .env`],
     ['VALUE=Zq8vR2mK9xLp; echo "K=$VALUE" > .env', `${m} > .env`],
     ['export VALUE=Zq8vR2mK9xLp && printf "K=%s" "${VALUE}" >> .env', `${m} > .env`],
+    ["export VALUE=Zq8vR2mK9xLp\ncat > .env <<EOF\nK=$VALUE\nEOF", `${m} > .env`],
+    // A redirect that overrides `noclobber`.
+    ["echo DB_PASS=Zq8vR2mK9xLp >| .env", `${m} > .env`],
     ['node -e "console.log(process.env.DB_PASS)" > env.txt', 'node -e "console.log(process.env.DB_PASS)" > env.txt'],
   ];
   // A variable the command does not set holds nothing the command could show.
@@ -884,6 +887,9 @@ test("an in-place edit of a dotenv file loses its script, and stays an edit", ()
     ["sed -i -e 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env", `sed -i ${m} .env`, ".env"],
     ["perl -pi -e 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env", `sed -i ${m} .env`, ".env"],
     ["cd app && sed -i 's/^KEY=.*/KEY=Zq8vR2mK9xLp/' .env && npm test", `cd app && sed -i ${m} .env && npm test`, "app/.env"],
+    // The value sits where the script only names it.
+    ['VALUE=Zq8vR2mK9xLp\nsed -i "s/^KEY=.*/KEY=$VALUE/" .env', `sed -i ${m} .env`, ".env"],
+    ['VALUE=Zq8vR2mK9xLp; sed -i "s/^KEY=.*/KEY=${VALUE}/" .env', `sed -i ${m} .env`, ".env"],
   ];
   for (const [command, expected, path] of cases) {
     const out = throughCall("Bash", { command, description: "set the key" });
@@ -896,6 +902,19 @@ test("an in-place edit of a dotenv file loses its script, and stays an edit", ()
     { type: "user", message: { role: "user", content: "the key is Zq8vR2mK9xLp" } },
   ]);
   assert.ok(!lines.join("\n").includes("Zq8vR2mK9xLp"), "and the value it set goes from the session");
+
+  for (const [command, value] of [
+    ["sed -i 's|^KEY=.*|KEY=Zq8vR2mK9xLp|' .env", "Zq8vR2mK9xLp"],
+    ['sed -i "s#^KEY=.*#KEY=Zq8vR2mK9xLp#" .env', "Zq8vR2mK9xLp"],
+    ["sed -i 's,^KEY=.*,KEY=Zq8vR2mK9xLp,' .env", "Zq8vR2mK9xLp"],
+    ["sed -i 's/^KEY=.*/KEY=Zq8v#R2m|K9xLp/' .env", "Zq8v#R2m|K9xLp"],
+  ] as const) {
+    const session = summaryFor([
+      ...callAndResult("Bash", { command }, ""),
+      { type: "user", message: { role: "user", content: `the key is ${value}` } },
+    ]);
+    assert.ok(!session.lines.join("\n").includes(value), command);
+  }
 
   const kept = "sed -i 's/a/b/' src/env.ts";
   assert.equal(throughCall("Bash", { command: kept }, "plain output").input.command, kept);
@@ -1494,6 +1513,14 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `${fill("| ")}.env`,
     `|${" ".repeat(200_000)}.env`,
     `${fill("|xarg")}.env`,
+    `echo ${fill(">|")} .env`,
+    `sed -i ${fill("s|")} .env`,
+    `sed -i ${fill("-s/")} .env`,
+    `sed -i ${fill("$a")} .env`,
+    `a=b; sed -i ${fill("$a")} .env`,
+    `cat > .env <<EOF\n${fill("$a")}\nEOF`,
+    `cat > .env <<EOF\n${fill("a=$a")}\nEOF`,
+    `cat > .env <<EOF\n${fill("$a=\n")}EOF`,
   ];
   for (const command of shapes) {
     const started = performance.now();

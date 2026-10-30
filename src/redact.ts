@@ -477,7 +477,7 @@ const TEE = /(?:^|[\s/])(?:tee|tee-object)(?=\s|$)/i;
 const unquoted = (word: string): string => word.replace(/\\( )|["'`]/g, "$1");
 
 /** A quoted or escaped word keeps its spaces: `> "My Projects/.env"`. */
-const REDIRECT = String.raw`>\|?\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)`;
+const REDIRECT = String.raw`>\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)`;
 const ANY_REDIRECT = new RegExp(REDIRECT, "g");
 /** Quotes go first and run to the end if they never close, so nothing is scanned twice. */
 const REDIRECT_PAST_QUOTES = new RegExp(String.raw`'[^']*(?:'|$)|"(?:[^"\\]|\\[\s\S]?)*(?:"|$)|${REDIRECT}`, "g");
@@ -490,7 +490,8 @@ const TEXT_ARGUMENTS = /^\s*(?:echo|printf|grep|egrep|fgrep|rg|git\s+(?:commit|t
 
 /** The dotenv file a statement redirects or tees into, if it writes one. */
 function dotenvTarget(statement: string): string | undefined {
-  for (const segment of commandSegments(statement)) {
+  // `>|` overrides `noclobber` and is no pipe.
+  for (const segment of commandSegments(statement.replace(/>\|/g, ">"))) {
     const text = TEXT_ARGUMENTS.test(segment);
     for (const redirect of segment.matchAll(text ? REDIRECT_PAST_QUOTES : ANY_REDIRECT)) {
       if (redirect[1] !== undefined && isDotenvPath(unquoted(redirect[1]))) return unquoted(redirect[1]);
@@ -570,14 +571,21 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
             // The script holds the value, and the parse needs only to see an edit.
             const edited = shellEditPaths(part).find(isDotenvPath);
             if (edited === undefined) return part;
-            learnValues(part.replace(/\//g, "\n"), context);
-            return `${indent}sed -i ${marker("dotenv")} ${edited}${part.slice(part.trimEnd().length)}`;
+            // `s|a|b|` and `s#a#b#` split where `s/a/b/` does.
+            learnValues(part.replaceAll(/(?<![\w-])s([^\w\s\\])/.exec(part)?.[1] ?? "/", "\n"), context);
+            const edit = `sed -i ${marker("dotenv")} ${edited}`;
+            if (expandsAssigned(part, command)) {
+              spread = true;
+              written ??= edit;
+            }
+            return `${indent}${edit}${part.slice(part.trimEnd().length)}`;
           }
+          const write = `${marker("dotenv")} > ${target}`;
           writes = true;
-          written ??= target;
+          written ??= write;
           learnValues(part, context);
           if (GROUP_WRITE.test(part) || expandsAssigned(part, command)) spread = true;
-          return `${indent}${marker("dotenv")} > ${target}`;
+          return `${indent}${write}`;
         })
         .join(""),
     );
@@ -588,6 +596,7 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
     const body = lines.slice(i + 1, end);
     if (writes) {
       learnValues(body.join("\n"), context);
+      if (expandsAssigned(body.join("\n"), command)) spread = true;
       i = end;
       continue;
     }
@@ -601,7 +610,7 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
   // whole command goes, and only the write is left for the parse to see.
   if (written !== undefined && spread) {
     learnValues(command, context);
-    return `${marker("dotenv")} > ${written}`;
+    return written;
   }
   return kept.join("\n");
 }
