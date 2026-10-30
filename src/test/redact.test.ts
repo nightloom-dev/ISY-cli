@@ -937,6 +937,8 @@ test("an in-place edit of a dotenv file loses its script, and stays an edit", ()
     ['sed -i "s#^KEY=.*#KEY=Zq8vR2mK9xLp#" .env', "Zq8vR2mK9xLp"],
     ["sed -i 's,^KEY=.*,KEY=Zq8vR2mK9xLp,' .env", "Zq8vR2mK9xLp"],
     ["sed -i 's/^KEY=.*/KEY=Zq8v#R2m|K9xLp/' .env", "Zq8v#R2m|K9xLp"],
+    ['VALUE=Zq8vR2mK9xLp; sed -i "s/^KEY=.*/KEY=$VALUE/" .env', "Zq8vR2mK9xLp"],
+    ['VALUE=Zq8vR2mK9xLp; echo "KEY=$VALUE" > .env', "Zq8vR2mK9xLp"],
   ] as const) {
     const session = summaryFor([
       ...callAndResult("Bash", { command }, ""),
@@ -1579,6 +1581,8 @@ test("learning a dotenv file's values gets through what looks almost like one", 
     fill("="),
     fill("a="),
     fill("\\n"),
+    fill("A=;"),
+    `A=${fill(";")}`,
     `${"a".repeat(200_000)}=`,
     `${"a".repeat(100_000)}${"=".repeat(100_000)}b`,
     fill("KEY=Zq8vR2mK9xLp\n"),

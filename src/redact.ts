@@ -357,7 +357,8 @@ function learnValues(value: unknown, context: RedactContext): void {
   };
   for (const [, name, written] of text.matchAll(DOTENV_PAIR)) {
     if (!/^[A-Z_][A-Z0-9_]*$/.test(name!) && !SENSITIVE_KEY.test(name!)) continue;
-    learn(name, /^["']/.test(written!) ? written!.slice(1, -1) : written!);
+    // A shell ends a statement at a `;` the value does not hold: `VALUE=x; echo "K=$VALUE"`.
+    learn(name, /^["']/.test(written!) ? written!.slice(1, -1) : written!.replace(/;$/, ""));
   }
   for (const line of text.split("\n")) {
     const bare = line.trim();
