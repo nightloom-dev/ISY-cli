@@ -170,9 +170,10 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // Any scheme: a password in a URL is one whatever speaks it — rediss,
     // amqps, https to a bare IP. The scheme is capped because `\b` lets a match
     // start inside a dotted or dashed run: unbounded, every start rescans the
-    // rest of the run, and a long one costs minutes.
+    // rest of the run, and a long one costs minutes. The user may be empty, as
+    // Redis URLs usually write it: `redis://:password@host`.
     type: "connection_string",
-    pattern: /\b([A-Za-z][A-Za-z0-9+.-]{0,31}):\/\/([^\s:/@]+):([^\s/@]+)@/g,
+    pattern: /\b([A-Za-z][A-Za-z0-9+.-]{0,31}):\/\/([^\s:/@]*):([^\s/@]+)@/g,
     replacement: `$1://$2:${marker("connection_string")}@`,
   },
   {

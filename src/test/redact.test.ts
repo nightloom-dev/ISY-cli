@@ -106,8 +106,13 @@ test("masks the password in a URL of any scheme, and an armored PGP private key"
   assert.equal(redactOne("rediss://default:hunter2000@cache.internal:6380"), `rediss://default:${masked}@cache.internal:6380`);
   assert.equal(redactOne("amqps://app:secretpass@mq.internal/vhost"), `amqps://app:${masked}@mq.internal/vhost`);
   assert.equal(redactOne("curl https://admin:hunter2000@10.0.0.5:8443/api"), `curl https://admin:${masked}@10.0.0.5:8443/api`);
+  assert.equal(redactOne("REDIS_URL=redis://:hunter2000@localhost:6379/0"), `REDIS_URL=redis://:${masked}@localhost:6379/0`);
+  assert.equal(redactOne("redis-cli -u redis://:hunter2000@localhost:6379 ping"), `redis-cli -u redis://:${masked}@localhost:6379 ping`);
+  assert.equal(redactOne("amqp://:hunter2000@mq/"), `amqp://:${masked}@mq/`);
+  assert.equal(redactOne(`redis://:${masked}@localhost:6379/0`), `redis://:${masked}@localhost:6379/0`, "a second pass changes nothing");
   // A port is not a password: nothing in this URL is masked.
   assert.equal(redactOne("https://example.com:8080/a/@scope/pkg"), "https://example.com:8080/a/@scope/pkg");
+  assert.equal(redactOne("https://:8080/a/@scope/pkg"), "https://:8080/a/@scope/pkg");
 
   const pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF0abcd\n=AbCd\n-----END PGP PRIVATE KEY BLOCK-----";
   assert.equal(redactOne(`key:\n${pgp}\ndone`), `key:\n${marker("private_key")}\ndone`);
@@ -1466,6 +1471,12 @@ test("every rule gets through text shaped almost like what it matches", () => {
     fill("--password-"),
     `--password${" ".repeat(200_000)}`,
     `--password ${"a".repeat(200_000)}"`,
+    fill("a://:"),
+    fill("a://"),
+    fill("a://:b"),
+    `redis://:${"a".repeat(200_000)}`,
+    `redis://${"a".repeat(200_000)}`,
+    `redis://:${fill("a:")}`,
     fill("curl "),
     fill("curl -u "),
     fill("curl -u a "),
