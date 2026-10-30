@@ -694,8 +694,14 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     ["for kv in DB_PASS=Zq8vR2mK9xLp APP=Zq8vR2mK9xLp; do echo $kv; done > .env", `${m} > .env`],
     ["if true; then echo DB_PASS=Zq8vR2mK9xLp; fi > .env", `${m} > .env`],
     ['echo "DB_PASS=Zq8vR2mK9xLp" \\\n  >> .env', `${m} > .env`],
+    // The value sits where the write only names it.
+    ['VALUE=Zq8vR2mK9xLp\necho "K=$VALUE" > .env', `${m} > .env`],
+    ['VALUE=Zq8vR2mK9xLp; echo "K=$VALUE" > .env', `${m} > .env`],
+    ['export VALUE=Zq8vR2mK9xLp && printf "K=%s" "${VALUE}" >> .env', `${m} > .env`],
     ['node -e "console.log(process.env.DB_PASS)" > env.txt', 'node -e "console.log(process.env.DB_PASS)" > env.txt'],
   ];
+  // A variable the command does not set holds nothing the command could show.
+  assert.equal(throughCall("Bash", { command: `cd app\necho "K=$FROM_ENV" > .env` }).input.command, `cd app\n${m} > .env`);
   for (const [command, expected] of cases) {
     const { lines } = summaryFor([
       { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } },
@@ -1247,6 +1253,23 @@ test("every rule gets through text shaped almost like what it matches", () => {
       const took = performance.now() - started;
       assert.ok(took < 1000, `${rule.pattern.source.slice(0, 30)} took ${Math.round(took)}ms on ${text.slice(0, 12)}…`);
     }
+  }
+});
+
+test("cutting a write to a dotenv file gets through what looks almost like one", () => {
+  const fill = (unit: string) => unit.repeat(Math.ceil(200_000 / unit.length));
+  const shapes = [
+    `${fill("$a")} > .env`,
+    `${fill("a=")} $a > .env`,
+    `${Array.from({ length: 30_000 }, (_, i) => `$a${i}`).join("")} > .env`,
+    `${Array.from({ length: 30_000 }, (_, i) => `a${i}=`).join("")} $b > .env`,
+  ];
+  for (const command of shapes) {
+    const started = performance.now();
+    const { lines } = redactLines([JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } })]);
+    const took = performance.now() - started;
+    assert.equal(lines.length, 1);
+    assert.ok(took < 5000, `took ${Math.round(took)}ms on ${command.slice(0, 12)}…`);
   }
 });
 

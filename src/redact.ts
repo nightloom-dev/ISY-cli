@@ -491,6 +491,14 @@ function statements(line: string): { parts: string[]; open: boolean } {
   return { parts, open: quote !== undefined };
 }
 
+/** `VALUE=x`, then `echo "K=$VALUE" > .env`: the value sits where the write only names it. */
+function expandsAssigned(statement: string, command: string): boolean {
+  const expanded = [...statement.matchAll(/\$\{?([A-Za-z_]\w*)/g)];
+  if (expanded.length === 0) return false;
+  const assigned = new Set([...command.matchAll(/(?<![\w$])([A-Za-z_]\w*)=/g)].map((match) => match[1]));
+  return expanded.some((match) => assigned.has(match[1]));
+}
+
 /** A write that closes a group or a substitution: `{ …; } > .env`, `(…) | tee .env`, `done > .env`. */
 const GROUP_WRITE = /(?:[})]|\b(?:done|fi|esac))\s*(?:\d?>|&>|\|)/;
 
@@ -522,7 +530,7 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
           writes = true;
           written ??= target;
           learnValues(part, context);
-          if (GROUP_WRITE.test(part)) spread = true;
+          if (GROUP_WRITE.test(part) || expandsAssigned(part, command)) spread = true;
           return `${/^\s*/.exec(part)![0]}${marker("dotenv")} > ${target}`;
         })
         .join(""),
