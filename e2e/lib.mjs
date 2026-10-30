@@ -473,6 +473,9 @@ export async function readJsonl(path) {
 }
 
 export function blocksOf(record) {
+  // What Claude Code sent to the API, not what happened: a blob repeats messages
+  // already in the session, with no uuid to look them up by.
+  if (record?.type?.startsWith("api-request")) return [];
   const content = record?.message?.content;
   return Array.isArray(content) ? content : [];
 }

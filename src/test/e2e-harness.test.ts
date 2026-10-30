@@ -30,3 +30,18 @@ test("the terminal driver still reports once the child has exited", async (t) =>
   assert.equal(report.ok, false);
   assert.equal(report.failedStep, 2);
 });
+
+// Plain JavaScript outside `rootDir`: named at run time, so tsc leaves it alone.
+const lib = await import(new URL("../../e2e/lib.mjs", import.meta.url).href);
+
+test("a tool call copied into an API request record is not listed a second time", () => {
+  const edit = { type: "tool_use", id: "toolu_1", name: "Edit", input: {} };
+  const records = [
+    { type: "api-request-blob", hash: "h1", message: { role: "assistant", content: [edit] } },
+    { type: "assistant", uuid: "a1", message: { role: "assistant", content: [edit] } },
+  ];
+  const uses = lib.toolUses(records);
+  assert.equal(uses.length, 1);
+  // A blob has no uuid, so a lookup by it would take a real edit for one off the main path.
+  assert.equal(uses[0].record.uuid, "a1");
+});
