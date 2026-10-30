@@ -744,6 +744,16 @@ test("a redirect or a tee inside a quoted argument writes nothing, unless the co
   }
 });
 
+test("a here-string is no heredoc: the line after it is not its body", () => {
+  const read = "tr a b <<< hello\ncat .env";
+  assert.equal(throughCall("Bash", { command: read }).input.command, read);
+  assert.equal(throughCall("Bash", { command: read }).content, marker("dotenv"));
+  assert.equal(
+    throughCall("Bash", { command: "tr a b <<< hello\necho K=Zq8vR2mK9xLp > .env" }).input.command,
+    `tr a b <<< hello\n${marker("dotenv")} > .env`,
+  );
+});
+
 test("an in-place edit of a dotenv file loses its script, and stays an edit", () => {
   const m = marker("dotenv");
   const cases: [string, string, string][] = [
@@ -1326,6 +1336,10 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `echo >${" ".repeat(200_000)}.env`,
     `echo ${fill("> ")}.env`,
     `tee ${fill("a ")} .env`,
+    `${fill("<<<")} .env`,
+    `${fill("<<")} .env`,
+    `${fill("<<a ")}\n.env`,
+    `<<${" ".repeat(200_000)}.env`,
   ];
   for (const command of shapes) {
     const started = performance.now();

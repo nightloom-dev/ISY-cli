@@ -375,6 +375,12 @@ test("stops at a redirection so a heredoc write is not read as a lookup", () => 
   assert.deepEqual(shellReadPaths("cat src/a.ts 2>/dev/null"), ["src/a.ts"]);
 });
 
+test("a here-string has no body, so the lines after it still ran", () => {
+  const command = "grep -c x <<< word\nnpm run build\nword";
+  assert.equal(withoutHeredocs(command), command);
+  assert.equal(withoutHeredocs(`tr a b <<<"$x"\nnpm run build`), `tr a b <<<"$x"\nnpm run build`);
+});
+
 test("a heredoc body is not part of the command that carries it", () => {
   const command = [
     "python3 - <<'PY'",
