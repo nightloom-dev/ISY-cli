@@ -6,7 +6,7 @@ import { currentBranch, filesInHead, headSha } from "../git.js";
 import { mayWrite, parseLines, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
-import { candidateKey, readState, unseen, updateSession, withCommit } from "../state.js";
+import { candidateKey, namedBranch, readState, unseen, updateSession, withCommit } from "../state.js";
 import type { SessionState } from "../state.js";
 import type { Candidate, ParsedSession, ToolUse } from "../types.js";
 
@@ -153,7 +153,7 @@ export async function runCommit(
 
   await updateSession(newest.file.path, (current) => ({
     ...current,
-    branch: branch ?? current.branch,
+    branch: namedBranch(branch, current.branch),
     shown: [...new Set([...(current.shown ?? []), ...stage0.candidates.map(candidateKey)])],
     // What the transcript held at this commit, so a record index can later be
     // told which commit it belongs to.

@@ -809,6 +809,56 @@ test("a commit on a branch the session never worked on leaves it alone", async (
   assert.equal((await readState())[path]!.commits?.length, 2);
 });
 
+test("an upload from another checkout leaves a session on the branch its transcript names", async () => {
+  const cwd = await newRepo("isy-commit-stamp-");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  const path = await writeSession(cwd, "sess-stamp", "left-pad");
+  await onBranch(path, "feat");
+
+  // What a pre-push from a branch made for something else runs.
+  await run("git", ["switch", "-q", "-c", "elsewhere", "main"], { cwd });
+  await runUpload({ silent: true, all: true }, cwd);
+  assert.equal((await readState())[path]!.branch, "feat");
+
+  await commitFile(cwd, "README.md");
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+  assert.equal((await readState())[path]!.commits, undefined);
+});
+
+test("a detached HEAD is no branch for a session to stand on", async () => {
+  const cwd = await newRepo("isy-commit-detached-");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  const path = await writeSession(cwd, "sess-detached", "left-pad");
+  await onBranch(path, "feat");
+  await commitFile(cwd, "own.txt");
+  await runCommit({ noUpload: true }, cwd);
+
+  // The agent commits on a detached HEAD: a mark, and the session stays where it was.
+  await run("git", ["checkout", "-q", "--detach"], { cwd });
+  const now = new Date().toISOString();
+  await appendTurn(path, "sess-detached", shell("t-try", "git commit -m try"), now);
+  await commitFile(cwd, "try.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  let state = (await readState())[path]!;
+  assert.equal(state.commits?.length, 2);
+  assert.equal(state.branch, "feat");
+
+  // So a commit long after, on a branch it never saw, is still someone else's.
+  await writeFile(path, (await readFile(path, "utf8")).replaceAll(now, OLD));
+  await run("git", ["switch", "-q", "-c", "unrelated", "main"], { cwd });
+  await commitFile(cwd, "README.md");
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+
+  // An upload from one stores nothing either, for a session that names no branch.
+  const bare = await newRepo("isy-commit-detached-bare-");
+  const barePath = await writeSession(bare, "sess-detached-bare", "left-pad");
+  await run("git", ["checkout", "-q", "--detach"], { cwd: bare });
+  await runUpload({ silent: true, all: true }, bare);
+  state = (await readState())[barePath]!;
+  assert.ok(state.uploadedHash);
+  assert.equal(state.branch, undefined);
+});
+
 test("a commit on a new branch holding what the session left uncommitted is its own", async () => {
   const cwd = await newRepo("isy-commit-carried-");
   const path = await writeSession(cwd, "sess-carried", "left-pad");

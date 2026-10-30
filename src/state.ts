@@ -49,9 +49,11 @@ export interface SessionState {
   commits?: CommitMark[];
   /**
    * The branch this session belongs to, for telling its commits from someone
-   * else's: where its first upload found it, then where its latest mark landed.
+   * else's: the one its transcript names at its first upload, then where its
+   * latest mark landed. The checkout only stands in where the transcript names
+   * none, as with Codex and Kimi: an upload runs from wherever a push was made.
    * Not simply the last branch it was seen on, because a resume that only reads
-   * moves nothing, and Codex and Kimi record no branch at all.
+   * moves nothing.
    */
   branch?: string;
   /** Last write to this entry, for pruning. */
@@ -202,6 +204,15 @@ function keyWithIndex(candidate: Candidate): string {
     candidate.toolUseId ?? "",
     candidate.recordIndex,
   ].join("\x00");
+}
+
+/**
+ * The first of these that names a branch, for `SessionState.branch`. A detached
+ * HEAD names none: stored, it read as no branch known (`commit.ts:isItsCommit`),
+ * and every commit made anywhere after it passed as the session's.
+ */
+export function namedBranch(...candidates: (string | undefined)[]): string | undefined {
+  return candidates.find((name) => name !== undefined && name !== "HEAD");
 }
 
 /** Candidates this session has not printed before. */

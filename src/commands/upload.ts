@@ -24,7 +24,7 @@ import {
 import { updateNotice } from "../update.js";
 import { planNotice } from "../plan.js";
 import type { PlanStatus } from "../plan.js";
-import { looksUnchanged, readState, updateSession } from "../state.js";
+import { looksUnchanged, namedBranch, readState, updateSession } from "../state.js";
 import { sessionFingerprint } from "../subagents.js";
 import type { ClientState, CommitMark } from "../state.js";
 
@@ -91,7 +91,7 @@ export async function buildPayload(
   git: GitMetadata,
   options: { extraPatterns?: readonly string[]; cwd?: string; commits?: CommitMark[] },
   fallbackSessionId: string,
-): Promise<UploadPayload | undefined> {
+): Promise<{ payload: UploadPayload; gitBranch?: string } | undefined> {
   // Whatever the CLI's native format, this comes back Claude-record shaped:
   // the server re-parses the upload with the same parseLines (cascade.ts).
   const lines = await agent.redactedLines(transcriptPath, options);
@@ -104,16 +104,19 @@ export async function buildPayload(
   const now = new Date().toISOString();
 
   return {
-    sessionId: session.sessionId ?? fallbackSessionId,
-    agent: agent.id,
-    contentHash,
-    startedAt: session.meta.startedAt ?? now,
-    endedAt: session.meta.endedAt ?? now,
-    claudeVersion: session.meta.claudeVersion ?? "unknown",
-    isyVersion: await packageVersion(),
-    git,
-    transcript,
-    ...(options.commits && options.commits.length > 0 ? { commits: options.commits } : {}),
+    gitBranch: session.meta.gitBranch,
+    payload: {
+      sessionId: session.sessionId ?? fallbackSessionId,
+      agent: agent.id,
+      contentHash,
+      startedAt: session.meta.startedAt ?? now,
+      endedAt: session.meta.endedAt ?? now,
+      claudeVersion: session.meta.claudeVersion ?? "unknown",
+      isyVersion: await packageVersion(),
+      git,
+      transcript,
+      ...(options.commits && options.commits.length > 0 ? { commits: options.commits } : {}),
+    },
   };
 }
 
@@ -288,7 +291,7 @@ async function sendOne(
   fallbackSessionId: string,
   report: UploadReport,
 ): Promise<void> {
-  const payload = await buildPayload(
+  const built = await buildPayload(
     target.agent,
     target.path,
     git,
@@ -301,7 +304,8 @@ async function sendOne(
     },
     fallbackSessionId,
   );
-  if (!payload) return;
+  if (!built) return;
+  const { payload, gitBranch } = built;
 
   if (await isAbandoned(payload.sessionId, payload.contentHash)) {
     report.skipped = `session ${payload.sessionId} was given up on after ${MAX_ATTEMPTS} attempts`;
@@ -323,7 +327,7 @@ async function sendOne(
       ...current,
       uploadedHash: payload.contentHash,
       uploadedCommit: payload.commits?.at(-1)?.sha,
-      branch: current.branch ?? git.branch,
+      branch: namedBranch(current.branch, gitBranch, git.branch),
       ...seen,
     }));
     await updateConfig({ lastUploadAt: new Date().toISOString() });
