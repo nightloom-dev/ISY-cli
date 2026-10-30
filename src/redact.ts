@@ -488,6 +488,9 @@ const REDIRECT_PAST_QUOTES = new RegExp(String.raw`'[^']*(?:'|$)|"(?:[^"\\]|\\[\
  */
 const TEXT_ARGUMENTS = /^\s*(?:echo|printf|grep|egrep|fgrep|rg|git\s+(?:commit|tag|log|grep)|gh)(?:\s|$)/i;
 
+/** `git commit -m "$(cat <<'EOF'`: what such a heredoc holds is a message. */
+const TAKES_MESSAGE = /^\s*(?:git\s+(?:commit|tag)|gh)\s/;
+
 /** The dotenv file a statement redirects or tees into, if it writes one. */
 function dotenvTarget(statement: string): string | undefined {
   // `>|` overrides `noclobber` and is no pipe.
@@ -601,7 +604,8 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
       continue;
     }
     // A body is code as often as not, where `cfg.env` is a property and not a file.
-    const namesDotenv = body.some((line) => line.split(WORD_BREAK).some((word) => basename(word).startsWith(".env")));
+    const message = commandSegments(parts.find((part) => HEREDOC.test(part))!).every((segment) => TAKES_MESSAGE.test(segment));
+    const namesDotenv = !message && body.some((line) => line.split(WORD_BREAK).some((word) => basename(word).startsWith(".env")));
     kept.push(...(namesDotenv ? [marker("dotenv")] : body), ...lines.slice(end, end + 1));
     i = end;
   }

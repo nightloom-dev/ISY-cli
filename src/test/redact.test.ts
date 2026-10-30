@@ -810,6 +810,30 @@ test("a redirect or a tee inside a quoted argument writes nothing, unless the co
   }
 });
 
+test("a commit or pull request's message in a heredoc only says the word, and a script in one still reads the file", () => {
+  for (const command of [
+    `git commit -m "$(cat <<'EOF'\nStop tracking .env\nEOF\n)"`,
+    `git add a && git commit -m "$(cat <<'EOF'\nStop tracking .env\nEOF\n)"`,
+    `gh pr create --title x --body "$(cat <<'EOF'\nStop tracking .env\nEOF\n)"`,
+    "git commit -F - <<EOF\nStop tracking .env\nEOF",
+  ]) {
+    const out = throughCall("Bash", { command }, "plain output");
+    assert.equal(out.input.command, command);
+    assert.equal(out.content, "plain output");
+  }
+  const m = marker("dotenv");
+  for (const [command, expected] of [
+    ["python3 - <<'PY'\nprint(open('.env').read())\nPY", `python3 - <<'PY'\n${m}\nPY`],
+    ["gh api /x | python3 - <<'PY'\nprint(open('.env').read())\nPY", `gh api /x | python3 - <<'PY'\n${m}\nPY`],
+    ["git log | sh <<'EOF'\ncat .env\nEOF", `git log | sh <<'EOF'\n${m}\nEOF`],
+    [`git commit -m x; sh <<'EOF'\ncat .env\nEOF`, `git commit -m x; sh <<'EOF'\n${m}\nEOF`],
+  ] as const) {
+    const out = throughCall("Bash", { command }, "MAILER_PHRASE=Zq8vR2mK9xLp");
+    assert.equal(out.input.command, expected);
+    assert.equal(out.content, m, command);
+  }
+});
+
 test("a here-string is no heredoc: the line after it is not its body", () => {
   const read = "tr a b <<< hello\ncat .env";
   assert.equal(throughCall("Bash", { command: read }).input.command, read);
