@@ -80,7 +80,7 @@ const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\([^\s"'{}[\]<>()]*\)?[,;]?(?=[\
  * A `$` or a bracket inside belongs to the value (`abc$REST123`, `abc(def)ghi1`), as
  * a password takes any character. They end it only where they start something
  * else: `$PASSWORD` and `$(cat f)` at the front, unless single quotes make that
- * `$` literal, `prefix${X}`, and a call, of which only a long name goes, as ever.
+ * `$` literal, `prefix${X}`, and a call, of which only a name long enough to be a value goes.
  */
 const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?!${CALL})(?:${VALUE_CHAR}|(?<=')\$)(?:${VALUE_CHAR}|[$()](?=[^\s"'{}[\]<>])){7,}|${VALUE_CHAR}{8,})`;
 

@@ -204,7 +204,7 @@ test("masks an assigned secret whole when it holds a dollar sign or a bracket", 
   ]) {
     assert.equal(redactOne(text), text);
   }
-  // A call's long name goes, and what it is called with stays, as it always has.
+  // A call's long name goes, and what it is called with stays.
   assert.equal(redactOne("token: getToken()"), `token: ${m}()`);
 });
 
