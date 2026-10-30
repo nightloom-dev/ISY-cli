@@ -863,13 +863,18 @@ test("a background command's task goes the way of the command", () => {
     ...followed("t5", "KillShell", { shell_id: "bg1" }, command),
     ...started("t6", "bg2", "npm run dev"),
     ...followed("t7", "TaskStop", { task_id: "bg2" }, "npm run dev"),
+    // The file its output lands in is read back as often as the task is asked.
+    ...followed("t8", "Bash", { command: "tail -5 /tmp/tasks/bg1.output" }, command),
+    ...followed("t9", "Read", { file_path: "/tmp/tasks/bg1.output" }, command),
+    ...followed("t10", "Bash", { command: "tail -5 /tmp/tasks/bg2.output" }, "npm run dev"),
+    ...followed("t11", "Read", { file_path: "/tmp/tasks/bg2.output" }, "npm run dev"),
   ]);
   const out = lines.map((line) => JSON.parse(line) as { message: { content: { content: string }[] }; toolUseResult: unknown });
-  for (const i of [3, 5, 7, 9]) {
+  for (const i of [3, 5, 7, 9, 15, 17]) {
     assert.equal(out[i]!.message.content[0]!.content, marker("dotenv"));
     assert.equal(out[i]!.toolUseResult, marker("dotenv"));
   }
-  assert.equal(out[13]!.message.content[0]!.content, "stopped npm run dev");
+  for (const i of [13, 19, 21]) assert.equal(out[i]!.message.content[0]!.content, "stopped npm run dev");
   assert.ok(!lines.join("\n").includes(value));
 });
 
@@ -1545,6 +1550,11 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `cat > .env <<EOF\n${fill("$a")}\nEOF`,
     `cat > .env <<EOF\n${fill("a=$a")}\nEOF`,
     `cat > .env <<EOF\n${fill("$a=\n")}EOF`,
+    `tail ${"a".repeat(200_000)}`,
+    `tail ${"a".repeat(200_000)}.outpu .env`,
+    `tail ${fill("a.outpu ")}`,
+    `tail ${fill("a.output.")}`,
+    `tail ${fill("-")}.output`,
   ];
   for (const command of shapes) {
     const started = performance.now();

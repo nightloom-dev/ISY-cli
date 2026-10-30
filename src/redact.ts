@@ -676,6 +676,18 @@ function scanBashMode(message: Record<string, unknown>, content: string, context
   count(context, "dotenv", 1);
 }
 
+/** Where a background command's output also lands: `tail -f …/tasks/<id>.output`, `Read {file_path}`. */
+const TASK_OUTPUT = /(?<![\w-])([\w-]+)\.output\b/g;
+
+/** Whether a call goes on with a cut background command, by stopping it or reading what it printed. */
+function followsCutTask(input: Record<string, unknown>, context: RedactContext): boolean {
+  const tasks = [input.task_id, input.shell_id, input.bash_id];
+  for (const text of [input.file_path, input.command]) {
+    if (typeof text === "string") tasks.push(...[...text.matchAll(TASK_OUTPUT)].map((match) => match[1]));
+  }
+  return tasks.some((task) => typeof task === "string" && context.envToolUseIds.has(task));
+}
+
 function scanDotenv(record: Record<string, unknown>, context: RedactContext): void {
   const message = record.message;
   const content = isObject(message) ? message.content : undefined;
@@ -696,9 +708,7 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
       }
       const named = callNamesDotenv(block.name, input);
       if (named) cutDotenvInput(input, context);
-      const task = input.task_id ?? input.shell_id ?? input.bash_id;
-      const followsCut = typeof task === "string" && context.envToolUseIds.has(task);
-      if ((named || cut !== command || readsDotenv(command) || followsCut) && typeof block.id === "string") {
+      if ((named || cut !== command || readsDotenv(command) || followsCutTask(input, context)) && typeof block.id === "string") {
         context.envToolUseIds.add(block.id);
       }
     }
