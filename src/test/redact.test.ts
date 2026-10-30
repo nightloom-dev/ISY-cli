@@ -255,6 +255,55 @@ test("masks a value under PASS, PWD and the other names a credential goes by, no
   }
 });
 
+test("one of these words alone, spaced from a plain word, names nothing: test output, prose and code stay", () => {
+  for (const text of [
+    "--- PASS: TestParserKeepsHeredocs (0.01s)",
+    "    --- PASS: TestV2Parser/heredoc_case (0.00s)",
+    "PASS: src/foo/bar.test.ts",
+    "PASS: test-suite-12345678",
+    "First pass: everything compiles",
+    "tests pass: everything green",
+    "pass: undefined,",
+    "pass = compute_something(x)",
+    "pass: process.env.SMTP_PASS",
+    "auth: requireAuthentication,",
+    "const auth = getAuthentication();",
+    "export const auth = betterAuth({",
+    "Auth: Required",
+    "auth:\n  required_everywhere",
+    "credential = getCredential()",
+    "credentials: path/to/file.json",
+    "cookie: SerializedCookie | undefined,",
+    "const cookie = parseCookie(req);",
+    "cookie = req.headers.cookie;",
+    "const cookie = req.headers.cookie ?? '';",
+    "if (cookie == null) return next();",
+    "if (cookie === undefined) return next();",
+    "Cookie: required for the session flow",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    ["pass: hunter2000", `pass: ${m}`],
+    [`pass: "sunshine"`, `pass: "${m}"`],
+    ["pass: 'sunshine'", `pass: '${m}'`],
+    ["pass=sunshine", `pass=${m}`],
+    ["PASS=sunshine", `PASS=${m}`],
+    ["smtp_pass: sunshine", `smtp_pass: ${m}`],
+    ["auth: dXNlcjpwYXNz1", `auth: ${m}`],
+    [`"auth": "dXNlcjpwYXNz"`, `"auth": "${m}"`],
+    ["AUTH=dXNlcjpwYXNz", `AUTH=${m}`],
+    [`credentials: "dXNlcjpwYXNz"`, `credentials: "${m}"`],
+    ["cookie: abcdefgh1", `cookie: ${m}`],
+    [`"cookie": "abcdefgh"`, `"cookie": "${m}"`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+  }
+});
+
 test("masks what an Authorization or Cookie header carries, whatever its scheme or length", () => {
   const auth = marker("authorization");
   const bearer = marker("bearer_token");
@@ -1353,6 +1402,18 @@ test("every rule gets through text shaped almost like what it matches", () => {
     fill("_pwd"),
     fill("auth-"),
     fill("cookie."),
+    fill("pass: "),
+    fill("pass: a"),
+    fill("pass:"),
+    `pass: ${"a".repeat(200_000)}1`,
+    `pass:${" ".repeat(200_000)}a1`,
+    fill("auth = "),
+    fill("auth ="),
+    fill("cookie: a"),
+    fill("cookie: a="),
+    fill("cookie:a"),
+    `cookie: ${"a".repeat(200_000)}=`,
+    `cookie: a=${"a".repeat(200_000)}`,
     fill("PASSWORD=a$"),
     fill("PASSWORD=a("),
     fill("password=aaaaaaaa("),

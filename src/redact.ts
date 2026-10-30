@@ -57,6 +57,15 @@ const PLAIN_NAME = secretName("(?!(?<=[a-z0-9])[A-Z])");
 /** `adminPassword`, `_authToken`: as often a variable in code as a key in a file. */
 const CAMEL_NAME = secretName("(?<=[a-z0-9])(?=[A-Z])");
 
+/**
+ * `First pass: everything compiles`, `--- PASS: TestParser`, `auth: requireAuth`,
+ * `const cookie = parseCookie(req)`: alone, these words are all over prose, code and
+ * test output, so alone and spaced from a value with no digit and no quote they name
+ * nothing. A secret has a name in front (`SMTP_PASS: …`), a quote or a digit, or
+ * takes its `=` with no space.
+ */
+const NOT_SAID_IN_PASSING = String.raw`(?!PASS:[ \t]|(?:${anyCase("pass|auth|credentials?|cookie")})["']?\s*[=:]\s+(?!["'])[^\d\s]*(?:\s|$))`;
+
 const VALUE_CHAR = String.raw`[^\s"'{}()[\]<>$]`;
 /** `hash(input)`, `foo.bar(baz),`: a call, which in quotes is a password with a bracket in it. */
 const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\([^\s"'{}[\]<>()]*\)?[,;]?(?=[\s"'{}[\]<>]|$)`;
@@ -151,8 +160,9 @@ export const BUILTIN_RULES: RedactionRule[] = [
   },
   {
     // A cookie header's value runs to the end of the line, spaces and `;` included.
+    // It opens with a name and `=`, which `cookie == null` and `cookie = jar.get()` do not.
     type: "cookie",
-    pattern: /\b(cookie["'`]?[ \t]*[:=][ \t]*["'`]?)(?!\[ISY_REDACTED)(?![\s$<{])[^"'`\r\n]{8,}/gi,
+    pattern: /\b(cookie["'`]?[ \t]*[:=][ \t]*["'`]?)(?!\[ISY_REDACTED)(?=[^\s"'`=;,$<{]{1,256}=[^=])[^"'`\r\n]{8,}/gi,
     replacement: `$1${marker("cookie")}`,
   },
   {
@@ -176,7 +186,7 @@ export const BUILTIN_RULES: RedactionRule[] = [
   {
     // The name may close a quote of its own: `"password": "…"`.
     type: "assignment",
-    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])(${PLAIN_NAME})(["']?\s*[=:]\s*)(["']?)${SECRET_VALUE}`, "g"),
+    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])${NOT_SAID_IN_PASSING}(${PLAIN_NAME})(["']?\s*[=:]\s*)(["']?)${SECRET_VALUE}`, "g"),
     replacement: `$1$2$3${marker("assignment")}`,
   },
   {
