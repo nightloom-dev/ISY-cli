@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseLines } from "../parser.js";
 import {
+  LOG_ONLY_CATCHES,
   detectAbandonedApproach,
   detectDestructiveCommand,
   detectErrorSuppressed,
@@ -665,6 +666,119 @@ test("a check whose failure is thrown away is a signal, a cleanup line is not", 
 
   const cleanup = padded([edited("e1", "pad19", "/repo/src/a.ts"), ran("b", "e1", "pkill node || true")]);
   assert.deepEqual(detectErrorSuppressed(cleanup), []);
+});
+
+/** `content` written over a file, right after a command that failed or, with `failing` off, passed. */
+function writtenAfterCheck(content: string, failing = true, filePath = "/repo/src/config.js"): ParsedSession {
+  return padded([
+    ran("b", "pad19", "npm run check"),
+    result("br", "b", "bash-b", { toolUseResult: { stdout: failing ? "check FAILED" : "all good", stderr: "" } }),
+    assistant("w", "br", [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: filePath, content } }]),
+  ]);
+}
+
+test("a catch left only logging right after a failing command is a signal", () => {
+  const swallowed = [
+    // What gets a release gate green over a broken config.
+    `export function loadConfig(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    // TEMP: the file is truncated upstream.
+    console.warn(\`WARNING: cannot load \${path}: \${err.message}\`);
+    return null;
+  }
+}`,
+    "try { x(); } catch { logger.error('no'); }",
+    "try { x(); } catch (e) {\n  console.error(\n    `long message ${e.message}`,\n    e,\n  );\n  return [];\n}",
+    "try { x(); } catch (IOException e) {\r\n  log.warn(\"x\", e);\r\n  return;\r\n}",
+  ];
+  for (const content of swallowed) {
+    const found = detectErrorSuppressed(writtenAfterCheck(content));
+    assert.equal(found.length, 1, content);
+    assert.equal(found[0]!.detail, "an exception is caught and only logged, shortly after a failing command");
+    assert.equal(found[0]!.weight, 0.7);
+  }
+
+  const python = "try:\n    x()\nexcept ValueError as e:\n    # note\n    logger.warning('x %s', e)\n    return None\n";
+  assert.equal(detectErrorSuppressed(writtenAfterCheck(python, true, "/repo/src/config.py")).length, 1);
+});
+
+test("a catch that only logs is everyday code with no failure before it", () => {
+  const content = "try { x(); } catch (e) { console.warn(e); return null; }";
+  assert.deepEqual(detectErrorSuppressed(writtenAfterCheck(content, false)), []);
+});
+
+test("a catch that does something with the failure is no signal, even right after one", () => {
+  const handled = [
+    "try { x(); } catch (e) { console.warn(e); throw e; }",
+    "try { x(); } catch (e) { console.error(e); process.exit(1); }",
+    "try { x(); } catch (e) { console.warn(e); doMore(); return null; }",
+    "try { x(); } catch (e) { console.warn(e)\n  doMore()\n}",
+    "try { x(); } catch (e) { logger.error(e); return { ok: false, error: e }; }",
+    "try { x(); } catch { return undefined; }",
+    "promise.catch(report);",
+  ];
+  for (const content of handled) assert.deepEqual(detectErrorSuppressed(writtenAfterCheck(content)), [], content);
+
+  for (const content of [
+    "except ValueError as e:\n    logger.warning(e)\n    raise\n",
+    "except ValueError as e:\n    logger.warning(e)\n    return compute()\n",
+    "except ValueError as e:\n    logger.warning(e)\n    retry()\n    return None\n",
+    "except ValueError:\n    return None\n",
+  ]) {
+    assert.deepEqual(detectErrorSuppressed(writtenAfterCheck(content, true, "/repo/src/config.py")), [], content);
+  }
+
+  // Already there before the edit: not what this edit did about the failure.
+  const kept = "try { x(); } catch (e) { console.warn(e); return null; }";
+  const session = padded([
+    ran("b", "pad19", "npm run check"),
+    result("br", "b", "bash-b", { toolUseResult: { stdout: "check FAILED", stderr: "" } }),
+    assistant("e", "br", [
+      { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/repo/src/a.js", old_string: `${kept}\nold();`, new_string: `${kept}\nnew();` } },
+    ]),
+  ]);
+  assert.deepEqual(detectErrorSuppressed(session), []);
+
+  // A test file has its own category.
+  assert.deepEqual(detectErrorSuppressed(writtenAfterCheck(kept, true, "/repo/src/config.test.js")), []);
+});
+
+test("the rules for a catch that only logs get through 200 KB of text built to stall them", () => {
+  const size = 200_000;
+  const fill = (unit: string): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+  const shapes = [
+    `catch${" ".repeat(size)}`,
+    `catch${"\n".repeat(size)}`,
+    fill("catch("),
+    `catch(x)${" ".repeat(size)}`,
+    `catch{${" ".repeat(size)}`,
+    `catch{${"//".repeat(size / 2)}`,
+    `catch{// ${fill("// ")}\n`,
+    `catch{${fill("// x\n")}`,
+    fill("catch{console.log("),
+    `catch{console.log(${"\n".repeat(size)}`,
+    `catch{console.log(${")".repeat(size)}`,
+    `catch{console.log(x)${" ".repeat(size)}`,
+    `catch{console.log(x);return${" ".repeat(size)}`,
+    `catch{console.log(x);return null${" ".repeat(size)}`,
+    fill("except:\n"),
+    `except${" ".repeat(size)}`,
+    `except:\n${fill("    # x\n")}`,
+    fill("except:\nprint("),
+    `except:\nprint(${")".repeat(size)}`,
+    `except:\nprint(x)\nreturn${" ".repeat(size)}`,
+    `${" ".repeat(size)}except`,
+  ];
+  for (const text of shapes) {
+    for (const { pattern } of LOG_ONLY_CATCHES) {
+      const started = performance.now();
+      text.match(pattern);
+      const took = performance.now() - started;
+      assert.ok(took < 1000, `took ${Math.round(took)}ms on ${JSON.stringify(text.slice(0, 24))}…`);
+    }
+  }
 });
 
 test("a recursive delete is reported, unless the path grows back on its own", () => {

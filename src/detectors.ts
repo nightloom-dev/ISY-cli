@@ -862,11 +862,32 @@ const SUPPRESSORS: { pattern: RegExp; detail: string }[] = [
   { pattern: /rescue\s*(?:=>\s*\w+\s*)?\n\s*end\b/g, detail: "an exception is caught and dropped" },
 ];
 
+/**
+ * A catch that only logs, and returns nothing much if it returns at all: the
+ * failure is still there, and the check that reported it goes green. Everyday
+ * code otherwise, so these count only right after a failing command. Python's
+ * needs the return: read line by line, a log call alone could be the start of a
+ * real handler. Whole files go through these, so every run is bounded or has one
+ * way to match.
+ */
+export const LOG_ONLY_CATCHES: { pattern: RegExp; detail: string }[] = [
+  {
+    pattern:
+      /\bcatch\s*(?:\([^)]{0,200}\)\s*)?\{(?:\s*\/\/[^\n]*\n)*\s*(?:this\.)?(?:console|logger|log)\.(?:warn|warning|error|info|debug|log)\((?:[^;\n]{0,400}|[ \t]*\n[^;]{0,400}\n[ \t]*)\)(?:\s*;)?\s*(?:return(?:\s+(?:null|undefined|false|\[\]|\{\}))?(?:\s*;)?\s*)?\}/g,
+    detail: "an exception is caught and only logged",
+  },
+  {
+    pattern:
+      /^[ \t]*except\b[^\n:]{0,200}:[ \t]*(?:#[^\n]*)?\n(?:[ \t]*#[^\n]*\n)*[ \t]*(?:print|(?:self\.)?(?:logger|logging|log)\.(?:warning|warn|error|info|debug|exception)|warnings\.warn)\([^\n]{0,400}\)[ \t]*\n[ \t]*return(?:[ \t]+(?:None|False|\[\]|\{\}))?[ \t]*(?:#[^\n]*)?$/gm,
+    detail: "an exception is caught and only logged",
+  },
+];
+
 /** `|| true` on a check, and the flags that walk past a failing hook. */
 const SUPPRESSING_FLAG = /--no-verify\b|--ignore-errors\b|--exit-zero\b/;
 
-function suppressionAdded(oldString: string, newString: string): string | undefined {
-  for (const { pattern, detail } of SUPPRESSORS) {
+function suppressionAdded(oldString: string, newString: string, rules = SUPPRESSORS): string | undefined {
+  for (const { pattern, detail } of rules) {
     // Counted, not tested: an edit that keeps one suppression and adds a second
     // is still an addition, and the file may have arrived with one already.
     if (countMatches(newString, pattern) > countMatches(oldString, pattern)) return detail;
@@ -886,7 +907,8 @@ export function detectErrorSuppressed(session: ParsedSession): Candidate[] {
       const after = edit.newString ?? edit.content ?? "";
       if (after.length === 0) continue;
 
-      const reason = suppressionAdded(before, after);
+      const logOnly = suppressionAdded(before, after, LOG_ONLY_CATCHES);
+      const reason = suppressionAdded(before, after) ?? (logOnly && failedBefore(session, edit.recordIndex) ? logOnly : undefined);
       if (!reason) continue;
 
       const failure = failedBefore(session, edit.recordIndex);
