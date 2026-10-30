@@ -33,6 +33,7 @@ finds on the machine, so from there on nothing has to be run by hand.
 | `isy analyze <dir>` | Run the local detectors over transcripts, upload nothing |
 | `isy settings` | Read or write the analysis settings on your account |
 | `isy health --scan` | Where this machine keeps agent sessions |
+| `isy --version` | The installed version |
 | `isy logout` | Forget the key on this machine and take the hooks out; revoke the key itself at iseeyaai.com/settings/api_keys |
 
 `isy analyze` is the whole first stage of the pipeline and it runs offline —

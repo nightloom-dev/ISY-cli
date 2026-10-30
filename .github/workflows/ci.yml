@@ -50,6 +50,7 @@ jobs:
           npm init -y > /dev/null
           npm install --no-audit --no-fund "$RUNNER_TEMP"/nightloom-isy-*.tgz
           ./node_modules/.bin/isy --help > /dev/null
+          test "$(./node_modules/.bin/isy --version)" = "$(node -p 'require("@nightloom/isy/package.json").version')"
           node --input-type=module -e '
             import { createRequire } from "node:module";
             const { exports } = createRequire(import.meta.url)("@nightloom/isy/package.json");

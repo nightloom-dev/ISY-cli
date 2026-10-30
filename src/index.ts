@@ -14,6 +14,7 @@ import { runSettings } from "./commands/settings.js";
 import { runStatus } from "./commands/status.js";
 import { formatUploadAlert, formatUploadReport, runUpload } from "./commands/upload.js";
 import { errorMessage, logError } from "./log.js";
+import { packageVersion } from "./paths.js";
 import { spawnIsy } from "./spawn.js";
 
 const COMMANDS = new Set([
@@ -39,7 +40,8 @@ const USAGE =
   "       isy notes [--pr <number>] [--json]\n" +
   "       isy settings [set|unset <key> [value]] [--json]\n" +
   "       isy analyze <file.jsonl|directory>... [--stage 0] [--json]\n" +
-  "                   [--expect <dir>] [--update]";
+  "                   [--expect <dir>] [--update]\n" +
+  "       isy --version";
 
 const silentRequested =
   process.argv.includes("--silent") || process.argv.includes("--hook");
@@ -69,6 +71,7 @@ function parse() {
         scan: { type: "boolean", default: false },
         pr: { type: "string" },
         help: { type: "boolean", short: "h", default: false },
+        version: { type: "boolean", short: "v", default: false },
       },
     });
   } catch (error) {
@@ -213,8 +216,13 @@ const { values, positionals } = parse();
 const silent = values.silent;
 const command = positionals[0] ?? "status";
 
-if (values.help) {
+if (values.help || command === "help") {
   console.log(USAGE);
+  process.exit(0);
+}
+
+if (values.version || command === "version") {
+  console.log(await packageVersion());
   process.exit(0);
 }
 

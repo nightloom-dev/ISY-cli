@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
+import { promisify } from "node:util";
 import { readConfig, updateConfig, writeConfig } from "../config.js";
 import { collectStatus, formatStatus } from "../commands/status.js";
 import { findSessions, projectSlug, queueDir } from "../paths.js";
@@ -146,4 +148,14 @@ test("reports a directory with no recorded sessions", async () => {
   assert.equal(report.project.sessions, 0);
   assert.equal(report.latestSession, undefined);
   assert.match(formatStatus(report), /no Claude Code sessions recorded/);
+});
+
+test("answers --version, -v and version with the package's version, and help with the usage", async () => {
+  const entry = join(import.meta.dirname, "..", "index.ts");
+  const run = async (arg: string) =>
+    (await promisify(execFile)(process.execPath, ["--import", import.meta.resolve("tsx"), entry, arg])).stdout;
+  const { version } = JSON.parse(await readFile(join(import.meta.dirname, "..", "..", "package.json"), "utf8"));
+
+  for (const arg of ["--version", "-v", "version"]) assert.equal(await run(arg), `${version}\n`);
+  assert.match(await run("help"), /^Usage: isy /);
 });
