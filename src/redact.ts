@@ -32,12 +32,12 @@ function anyCase(source: string): string {
 /**
  * `pass` and `pwd` count only as a word of their own, as `compass`, `bypass`, and the
  * shell's `PWD` and `OLDPWD` are all over a transcript: `DB_PASS`, `db-pass`, `dbPass`,
- * `DB_PWD`, `Uid=sa;Pwd=…`.
+ * `DB_PWD`, `jdbc.pwd`, `Uid=sa;Pwd=…`.
  */
 const SECRET_WORD = [
   anyCase("password|passwd|passphrase|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|credentials?|authorization|auth|cookie"),
   `(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?<![bB][yY])(?=[A-Z]))${anyCase("pass")}`,
-  `(?:(?<=[;_])|(?<=[a-z0-9])(?=[A-Z]))${anyCase("pwd")}`,
+  `(?:(?<=[;_]|[A-Za-z0-9][.-])|(?<=[a-z0-9])(?=[A-Z]))${anyCase("pwd")}`,
 ].join("|");
 
 /**
