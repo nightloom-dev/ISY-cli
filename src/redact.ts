@@ -265,8 +265,11 @@ function dotenvTarget(statement: string): string | undefined {
   return undefined;
 }
 
-/** A line cut where `&&`, `||` or `;` end a statement outside quotes, the separators kept. */
-function statements(line: string): string[] {
+/**
+ * A line cut where `&&`, `||` or `;` end a statement outside quotes, the
+ * separators kept, and whether a quote is still open where the line ends.
+ */
+function statements(line: string): { parts: string[]; open: boolean } {
   const parts: string[] = [];
   let start = 0;
   let quote: string | undefined;
@@ -284,8 +287,11 @@ function statements(line: string): string[] {
     }
   }
   parts.push(line.slice(start));
-  return parts;
+  return { parts, open: quote !== undefined };
 }
+
+/** A write that closes a group or a substitution: `{ …; } > .env`, `(…) | tee .env`. */
+const GROUP_WRITE = /[})]\s*(?:\d?>|&>|\|)/;
 
 /**
  * `cat > .env << 'EOF'`, `echo "KEY=…" >> .env.local`, `… | tee .env`: a shell
@@ -299,14 +305,20 @@ function cutDotenvWrites(command: string): string {
   if (!command.includes(".env")) return command;
   const lines = command.split("\n");
   const kept: string[] = [];
+  let written: string | undefined;
+  let spread = false;
   for (let i = 0; i < lines.length; i += 1) {
     let writes = false;
+    const { parts, open } = statements(lines[i]!);
+    if (open) spread = true;
     kept.push(
-      statements(lines[i]!)
+      parts
         .map((part) => {
           const target = dotenvTarget(part);
           if (target === undefined) return part;
           writes = true;
+          written ??= target;
+          if (GROUP_WRITE.test(part)) spread = true;
           return `${/^\s*/.exec(part)![0]}${marker("dotenv")} > ${target}`;
         })
         .join(""),
@@ -324,6 +336,10 @@ function cutDotenvWrites(command: string): string {
     kept.push(...(namesDotenv ? [marker("dotenv")] : body), ...lines.slice(end, end + 1));
     i = end;
   }
+  // A group or a quoted string over several lines holds the values outside the
+  // statement that names the file (`{ echo A=1; echo B=2; } > .env`), so the
+  // whole command goes, and only the write is left for the parse to see.
+  if (written !== undefined && spread) return `${marker("dotenv")} > ${written}`;
   return kept.join("\n");
 }
 

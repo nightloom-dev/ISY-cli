@@ -290,6 +290,11 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     ["cd app && sed -i 's/a/b/' src/a.ts && printf 'DB_PASS=%s\\n' Zq8vR2mK9xLp >> config/.env.local", `cd app && sed -i 's/a/b/' src/a.ts && ${m} > config/.env.local`],
     ["echo DB_PASS=Zq8vR2mK9xLp | sudo tee -a .env", `${m} > .env`],
     ["Set-Content -Path .env -Value 'DB_PASS=Zq8vR2mK9xLp'", `${m} > .env`],
+    // The values sit outside the statement that names the file.
+    ["{ echo DB_PASS=Zq8vR2mK9xLp; echo APP=Zq8vR2mK9xLp; } > .env", `${m} > .env`],
+    ["(echo DB_PASS=Zq8vR2mK9xLp; echo APP=Zq8vR2mK9xLp) | tee .env", `${m} > .env`],
+    ["{\n  echo DB_PASS=Zq8vR2mK9xLp\n  echo APP=Zq8vR2mK9xLp\n} > .env", `${m} > .env`],
+    ['echo "DB_PASS=Zq8vR2mK9xLp\nAPP=Zq8vR2mK9xLp" > .env', `${m} > .env`],
     ['node -e "console.log(process.env.DB_PASS)" > env.txt', 'node -e "console.log(process.env.DB_PASS)" > env.txt'],
   ];
   const records = cases.flatMap(([command], i) => [
