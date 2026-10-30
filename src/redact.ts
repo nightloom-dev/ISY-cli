@@ -85,6 +85,22 @@ const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\([^\s"'{}[\]<>()]*\)?[,;]?(?=[\
  */
 const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?!${CALL})(?:${VALUE_CHAR}|(?<=')\$)(?:${VALUE_CHAR}|[$()](?=[^\s"'{}[\]<>])){7,}|${VALUE_CHAR}{8,})`;
 
+/**
+ * `curl -u admin:…`, its flag alone or last among others (`-fsSLu`). What precedes
+ * the flag is capped, as every `curl` starts a new scan of the rest of its line.
+ */
+const CURL_USER_FLAG = String.raw`curl\b[^\n;|]{0,200}?\s(?:-[a-zA-Z]{0,16}[uU]\s*|--(?:proxy-)?user[=\s]\s*)`;
+/** A name may be a marker already: an address is one by now. */
+const CURL_USER = String.raw`(?:\[ISY_REDACTED:\w+\]|(?!\[ISY_REDACTED)[^\s:"']+):`;
+/**
+ * Tools that take the password on a flag of one letter, which says nothing
+ * anywhere else: `-p` is a port to `ssh`, a directory's parents to `mkdir`, and to
+ * `mysql` with a space after it only a prompt. Capped as above.
+ */
+const PASSWORD_FLAG = String.raw`(?:sshpass\b[^\n;|]{0,200}?\s-p\s*|(?:docker|podman)\s+login\b[^\n;|]{0,200}?\s-p\s+|redis-cli\b[^\n;|]{0,200}?\s-a\s+|(?:mysql|mariadb|mysqldump|mysqladmin)\b[^\n;|]{0,200}?\s-p(?=[^\s=]))`;
+/** To a closing quote named by the backreference `quote`, spaces and the other quote included. */
+const quotedTo = (quote: string): string => String.raw`(?!\[ISY_REDACTED|\$)(?:(?!${quote})[^\n]){1,400}(?=${quote})`;
+
 export const BUILTIN_RULES: RedactionRule[] = [
   {
     type: "private_key",
@@ -211,19 +227,25 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: `$1$2$3${marker("assignment")}`,
   },
   {
-    // `curl -u admin:hunter2000`. What precedes the flag is capped, as every
-    // `curl` starts a new scan of the rest of its line, and a name may be a
-    // marker already: an address is one by now.
+    // The quote opens before the name or after its colon, and only one of the two
+    // groups takes part, so together they are that one quote.
     type: "assignment",
-    pattern: /\b(curl\b[^\n;|]{0,200}?\s(?:-[uU]\s*|--(?:proxy-)?user[=\s]\s*)["']?(?:\[ISY_REDACTED:\w+\]|(?!\[ISY_REDACTED)[^\s:"']+):)(?!\[ISY_REDACTED)[^\s"'$][^\s"']*/g,
+    pattern: new RegExp(String.raw`\b(${CURL_USER_FLAG}(?:(["'])${CURL_USER}|${CURL_USER}(["'])))${quotedTo(String.raw`\2\3`)}`, "g"),
     replacement: `$1${marker("assignment")}`,
   },
   {
-    // Tools that take the password on a flag of one letter, which says nothing
-    // anywhere else: `-p` is a port to `ssh`, a directory's parents to `mkdir`,
-    // and to `mysql` with a space after it only a prompt. Capped as above.
     type: "assignment",
-    pattern: /\b((?:sshpass\b[^\n;|]{0,200}?\s-p\s*|(?:docker|podman)\s+login\b[^\n;|]{0,200}?\s-p\s+|redis-cli\b[^\n;|]{0,200}?\s-a\s+|(?:mysql|mariadb|mysqldump|mysqladmin)\b[^\n;|]{0,200}?\s-p(?=[^\s=]))["']?)(?!\[ISY_REDACTED)[^\s"'$][^\s"']*/g,
+    pattern: new RegExp(String.raw`\b(${CURL_USER_FLAG}["']?${CURL_USER})(?!\[ISY_REDACTED)[^\s"'$][^\s"']*`, "g"),
+    replacement: `$1${marker("assignment")}`,
+  },
+  {
+    type: "assignment",
+    pattern: new RegExp(String.raw`\b(${PASSWORD_FLAG}(["']))${quotedTo(String.raw`\2`)}`, "g"),
+    replacement: `$1${marker("assignment")}`,
+  },
+  {
+    type: "assignment",
+    pattern: new RegExp(String.raw`\b(${PASSWORD_FLAG}["']?)(?!\[ISY_REDACTED)[^\s"'$][^\s"']*`, "g"),
     replacement: `$1${marker("assignment")}`,
   },
 ];
