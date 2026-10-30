@@ -295,6 +295,16 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     ["(echo DB_PASS=Zq8vR2mK9xLp; echo APP=Zq8vR2mK9xLp) | tee .env", `${m} > .env`],
     ["{\n  echo DB_PASS=Zq8vR2mK9xLp\n  echo APP=Zq8vR2mK9xLp\n} > .env", `${m} > .env`],
     ['echo "DB_PASS=Zq8vR2mK9xLp\nAPP=Zq8vR2mK9xLp" > .env', `${m} > .env`],
+    // `tee` behind whatever runs it, and a target with a space in it.
+    ["echo DB_PASS=Zq8vR2mK9xLp | sudo -u app tee .env", `${m} > .env`],
+    ["echo DB_PASS=Zq8vR2mK9xLp | ssh host /usr/bin/tee app/.env", `${m} > app/.env`],
+    ["'DB_PASS=Zq8vR2mK9xLp' | Tee-Object -FilePath .env", `${m} > .env`],
+    ['echo "DB_PASS=Zq8vR2mK9xLp" > "My Projects/app/.env"', `${m} > My Projects/app/.env`],
+    ["echo DB_PASS=Zq8vR2mK9xLp > my\\ app/.env", `${m} > my app/.env`],
+    // A loop, a condition, a line that goes on in the next.
+    ["for kv in DB_PASS=Zq8vR2mK9xLp APP=Zq8vR2mK9xLp; do echo $kv; done > .env", `${m} > .env`],
+    ["if true; then echo DB_PASS=Zq8vR2mK9xLp; fi > .env", `${m} > .env`],
+    ['echo "DB_PASS=Zq8vR2mK9xLp" \\\n  >> .env', `${m} > .env`],
     ['node -e "console.log(process.env.DB_PASS)" > env.txt', 'node -e "console.log(process.env.DB_PASS)" > env.txt'],
   ];
   const records = cases.flatMap(([command], i) => [
@@ -312,6 +322,27 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
     assert.equal(call.message.content[0]!.input.command, expected);
     assert.equal(lines[i * 2 + 1]!.includes("Zq8vR2mK9xLp"), command === expected, command);
   }
+});
+
+test("cuts what a ! command typed in Claude Code printed from a dotenv file, or wrote into one", () => {
+  const turn = (content: string) => ({ type: "user", message: { role: "user", content } });
+  const { lines } = summaryFor([
+    turn("<bash-input>cat .env</bash-input>"),
+    turn("<bash-stdout>DB_PASS=Zq8vR2mK9xLp</bash-stdout><bash-stderr></bash-stderr>"),
+    turn("<bash-input>echo DB_PASS=Zq8vR2mK9xLp | tee .env</bash-input>"),
+    turn("<bash-stdout>DB_PASS=Zq8vR2mK9xLp</bash-stdout><bash-stderr></bash-stderr>"),
+    turn("<bash-input>ls</bash-input>"),
+    turn("<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>"),
+  ]);
+  const content = lines.map((line) => (JSON.parse(line) as { message: { content: string } }).message.content);
+  assert.deepEqual(content, [
+    "<bash-input>cat .env</bash-input>",
+    marker("dotenv"),
+    `<bash-input>${marker("dotenv")} > .env</bash-input>`,
+    marker("dotenv"),
+    "<bash-input>ls</bash-input>",
+    "<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>",
+  ]);
 });
 
 test("leaves a tool_result alone when the file is not a dotenv file", () => {

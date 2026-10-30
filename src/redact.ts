@@ -175,6 +175,8 @@ interface RedactContext {
   rules: RedactionRule[];
   counts: Record<string, number>;
   envToolUseIds: Set<string>;
+  /** The last `!` command typed in Claude Code read or wrote a dotenv file. */
+  bashInputTouchedDotenv: boolean;
   /**
    * Mutable: a transcript names its own working directory on every record, so a
    * caller that did not pass one still gets repository-relative paths. The
@@ -248,18 +250,24 @@ function readsDotenv(command: unknown): boolean {
 }
 
 /** Commands that write the file they are given: `tee` and PowerShell's own. */
-const SHELL_WRITER = /^\s*(?:sudo\s+)?(?:tee|set-content|sc|add-content|ac|out-file)(?:\s|$)/i;
+const SHELL_WRITER = /^\s*(?:sudo\s+)?(?:tee|set-content|sc|add-content|ac|out-file|new-item)(?:\s|$)/i;
+/** `tee` behind whatever runs it — `sudo -u app`, `doas`, `ssh host`, `/usr/bin/` — still writes. */
+const TEE = /(?:^|[\s/])(?:tee|tee-object)(?=\s|$)/i;
 
-const unquoted = (word: string): string => word.replace(/["'`]/g, "");
+/** A word as the shell hands it over: quotes gone, `\ ` a plain space; a Windows `\` stays. */
+const unquoted = (word: string): string => word.replace(/\\( )|["'`]/g, "$1");
 
 /** The dotenv file a statement redirects or tees into, if it writes one. */
 function dotenvTarget(statement: string): string | undefined {
   for (const segment of commandSegments(statement)) {
-    for (const redirect of segment.matchAll(/>\|?\s*([^\s;&|<>]+)/g)) {
+    // A quoted or escaped word keeps its spaces: `> "My Projects/.env"`.
+    for (const redirect of segment.matchAll(/>\|?\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)/g)) {
       if (isDotenvPath(unquoted(redirect[1]!))) return unquoted(redirect[1]!);
     }
-    if (!SHELL_WRITER.test(segment)) continue;
-    const named = segment.trim().split(/\s+/).slice(1).map(unquoted).find(isDotenvPath);
+    const writer = SHELL_WRITER.exec(segment) ?? TEE.exec(segment);
+    if (!writer) continue;
+    const after = segment.slice(writer.index + writer[0].length);
+    const named = after.trim().split(/\s+/).map(unquoted).find(isDotenvPath);
     if (named) return named;
   }
   return undefined;
@@ -290,8 +298,8 @@ function statements(line: string): { parts: string[]; open: boolean } {
   return { parts, open: quote !== undefined };
 }
 
-/** A write that closes a group or a substitution: `{ …; } > .env`, `(…) | tee .env`. */
-const GROUP_WRITE = /[})]\s*(?:\d?>|&>|\|)/;
+/** A write that closes a group or a substitution: `{ …; } > .env`, `(…) | tee .env`, `done > .env`. */
+const GROUP_WRITE = /(?:[})]|\b(?:done|fi|esac))\s*(?:\d?>|&>|\|)/;
 
 /**
  * `cat > .env << 'EOF'`, `echo "KEY=…" >> .env.local`, `… | tee .env`: a shell
@@ -310,7 +318,9 @@ function cutDotenvWrites(command: string): string {
   for (let i = 0; i < lines.length; i += 1) {
     let writes = false;
     const { parts, open } = statements(lines[i]!);
-    if (open) spread = true;
+    // A line that goes on in the next (`\`, a trailing pipe) is one statement
+    // with it, and the values may sit on either.
+    if (open || /[\\|]\s*$/.test(lines[i]!)) spread = true;
     kept.push(
       parts
         .map((part) => {
@@ -352,9 +362,32 @@ function cutDotenvInput(input: Record<string, unknown>, context: RedactContext):
   }
 }
 
+/**
+ * `! cat .env` typed in Claude Code is no tool call: the command comes as one
+ * user turn, `<bash-input>…</bash-input>`, and what it printed as the next,
+ * `<bash-stdout>…`. The cuts of a shell call apply across the pair.
+ */
+function scanBashMode(message: Record<string, unknown>, content: string, context: RedactContext): void {
+  const input = /^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/.exec(content)?.[1];
+  if (input !== undefined) {
+    const cut = cutDotenvWrites(input);
+    context.bashInputTouchedDotenv = cut !== input || readsDotenv(input);
+    if (cut !== input) {
+      message.content = `<bash-input>${cut}</bash-input>`;
+      count(context, "dotenv", 1);
+    }
+    return;
+  }
+  if (!context.bashInputTouchedDotenv || !content.trimStart().startsWith("<bash-stdout>")) return;
+  context.bashInputTouchedDotenv = false;
+  message.content = marker("dotenv");
+  count(context, "dotenv", 1);
+}
+
 function scanDotenv(record: Record<string, unknown>, context: RedactContext): void {
   const message = record.message;
   const content = isObject(message) ? message.content : undefined;
+  if (isObject(message) && typeof content === "string") return scanBashMode(message, content, context);
   if (!Array.isArray(content)) return;
 
   for (const block of content) {
@@ -549,6 +582,7 @@ function createContext(options: RedactOptions, invalid: string[]): RedactContext
     rules: [...BUILTIN_RULES, ...compileExtraRules(options.extraPatterns, invalid)],
     counts: {},
     envToolUseIds: new Set(),
+    bashInputTouchedDotenv: false,
     // The home directory is this machine's and is never in the transcript's
     // gift, so it is read here rather than passed by every caller.
     roots: resolveRoots({ cwd: options.cwd, home: options.home ?? homedir() }),
