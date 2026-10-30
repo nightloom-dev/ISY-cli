@@ -283,13 +283,31 @@ export async function credentialsIntact(run) {
   }
 }
 
-async function guardCredentials(run) {
-  if (!(await credentialsIntact(run))) {
-    throw new CredentialsReplaced(
-      `${join(run.config, ".credentials.json")} is no longer a symlink: Claude Code wrote the sign-in over it, ` +
-        `so ${CREDENTIALS} may now hold a token that was already refreshed away. Stopped; nothing was copied.`,
-    );
+async function refreshTokenIn(path) {
+  try {
+    return JSON.parse(await readFile(path, "utf8")).claudeAiOauth?.refreshToken;
+  } catch {
+    return undefined;
   }
+}
+
+async function guardCredentials(run) {
+  if (await credentialsIntact(run)) return;
+  // Claude Code 2.1.312 writes the sign-in back on every start just to stamp
+  // subscriptionTypeVerifiedAt, and that write replaces the link with a copy.
+  // A copy still holding the shared refresh token lost nothing, so the link
+  // goes back; any other token means this run refreshed and spent the shared one.
+  const link = join(run.config, ".credentials.json");
+  const kept = await refreshTokenIn(link);
+  if (kept && kept === (await refreshTokenIn(CREDENTIALS))) {
+    await rm(link);
+    await symlink(CREDENTIALS, link);
+    return;
+  }
+  throw new CredentialsReplaced(
+    `${link} is no longer a symlink and holds another refresh token: Claude Code refreshed the sign-in into it, ` +
+      `so ${CREDENTIALS} may now hold a token that was already refreshed away. Stopped; nothing was copied.`,
+  );
 }
 
 // ---------------------------------------------------------------- agents
