@@ -18,6 +18,19 @@ function summaryFor(records: unknown[]) {
   return redactLines(records.map((record) => JSON.stringify(record)));
 }
 
+/** One tool call and its result as Claude Code records them, and what came out of each. */
+function throughCall(name: string, input: Record<string, unknown>, output = "MAILER_PHRASE=Zq8vR2mK9xLp") {
+  const { lines } = summaryFor([
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name, input }] } },
+    { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: output }] }, toolUseResult: { stdout: output } },
+  ]);
+  const [call, result] = lines.map((line) => JSON.parse(line) as {
+    message: { content: { input: Record<string, unknown>; content: unknown }[] };
+    toolUseResult?: unknown;
+  });
+  return { input: call!.message.content[0]!.input, content: result!.message.content[0]!.content, toolUseResult: result!.toolUseResult };
+}
+
 test("masks OpenAI-style provider keys", () => {
   const out = redactOne("export OPENAI=sk-abcdefghij0123456789XYZ done");
   assert.equal(out, `export OPENAI=${marker("openai_key")} done`);
@@ -343,6 +356,56 @@ test("cuts what a ! command typed in Claude Code printed from a dotenv file, or 
     "<bash-input>ls</bash-input>",
     "<bash-stdout>README.md</bash-stdout><bash-stderr></bash-stderr>",
   ]);
+});
+
+test("cuts the result of a search on a dotenv file, whichever argument names the file", () => {
+  const cut: [string, Record<string, unknown>][] = [
+    ["Grep", { pattern: "PHRASE", path: ".env", output_mode: "content" }],
+    ["Grep", { pattern: "PHRASE", path: "/repo/.env", output_mode: "content" }],
+    ["Grep", { pattern: "PHRASE", path: "config/.env.local", output_mode: "content" }],
+    ...[".env*", "**/.env*", "{.env,.env.local}", "*.env", "config/.env.*"].map((glob): [string, Record<string, unknown>] => ["Grep", { pattern: "PHRASE", glob, output_mode: "content" }]),
+    ["mcp__fs__read_file", { path: ".env" }],
+    ["mcp__fs__read_multiple_files", { paths: ["README.md", "app/.env.local"] }],
+    ["mcp__serena__read_file", { relative_path: ".env" }],
+  ];
+  for (const [name, input] of cut) {
+    const out = throughCall(name, input);
+    assert.equal(out.content, marker("dotenv"), JSON.stringify(input));
+    assert.equal(out.toolUseResult, marker("dotenv"), JSON.stringify(input));
+    assert.deepEqual(out.input, input, "the call itself names the file, not what is in it");
+  }
+
+  const kept: [string, Record<string, unknown>][] = [
+    ["Grep", { pattern: "\\.env", path: "src", output_mode: "content" }],
+    ["Grep", { pattern: "process.env", glob: "*.ts", output_mode: "content" }],
+    ["Glob", { pattern: "**/.env*" }],
+    ["mcp__fs__read_file", { path: "README.md" }],
+    ["Agent", { prompt: "read .env and report", description: "look at .env" }],
+  ];
+  for (const [name, input] of kept) {
+    assert.equal(throughCall(name, input, "plain output").content, "plain output", JSON.stringify(input));
+  }
+});
+
+test("a write through any tool that names a dotenv file loses what it writes", () => {
+  const out = throughCall("mcp__fs__write_file", { path: "app/.env", content: "MAILER_PHRASE=Zq8vR2mK9xLp" });
+  assert.deepEqual(out.input, { path: "app/.env", content: marker("dotenv") });
+});
+
+test("a multi-edit on a dotenv file loses every step's strings, and its steps stay edits", () => {
+  const edits = [
+    { old_string: "MAILER_PHRASE=old1234567890", new_string: "MAILER_PHRASE=Zq8vR2mK9xLp" },
+    { old_string: "OTHER=old1234567890", new_string: "OTHER=Zq8vR2mK9xLp", replace_all: true },
+  ];
+  const record = { type: "assistant", uuid: "a", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "MultiEdit", input: { file_path: "/repo/.env", edits } }] } };
+  const { lines } = summaryFor([record]);
+  const m = marker("dotenv");
+  const call = JSON.parse(lines[0]!) as typeof record;
+  assert.deepEqual(call.message.content[0]!.input.edits, [
+    { old_string: m, new_string: m },
+    { old_string: m, new_string: m, replace_all: true },
+  ]);
+  assert.equal(parseLines(lines).fileEdits.get("/repo/.env")?.length, 2);
 });
 
 test("leaves a tool_result alone when the file is not a dotenv file", () => {

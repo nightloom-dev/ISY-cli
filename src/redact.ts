@@ -356,6 +356,7 @@ function cutDotenvWrites(command: string): string {
   return kept.join("\n");
 }
 
+/** A multi-edit keeps its steps: each is one edit to the parse, and only their strings go. */
 function cutDotenvInput(input: Record<string, unknown>, context: RedactContext): void {
   for (const field of EDIT_INPUT_FIELDS) {
     if (typeof input[field] === "string") {
@@ -363,6 +364,26 @@ function cutDotenvInput(input: Record<string, unknown>, context: RedactContext):
       count(context, "dotenv", 1);
     }
   }
+  if (!Array.isArray(input.edits)) return;
+  for (const edit of input.edits) if (isObject(edit)) cutDotenvInput(edit, context);
+}
+
+/**
+ * Whether a call that is no shell works on a dotenv file, by the argument that
+ * says what it works on: `Read {file_path}`, `Grep {path}`, a filesystem
+ * server's `read_file {path}`. A glob reads a gitignored file as well as a named
+ * one, however it is spelled (`{.env,.env.local}`, `*.env`), so any mention
+ * counts, and the worst of that is one search's result on `*.envelope.ts`.
+ *
+ * ponytail: by what the call names. A search that names no file (`Grep
+ * {pattern}`, `grep -r KEY .`) still goes up when `.env` is not ignored; reading
+ * its result's lines for a dotenv path is the way up.
+ */
+const FILE_ARGUMENT = /^(?:file_?path|filePath|notebook_path|(?:relative_)?path|paths|file|files|filename|target_file)$/;
+
+function callNamesDotenv(input: Record<string, unknown>): boolean {
+  if (typeof input.glob === "string" && input.glob.includes(".env")) return true;
+  return Object.entries(input).some(([key, value]) => FILE_ARGUMENT.test(key) && [value].flat().some(isDotenvPath));
 }
 
 /**
@@ -410,7 +431,7 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
         }
         continue;
       }
-      if (!isDotenvPath(input.file_path) && !isDotenvPath(input.notebook_path)) continue;
+      if (!callNamesDotenv(input)) continue;
       if (typeof block.id === "string") context.envToolUseIds.add(block.id);
       cutDotenvInput(input, context);
     }
