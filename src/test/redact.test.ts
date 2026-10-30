@@ -783,6 +783,36 @@ test("a background command's task goes the way of the command", () => {
   assert.ok(!lines.join("\n").includes(value));
 });
 
+test("a file named the other way round is a dotenv file too, and code reading the environment is not", () => {
+  const m = marker("dotenv");
+  for (const file_path of ["prod.env", "/repo/config/prod.env", "/repo/.x.env", "config/app.env"]) {
+    const out = throughCall("Read", { file_path });
+    assert.equal(out.content, m, file_path);
+  }
+  for (const command of ["cat prod.env", "cat config/*.env", "cut -d= -f2 config/app.env", "docker compose --env-file prod.env config", "git show HEAD:.x.env"]) {
+    assert.equal(throughCall("Bash", { command }).content, m, command);
+  }
+  assert.equal(throughCall("Bash", { command: "echo K=Zq8vR2mK9xLp > prod.env" }).input.command, `${m} > prod.env`);
+  assert.equal(throughCall("Write", { file_path: "prod.env", content: "K=Zq8vR2mK9xLp" }).input.content, m);
+
+  for (const command of [
+    "node -p process.env",
+    `node -e "console.log(process.env)"`,
+    `node -e "console.log(import.meta.env)"`,
+    `node -e "console.log(Object.keys(globalThis.process.env))"`,
+    "deno eval 'console.log(Deno.env)'",
+    "cat src/foo.env.ts",
+    "ls prod.env",
+    "rg '.*\\.env' src",
+    "python3 - <<'PY'\nprint(cfg.env)\nPY",
+    "cat > src/a.ts <<'EOF'\nconst value = cfg.env;\nEOF",
+  ]) {
+    const out = throughCall("Bash", { command }, "plain output");
+    assert.equal(out.input.command, command);
+    assert.equal(out.content, "plain output", command);
+  }
+});
+
 test("an in-place edit of a dotenv file loses its script, and stays an edit", () => {
   const m = marker("dotenv");
   const cases: [string, string, string][] = [

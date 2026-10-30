@@ -406,8 +406,19 @@ function cutLearnedValues(lines: string[], context: RedactContext): string[] {
   });
 }
 
+/**
+ * How code reaches the environment, which reads like a file called `process.env`.
+ *
+ * ponytail: the objects it is usually read from. Any other's `.env` in a one-liner
+ * costs that one command's result.
+ */
+const CODE_ENV = /(?:^|\.)(?:process|meta|this|self|globalThis|window|Deno|Bun|ctx|c|os|context|event|req|request)\.env$/;
+
+/** `.env`, `.env.local`, and the other way of naming one: `prod.env`, `.x.env`. */
 function isDotenvPath(filePath: unknown): boolean {
-  return typeof filePath === "string" && basename(filePath).startsWith(".env");
+  if (typeof filePath !== "string") return false;
+  const name = basename(filePath);
+  return name.startsWith(".env") || (/^[\w.*?-]*\.env$/.test(name) && !CODE_ENV.test(name));
 }
 
 /**
@@ -565,7 +576,8 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
       i = end;
       continue;
     }
-    const namesDotenv = body.some((line) => line.split(WORD_BREAK).some(isDotenvPath));
+    // A body is code as often as not, where `cfg.env` is a property and not a file.
+    const namesDotenv = body.some((line) => line.split(WORD_BREAK).some((word) => basename(word).startsWith(".env")));
     kept.push(...(namesDotenv ? [marker("dotenv")] : body), ...lines.slice(end, end + 1));
     i = end;
   }
