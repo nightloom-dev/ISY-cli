@@ -175,6 +175,21 @@ test("a home-looking segment inside a URL names a page, not this machine", () =>
   assert.equal(maskPaths(`fetched ${url} ok`, roots), `fetched ${url} ok`);
   assert.equal(maskPaths("git+ssh://git@github.com/home/alice/r.git", roots),
     "git+ssh://git@github.com/home/alice/r.git");
+  const longScheme = `${"x".repeat(40)}://example.com/home/alice/x`;
+  assert.equal(maskPaths(longScheme, roots), longScheme);
+});
+
+test("a long run with no scheme in it is masked in linear time", () => {
+  // A contract's bytecode, a base64 blob, a dotted or dashed name: tool output
+  // holds them by the hundred kilobytes, and every string with a slash in it
+  // goes through here, in the post-commit hook as on the server.
+  const shapes = ["0x" + "0123456789abcdef".repeat(10_000), "a".repeat(150_000), "a.".repeat(75_000), "a-".repeat(75_000)];
+  for (const text of shapes) {
+    const started = performance.now();
+    maskPaths(`${text}/`, roots);
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `took ${Math.round(took)}ms on ${text.slice(0, 6)}…`);
+  }
 });
 
 test("a path is masked wherever a line of output puts it", () => {

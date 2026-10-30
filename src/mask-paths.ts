@@ -102,8 +102,12 @@ const SEG = /[^\s"'`<>:;,|&$*?()[\]{}\\/]/;
 /**
  * A scheme makes it a URL, and `https://example.com/home/alice/x` names a page
  * rather than this machine. Matched first, so no path rule sees a hostname.
+ * The scheme is capped for the reason `redact.ts` caps the connection string's:
+ * unbounded, every letter of a long run with no `://` in it started a scan of
+ * the rest of the run. A longer scheme still matches on its tail, and the URL
+ * is still kept away from the path rules.
  */
-const URL_LIKE = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'`<>]*/;
+const URL_LIKE = /[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s"'`<>]*/;
 
 /**
  * The two schemes that are the exception: they carry a path on this machine
