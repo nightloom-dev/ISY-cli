@@ -545,6 +545,9 @@ function expandsAssigned(statement: string, assigned: ReadonlySet<string>): bool
 /** A write that closes a group or a substitution: `{ …; } > .env`, `(…) | tee .env`, `done > .env`. */
 const GROUP_WRITE = /(?:[})]|\b(?:done|fi|esac))\s*(?:\d?>|&>|\|)/;
 
+/** What sed's `a`, `i` and `c` open with, right against the text: `$aK=v`, `1iK=v`, `/^K=/cK=v`. */
+const SED_TEXT_COMMAND = /(?<=^|['"\s])(?:\$|\d{1,12}|\/[^/\n]{0,256}\/)[ \t]{0,8}[aic]\\?[ \t]{0,8}/g;
+
 /**
  * `cat > .env << 'EOF'`, `echo "KEY=…" >> .env.local`, `… | tee .env`: a shell
  * call that writes a dotenv file holds what it writes, so unlike a read the
@@ -577,7 +580,8 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
             const edited = shellEditPaths(part).find(isDotenvPath);
             if (edited === undefined) return part;
             // `s|a|b|` and `s#a#b#` split where `s/a/b/` does.
-            learnValues(part.replaceAll(/(?<![\w-])s([^\w\s\\])/.exec(part)?.[1] ?? "/", "\n"), context);
+            const script = part.replace(SED_TEXT_COMMAND, "\n");
+            learnValues(script.replaceAll(/(?<![\w-])s([^\w\s\\])/.exec(script)?.[1] ?? "/", "\n"), context);
             const edit = `sed -i ${marker("dotenv")} ${edited}`;
             if (expandsAssigned(part, assigned)) {
               spread = true;

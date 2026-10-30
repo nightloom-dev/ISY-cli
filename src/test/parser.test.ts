@@ -358,6 +358,11 @@ test("names the files sed -i and perl -i rewrite, and not their scripts", () => 
   assert.deepEqual(shellEditPaths("sed -n '1,5p' src/a.ts"), []);
   assert.deepEqual(shellEditPaths("sed 's/ -i //' src/a.ts"), [], "-i inside the script");
   assert.deepEqual(shellEditPaths("sed -i 's/a/b/' src/*.ts"), []);
+  assert.deepEqual(shellEditPaths("sed -i '$a K=v' src/a.ts"), ["src/a.ts"], "sed's own `$`, the last line");
+  assert.deepEqual(shellEditPaths("sed -i '$d' src/a.ts"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths('sed -i "$SCRIPT" src/a.ts'), ["src/a.ts"], "a quoted variable is the one script");
+  assert.deepEqual(shellEditPaths("sed -i $FLAGS 's/a/b/' src/a.ts"), ["src/a.ts"], "a bare one can be flags");
+  assert.deepEqual(shellEditPaths(`sed -i 's/a/b/' "$FILE" $OTHER "$DIR/a.ts"`), [], "a variable names no file");
 });
 
 test("resolves a sed -i path against the directory the command ran in", () => {

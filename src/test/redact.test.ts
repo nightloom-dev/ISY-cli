@@ -919,6 +919,16 @@ test("an in-place edit of a dotenv file loses its script, and stays an edit", ()
     // The value sits where the script only names it.
     ['VALUE=Zq8vR2mK9xLp\nsed -i "s/^KEY=.*/KEY=$VALUE/" .env', `sed -i ${m} .env`, ".env"],
     ['VALUE=Zq8vR2mK9xLp; sed -i "s/^KEY=.*/KEY=${VALUE}/" .env', `sed -i ${m} .env`, ".env"],
+    // In single quotes `$` is sed's own, the last line.
+    ["sed -i '$a KEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    ["sed -i '$ a KEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    ["sed -i '$aKEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    ["sed -i '$iKEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    ["sed -i '$cKEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    ['sed -i "\\$a KEY=Zq8vR2mK9xLp" .env', `sed -i ${m} .env`, ".env"],
+    ["sed -i -e '$a KEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    ["sed -i '1iKEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
+    ["sed -i '/^KEY=/cKEY=Zq8vR2mK9xLp' .env", `sed -i ${m} .env`, ".env"],
   ];
   for (const [command, expected, path] of cases) {
     const out = throughCall("Bash", { command, description: "set the key" });
@@ -939,6 +949,13 @@ test("an in-place edit of a dotenv file loses its script, and stays an edit", ()
     ["sed -i 's/^KEY=.*/KEY=Zq8v#R2m|K9xLp/' .env", "Zq8v#R2m|K9xLp"],
     ['VALUE=Zq8vR2mK9xLp; sed -i "s/^KEY=.*/KEY=$VALUE/" .env', "Zq8vR2mK9xLp"],
     ['VALUE=Zq8vR2mK9xLp; echo "KEY=$VALUE" > .env', "Zq8vR2mK9xLp"],
+    ["sed -i '$a KEY=Zq8vR2mK9xLp' .env", "Zq8vR2mK9xLp"],
+    ["sed -i '$ a KEY=Zq8vR2mK9xLp' .env", "Zq8vR2mK9xLp"],
+    ["sed -i '$aKEY=Zq8vR2mK9xLp' .env", "Zq8vR2mK9xLp"],
+    ["sed -i '$iKEY=Zq8vR2mK9xLp' .env", "Zq8vR2mK9xLp"],
+    ["sed -i '$cKEY=Zq8vR2mK9xLp' .env", "Zq8vR2mK9xLp"],
+    ["sed -i '1iKEY=Zq8vR2mK9xLp' .env", "Zq8vR2mK9xLp"],
+    ["sed -i '/^KEY=/cKEY=Zq8vR2mK9xLp' .env", "Zq8vR2mK9xLp"],
   ] as const) {
     const session = summaryFor([
       ...callAndResult("Bash", { command }, ""),
@@ -1567,6 +1584,12 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `sed -i ${fill("-s/")} .env`,
     `sed -i ${fill("$a")} .env`,
     `a=b; sed -i ${fill("$a")} .env`,
+    `sed -i '${fill("$ ")}' .env`,
+    `sed -i '${fill("/a/ ")}' .env`,
+    `sed -i '/${"a".repeat(200_000)}' .env`,
+    `sed -i '${"1".repeat(200_000)}' .env`,
+    `sed -i '${fill("1 ")}' .env`,
+    `sed -i '$${" ".repeat(200_000)}' .env`,
     `cat > .env <<EOF\n${fill("$a")}\nEOF`,
     `cat > .env <<EOF\n${fill("a=$a")}\nEOF`,
     `cat > .env <<EOF\n${fill("$a=\n")}EOF`,

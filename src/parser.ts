@@ -551,13 +551,15 @@ export function shellEditPaths(command: string, cwd?: string): string[] {
         continue;
       }
       if (/^--(?:expression|file)=/.test(token)) scriptSeen = true;
-      // An empty word is BSD sed's backup suffix: `sed -i '' 's/a/b/' f`.
-      if (token.length === 0 || token.startsWith("-") || token.startsWith("$")) continue;
+      // An empty word is BSD sed's backup suffix: `sed -i '' 's/a/b/' f`. A bare
+      // `$VAR` can be flags as well as the script; quoted, it is one word, and in
+      // single quotes `$` is sed's own, the last line: `sed -i '$a K=v' f`.
+      if (token.length === 0 || token.startsWith("-") || word.startsWith("$")) continue;
       if (!scriptSeen) {
         scriptSeen = true;
         continue;
       }
-      if (/[*?]/.test(token) || /^[./]+$/.test(token)) continue;
+      if (token.startsWith("$") || /[*?]/.test(token) || /^[./]+$/.test(token)) continue;
       if (dir === undefined || token.startsWith("~")) paths.push(token.replace(/^\.\//, ""));
       else paths.push(token.startsWith("/") ? posix.normalize(token) : posix.join(dir, token));
     }
