@@ -725,6 +725,8 @@ function scanDotenv(record: Record<string, unknown>, context: RedactContext): vo
       const task = isObject(record.toolUseResult) ? record.toolUseResult.backgroundTaskId : undefined;
       if (typeof task === "string") context.envToolUseIds.add(task);
       learnValues(block.content, context);
+      // A tool can say "done" in its text and return the file as data.
+      learnValues(record.mcpMeta, context);
       block.content = marker("dotenv");
       count(context, "dotenv", 1);
       if (record.toolUseResult !== undefined) {
@@ -851,7 +853,8 @@ function stripAttachment(record: Record<string, unknown>, context: RedactContext
  * `serverClassifierRequest` and `serverClassifierContext` are what a permission
  * classifier was shown, the working tree's git state included;
  * `wireIngestContext` and `permissionDecision` say where a call ran and what
- * allowed it.
+ * allowed it; `mcpMeta` repeats what an MCP tool returned, as out of reach of the
+ * cut as `wireToolInputs` is.
  */
 const HARNESS_FIELDS = [
   "wireToolInputs",
@@ -859,6 +862,7 @@ const HARNESS_FIELDS = [
   "serverClassifierContext",
   "wireIngestContext",
   "permissionDecision",
+  "mcpMeta",
 ];
 
 function stripHarnessFields(record: Record<string, unknown>, context: RedactContext): void {

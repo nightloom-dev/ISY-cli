@@ -1169,6 +1169,24 @@ test("a turn loses the harness fields beside it, and a dotenv write its second c
   assert.ok(!lines[0]!.includes("pk_live_totally_real"));
 });
 
+test("a dotenv file read through an MCP tool leaves nothing in what the tool returned as data", () => {
+  const value = "Zq8vR2mK9xLp";
+  const dotenv = `DB_HOST=db.internal\nshortpw=hunter2\nmailer_phrase=correct horse battery\nMAILER_PHRASE=${value}\n`;
+  const { lines } = summaryFor([
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "mcp__fs__read_file", input: { path: ".env" } }] } },
+    {
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "read" }] }] },
+      toolUseResult: [{ type: "text", text: "read" }],
+      mcpMeta: { structuredContent: { result: dotenv } },
+    },
+    { type: "user", message: { role: "user", content: `the phrase is ${value}` } },
+  ]);
+  const out = lines.join("\n");
+  for (const held of ["db.internal", "hunter2", "correct horse battery", value]) assert.ok(!out.includes(held), held);
+  assert.deepEqual(Object.keys(JSON.parse(lines[1]!) as object).includes("mcpMeta"), false);
+});
+
 test("a harness message in the user's place keeps its place in the chain and loses its text", () => {
   // What Claude Code writes after `/review`: the developer's command, then the
   // skill's body and a reminder as `isMeta` user records.
