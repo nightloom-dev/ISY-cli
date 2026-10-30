@@ -137,8 +137,11 @@ database or to a model.
   again at the next commit. And the session a commit goes to is the one in that
   work tree whose own file moved last (`paths.ts:lastActive`): a session's mtime
   includes its subagents', and the one whose background subagent wrote last is
-  not the one that committed. git runs its hooks at the top of the tree, so a
-  session started further down is looked for there too
+  not the one that committed. Another one at work in the last ten minutes goes
+  first if it shows the commit is its own, with a `git` call still running or
+  edits to what HEAD changed (`commit.ts:sessionOfCommit`): an agent waiting on
+  its `git commit` writes nothing while the others go on. git runs its hooks at
+  the top of the tree, so a session started further down is looked for there too
   (`agents/index.ts:sessionsInTree`). It takes the commit only if the agent is
   making it, it lands on the session's branch, or it holds what the session left
   uncommitted (`commit.ts:isItsCommit`): a mark moves a session to that branch's

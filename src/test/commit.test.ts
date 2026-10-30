@@ -934,6 +934,54 @@ test("a shell call that has not answered yet is the agent making this commit", a
   assert.match((await runCommit({ noUpload: true }, dead)).skipped ?? "", /another branch/);
 });
 
+test("a commit goes to the session making it, though others wrote after it", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-maker-"));
+  await mkdir(join(cwd, "docs"));
+  const making = await writeSession(cwd, "sess-making", "left-pad");
+  const below = await writeSession(join(cwd, "docs"), "sess-below", "ms");
+  const beside = await writeSession(cwd, "sess-beside", "ms");
+  const now = new Date().toISOString();
+  await appendTurn(making, "sess-making", shell("t-commit", "git commit -am x"), now);
+  await age(making, 1 / 1440);
+  // A long shell call that makes no commit says nothing of whose this one is.
+  await appendTurn(below, "sess-below", shell("t-test", "npm test"), now);
+  await appendTurn(beside, "sess-beside", { type: "text", text: "still reading" }, now);
+
+  await commitFile(cwd, "whatever.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-making");
+
+  const state = await readState();
+  assert.equal(state[making]?.commits?.length, 1);
+  assert.equal(state[below]?.commits, undefined);
+  assert.equal(state[beside]?.commits, undefined);
+});
+
+test("a commit holding what a session edited goes to it, though another wrote after it", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-holder-"));
+  await mkdir(join(cwd, "docs"));
+  const holder = await writeSession(cwd, "sess-holder", "left-pad");
+  await age(holder, 1 / 1440);
+  const reader = await writeSession(join(cwd, "docs"), "sess-reader", "ms");
+
+  await commitFile(cwd, "src/f0.ts");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-holder");
+  assert.equal((await readState())[holder]?.commits?.length, 1);
+  assert.equal((await readState())[reader]?.commits, undefined);
+
+  // One holding nobody's work goes to the newest, as any other commit does.
+  await age(holder, 1 / 1440);
+  await commitFile(cwd, "README.md");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-reader");
+
+  // And a session that has been quiet for longer than a shell call can run is not asked.
+  const old = await realpath(await newRepo("isy-commit-holder-old-"));
+  await mkdir(join(old, "docs"));
+  await age(await writeSession(old, "sess-holder-old", "left-pad"), 1 / 24);
+  await writeSession(join(old, "docs"), "sess-reader-old", "ms");
+  await commitFile(old, "src/f0.ts");
+  assert.equal((await runCommit({ noUpload: true }, old)).sessionId, "sess-reader-old");
+});
+
 test("a CLI that records no branch is judged by the one its upload found", async () => {
   const cwd = await newRepo("isy-commit-nobranch-");
   const path = await writeSession(cwd, "sess-nobranch", "left-pad");

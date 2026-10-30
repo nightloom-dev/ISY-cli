@@ -97,27 +97,28 @@ export async function* sessionsInTree(
 }
 
 /**
- * Newest session of this work tree across every CLI installed here, by when the
- * session itself last wrote.
+ * This work tree's sessions across every CLI installed here, newest first by when
+ * the session itself last wrote: the ones that wrote within `withinMs`, and the
+ * newest however long ago that was.
  *
- * ponytail: a commit a subagent made, while its session waited on it, is
- * credited by the session's own time, which that subagent does not move; a
- * busier session in the same directory then wins. Read the subagent meta's
- * `requestShape` and count foreground subagents' writes if that shows up.
+ * ponytail: a subagent working for a session does not move that time, so one that
+ * commits after its session has waited on it for longer than `withinMs` is not
+ * looked for. Walk by `modifiedAt`, which counts subagents, if that shows up.
  */
-export async function newestSession(
+export async function latestSessions(
   cwd: string,
-): Promise<{ agent: Agent; file: DiscoveredSession } | undefined> {
-  let best: { agent: Agent; file: DiscoveredSession } | undefined;
+  withinMs: number,
+): Promise<{ agent: Agent; file: DiscoveredSession }[]> {
+  const oldest = Date.now() - withinMs;
+  const found: { agent: Agent; file: DiscoveredSession }[] = [];
 
   for (const agent of await presentAgents()) {
     for await (const file of sessionsInTree(agent, cwd)) {
-      if (!best || lastActive(file) > lastActive(best.file)) {
-        best = { agent, file };
-      }
-      break;
+      found.push({ agent, file });
+      if (lastActive(file) < oldest) break;
     }
   }
 
-  return best;
+  found.sort((a, b) => lastActive(b.file) - lastActive(a.file));
+  return found.filter(({ file }, index) => index === 0 || lastActive(file) >= oldest);
 }

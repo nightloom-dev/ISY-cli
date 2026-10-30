@@ -1,5 +1,5 @@
 import { basename, relative } from "node:path";
-import { newestSession } from "../agents/index.js";
+import { latestSessions } from "../agents/index.js";
 import type { AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
 import { currentBranch, filesInHead, headSha } from "../git.js";
@@ -7,7 +7,7 @@ import { mayWrite, parseLines, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
 import { candidateKey, namedBranch, readState, unseen, updateSession, withCommit } from "../state.js";
-import type { SessionState } from "../state.js";
+import type { ClientState, SessionState } from "../state.js";
 import type { Candidate, ParsedSession, ToolUse } from "../types.js";
 
 export interface CommitReport {
@@ -29,6 +29,8 @@ const MAX_LINES = 6;
 const MAX_PER_CATEGORY = 2;
 /** The longest Claude Code lets a shell call run, so how long one can read as running. */
 const SHELL_CALL_MS = 10 * 60_000;
+/** What telling sessions apart may add to a hook someone is waiting on, checked between them. */
+const TELLING_APART_MS = 5_000;
 
 /** The transcript holds a shell call before the command starts, and its answer only after. */
 function isRunning(use: ToolUse): boolean {
@@ -86,11 +88,11 @@ async function carriesItsWork(
 }
 
 /**
- * Whether the commit just made belongs to this session. The hook only knows the
- * newest session in the tree, and a commit is what moves a session to another
- * pull request, so one that ended on another branch must not take every commit
- * made here afterwards. It belongs if the agent is making it this moment, if it
- * lands on the session's own branch, or, on any other, if it carries the
+ * Whether the commit just made belongs to this session. The hook only knows who
+ * looks likeliest (`sessionOfCommit`), and a commit is what moves a session to
+ * another pull request, so one that ended on another branch must not take every
+ * commit made here afterwards. It belongs if the agent is making it this moment,
+ * if it lands on the session's own branch, or, on any other, if it carries the
  * session's work: an agent that edited on main and a human who branched and
  * committed that.
  *
@@ -98,9 +100,9 @@ async function carriesItsWork(
  * one its transcript last named, which a resume that only read has moved. No
  * branch known, as with a session on a detached HEAD, is no reason to refuse.
  *
- * ponytail: only the newest session is asked, so a commit it refuses goes to no
- * one, and a session older than that relies on the branch fallback on the server.
- * Walk on through `sessionsInTree` if one of them ever needs the mark itself.
+ * ponytail: only one session is asked, so a commit it refuses goes to no one, and
+ * a session quiet for longer than `SHELL_CALL_MS` relies on the branch fallback on
+ * the server. Walk on through `sessionsInTree` if one of them ever needs the mark.
  */
 async function isItsCommit(
   session: ParsedSession,
@@ -114,31 +116,71 @@ async function isItsCommit(
   return carriesItsWork(session, state, cwd);
 }
 
+/** A shell call still running that could be the one this commit came out of. */
+function mayBeCommitting(use: ToolUse): boolean {
+  const { command } = use.input;
+  if (typeof command !== "string" || !isRunning(use)) return false;
+  return wordsOf(command).some((word) => word === "git" || word === "commit");
+}
+
+/**
+ * The session a commit just made goes to, of the ones in the tree newest first.
+ * The hook is not told who made it, and the newest is not always that one: an
+ * agent waiting on its `git commit` writes nothing while another session goes on
+ * writing. So one making a commit this moment comes first, then one whose work the
+ * commit holds, as when a human commits what an agent left, and only then the newest.
+ *
+ * ponytail: the newest session's read, which runCommit needs anyway, is the only
+ * one sure to happen. A long transcript takes seconds to read, so past
+ * `TELLING_APART_MS` the rest are not asked and the newest of those read so far can
+ * take a commit that was not its own. Two sessions running git at once go the same way.
+ */
+async function sessionOfCommit(
+  latest: Awaited<ReturnType<typeof latestSessions>>,
+  cwd: string,
+  states: ClientState,
+  extraPatterns: readonly string[] | undefined,
+) {
+  const deadline = Date.now() + TELLING_APART_MS;
+  const read = [];
+  for (const { agent, file } of latest) {
+    if (read.length > 0 && Date.now() >= deadline) break;
+    const lines = await agent.redactedLines(file.path, { extraPatterns, cwd: file.cwd ?? cwd });
+    const entry = { agent, file, session: parseLines(lines) };
+    if (entry.session.toolUses.some(mayBeCommitting)) return entry;
+    read.push(entry);
+  }
+
+  if (read.length > 1) {
+    for (const entry of read) {
+      if (await carriesItsWork(entry.session, states[entry.file.path] ?? {}, cwd)) return entry;
+    }
+  }
+  return read[0]!;
+}
+
 export async function runCommit(
   options: { json?: boolean; noUpload?: boolean },
   cwd: string,
 ): Promise<CommitReport> {
   const report: CommitReport = { cwd, records: 0, candidates: [], uploaded: "not-attempted" };
 
-  const newest = await newestSession(cwd);
-  if (!newest) {
+  const latest = await latestSessions(cwd, SHELL_CALL_MS);
+  if (latest.length === 0) {
     report.skipped = "no session recorded for this directory";
     return report;
   }
 
-  report.agent = newest.agent.id;
-  report.sessionId = newest.file.sessionId;
   report.sha = await headSha(cwd);
 
   const config = await readConfig();
-  const lines = await newest.agent.redactedLines(newest.file.path, {
-    extraPatterns: config.extraRedactPatterns,
-    cwd: newest.file.cwd ?? cwd,
-  });
-  const session = parseLines(lines);
+  const states = await readState();
+  const { agent, file, session } = await sessionOfCommit(latest, cwd, states, config.extraRedactPatterns);
+  report.agent = agent.id;
+  report.sessionId = file.sessionId;
   report.records = session.records.length;
 
-  const state = (await readState())[newest.file.path] ?? {};
+  const state = states[file.path] ?? {};
   const branch = await currentBranch(cwd);
   if (!(await isItsCommit(session, state, branch, cwd))) {
     report.skipped = "the newest session here is on another branch and this commit holds none of its work";
@@ -151,7 +193,7 @@ export async function runCommit(
   const stage0 = runStage0(session);
   report.candidates = unseen(state, stage0.candidates);
 
-  await updateSession(newest.file.path, (current) => ({
+  await updateSession(file.path, (current) => ({
     ...current,
     branch: namedBranch(branch, current.branch),
     shown: [...new Set([...(current.shown ?? []), ...stage0.candidates.map(candidateKey)])],
