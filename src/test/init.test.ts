@@ -71,6 +71,19 @@ async function quietly<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/** What `run` printed, one line per `console.log`. */
+async function printed(run: () => Promise<unknown>): Promise<string> {
+  const lines: unknown[] = [];
+  const log = console.log;
+  console.log = (line: unknown) => void lines.push(line);
+  try {
+    await run();
+  } finally {
+    console.log = log;
+  }
+  return lines.join("\n");
+}
+
 test("isy init keeps a key the server still takes rather than pairing for another", async () => {
   await writeFile(join(home, "config.json"), JSON.stringify({ token: "isy_held", apiBaseUrl: baseUrl }));
   asked.length = 0;
@@ -114,4 +127,28 @@ test("isy init answers the alerts that sent the reader to it and keeps the rest"
   await quietly(() => runInit({}, cwd));
 
   assert.equal(await drainAlerts(), "ISY: 1 session(s) given up on\nISY: this month's analyses are used up");
+});
+
+test("isy init ends on what is left before a first analysis", async () => {
+  await writeFile(join(home, "config.json"), JSON.stringify({ token: "isy_held", apiBaseUrl: baseUrl }));
+
+  const output = await printed(() => runInit({}, cwd));
+  const closing = output.slice(output.indexOf("Signed in as unwinned"));
+
+  assert.ok(closing.includes("GitHub App"), closing);
+  assert.ok(closing.includes(`${baseUrl}/docs/github-app`), closing);
+  assert.ok(closing.includes("pull request"), closing);
+});
+
+test("isy init sends nobody on to a pull request when no CLI got hooks", async () => {
+  await writeFile(join(home, "config.json"), JSON.stringify({ token: "isy_held", apiBaseUrl: baseUrl }));
+  process.env.CLAUDE_CONFIG_DIR = join(home, "no-claude-here");
+  try {
+    const output = await printed(() => runInit({}, cwd));
+
+    assert.ok(output.includes("No supported CLI found"), output);
+    assert.ok(!output.includes("pull request"), output);
+  } finally {
+    process.env.CLAUDE_CONFIG_DIR = claude;
+  }
 });

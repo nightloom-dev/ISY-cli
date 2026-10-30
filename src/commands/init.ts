@@ -213,4 +213,23 @@ export async function runInit(options: { token?: string }, cwd: string): Promise
   }
 
   if (verified.githubLogin) console.log(`Signed in as ${verified.githubLogin}`);
+
+  // The hooks only send sessions. Nothing tells the server a pull request exists
+  // until the App is on its repository, and this machine cannot see whether it
+  // is, so without this line the silence that follows explains itself to nobody.
+  // The docs page rather than the App's own address: a published CLI cannot
+  // follow a rename. No CLI hooked means no session, and nothing to go on to yet.
+  if (agents.length > 0) {
+    console.log(
+      [
+        "",
+        "Next:",
+        "  1. Install the GitHub App on the repositories you want analysed, if it is not there yet:",
+        `     ${new URL("/docs/github-app", baseUrl)}`,
+        "     Without it sessions upload, but no pull request ever gets a comment.",
+        "  2. Work with your agent as usual and commit. The hooks send the session.",
+        "  3. Push and open a pull request. The analysis arrives as one comment on it.",
+      ].join("\n"),
+    );
+  }
 }
