@@ -28,6 +28,10 @@ permissions:
   contents: read
 
 jobs:
+  # Node 20 (the engines floor), Node 22 and the packed tarball, on this commit.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   version:
     name: Is this version published?
     runs-on: ubuntu-latest
@@ -37,9 +41,9 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -76,7 +80,7 @@ jobs:
 
   publish:
     name: Publish ${{ needs.version.outputs.name }}@${{ needs.version.outputs.version }}
-    needs: version
+    needs: [ci, version]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -88,21 +92,21 @@ jobs:
       # this workflow file).
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: npm
 
       # Trusted publishing needs npm 11.5.1 or newer, and the npm bundled with
-      # Node 22 is a 10.x.
-      - run: npm install -g npm@latest
+      # Node 22 is a 10.x. Pinned: this job holds the right to publish, and
+      # `latest` would hand it to whatever npm release came out that day.
+      - run: npm install -g npm@12.2.1
 
+      # Typecheck and tests already ran on this commit in the `ci` job.
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
 
       # `prepack` builds, so dist is whatever this commit compiles to.
       - name: Publish to npm
