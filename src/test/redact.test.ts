@@ -705,11 +705,14 @@ test("what a dotenv file holds in plain view does not shred the session", () => 
     "SHORT=Zq8vR2m",
     "ANTHROPIC_MODEL=claude-opus-5-5",
     "CHECKOUT_DIR=/repo/src/payments-module",
+    `START_CMD="npm run build"`,
+    "TEST_COMMAND='npm run test -- --ci'",
+    `APP_NAME="My Cool Application"`,
     "PIN_CODE=1234567890123",
     "CLIENT_REGION=eu-central-1",
     `const MARKER = "<!-- isy:comment:v1 -->";`,
   ].join("\n");
-  const text = "In production the password is read at http://localhost:3000 and https://api.example.com/v1 for /srv/app/current/release/public, unless true: changeme, Transcript, Zq8vR2m, 3000, 1234567890123, claude-opus-5-5 in eu-central-1 under <!-- isy:comment:v1 -->.";
+  const text = "Run npm run build, then npm run test -- --ci for My Cool Application. In production the password is read at http://localhost:3000 and https://api.example.com/v1 for /srv/app/current/release/public, unless true: changeme, Transcript, Zq8vR2m, 3000, 1234567890123, claude-opus-5-5 in eu-central-1 under <!-- isy:comment:v1 -->.";
   const records = [
     { type: "user", uuid: "u1", sessionId: "s1", gitBranch: "claude-opus-5-5", cwd: "/repo", message: { role: "user", content: text } },
     { type: "assistant", uuid: "a1", sessionId: "s1", message: { role: "assistant", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/repo/src/payments-module/a.ts", old_string: "a", new_string: "b" } }] } },
