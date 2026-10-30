@@ -18,7 +18,21 @@ isy init
 
 `isy init` opens the browser, takes a key from it and writes it to
 `~/.isy/config.json`. It also installs the session hooks for every agent CLI it
-finds on the machine, so from there on nothing has to be run by hand.
+finds on the machine, and the git hooks of the repository you ran it in.
+
+`npx @nightloom/isy init` does the same with nothing installed globally. The
+hooks are written as `npx @nightloom/isy …` either way, and on such a machine
+every `isy …` here runs as `npx @nightloom/isy …`.
+
+Two steps are left before a first analysis:
+
+1. Install the [GitHub App](https://github.com/apps/iseeyaai) on the repository.
+   It is what tells the server a pull request exists: without it sessions upload,
+   no comment ever appears, and nothing on your machine can tell you why.
+2. Work with your agent as usual, commit, push and open a pull request. The hooks
+   send the session, and the analysis arrives as one comment on the pull request.
+
+From there on nothing has to be run by hand.
 
 ## Commands
 
@@ -63,7 +77,8 @@ settings (`isy settings`) narrow it further, never the other way around.
 ## Requirements
 
 Node.js 20 or newer. Git. An account at [iseeyaai.com](https://iseeyaai.com)
-and the GitHub App installed on the repositories you want reviewed.
+and the [GitHub App](https://github.com/apps/iseeyaai) installed on the
+repositories you want reviewed.
 
 ## License
 

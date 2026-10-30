@@ -152,3 +152,11 @@ test("isy init sends nobody on to a pull request when no CLI got hooks", async (
     process.env.CLAUDE_CONFIG_DIR = claude;
   }
 });
+
+test("the README's install steps go on to the GitHub App and a pull request", async () => {
+  const readme = await readFile(new URL("../../README.md", import.meta.url), "utf8");
+  const install = readme.slice(readme.indexOf("## Install"), readme.indexOf("## Commands"));
+
+  assert.ok(install.includes("(https://github.com/apps/iseeyaai)"), install);
+  assert.ok(install.includes("pull request"), install);
+});
