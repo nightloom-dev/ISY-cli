@@ -19,10 +19,15 @@ export type GitResult =
   | { ok: true; metadata: GitMetadata }
   | { ok: false; reason: GitFailure };
 
-async function git(cwd: string, args: string[]): Promise<string | undefined> {
+async function git(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
   try {
     const { stdout } = await run("git", args, {
       cwd,
+      env,
       timeout: GIT_TIMEOUT_MS,
       maxBuffer: 4 * 1024 * 1024,
       windowsHide: true,
@@ -83,4 +88,18 @@ export async function collectGitMetadata(cwd: string): Promise<GitResult> {
  */
 export async function headSha(cwd: string): Promise<string | undefined> {
   return git(cwd, ["rev-parse", "HEAD"]);
+}
+
+/**
+ * The top of the work tree a directory belongs to, however that directory was
+ * reached. Asked with git's own variables out of the way: a post-commit hook in
+ * a linked worktree inherits `GIT_DIR`, and git then takes any directory it
+ * stands in for the top of the tree.
+ */
+export async function workTreeTop(cwd: string): Promise<string | undefined> {
+  return git(cwd, ["rev-parse", "--show-toplevel"], {
+    ...process.env,
+    GIT_DIR: undefined,
+    GIT_WORK_TREE: undefined,
+  });
 }

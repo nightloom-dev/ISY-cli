@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -569,4 +569,104 @@ test("a parked line about a shared hooks directory names the repository, and out
   assert.match(line, /no git hooks in unwinned\/ISY/);
   // `isy init` drops a parked part with this wording, and an init in another repository answers nothing here.
   assert.doesNotMatch(line, /run: isy init/);
+});
+
+/** A session that last wrote `days` ago, the way a transcript left alone looks. */
+async function age(path: string, days: number): Promise<void> {
+  const then = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  await utimes(path, then, then);
+}
+
+test("a commit goes to a session started in a subdirectory, though git runs the hook at the top", async () => {
+  const top = await realpath(await newRepo("isy-commit-subdir-"));
+  await mkdir(join(top, "src"));
+  const atTop = await writeSession(top, "sess-at-top", "left-pad");
+  await age(atTop, 1);
+  const inSrc = await writeSession(join(top, "src"), "sess-in-src", "ms");
+
+  const report = await runCommit({ noUpload: true }, top);
+
+  assert.equal(report.sessionId, "sess-in-src");
+  const state = await readState();
+  assert.equal(state[inSrc]?.commits?.length, 1);
+  assert.equal(state[atTop]?.commits, undefined);
+
+  // Nothing at the top at all is no reason to skip the commit either.
+  const alone = await realpath(await newRepo("isy-commit-subdir-alone-"));
+  await mkdir(join(alone, "lib"));
+  await writeSession(join(alone, "lib"), "sess-alone", "ms");
+  assert.equal((await runCommit({ noUpload: true }, alone)).sessionId, "sess-alone");
+});
+
+test("the commit and the push send a session started in a subdirectory", async () => {
+  const top = await realpath(await newRepo("isy-commit-subdir-send-"));
+  await mkdir(join(top, "src"));
+  await writeSession(join(top, "src"), "sess-sent", "ms");
+
+  await runCommit({ noUpload: true }, top);
+  const report = await runUpload({ silent: true, all: true }, top);
+
+  assert.equal(report.sent, 1);
+  assert.equal(uploads[0]!.sessionId, "sess-sent");
+  assert.equal((uploads[0]!.commits as unknown[]).length, 1);
+});
+
+test("a hook in a linked worktree still finds the session in its subdirectory", async () => {
+  const main = await realpath(await newRepo("isy-commit-linked-"));
+  const tree = `${main}-linked`;
+  await run("git", ["worktree", "add", "-q", "-b", "linked", tree], { cwd: main });
+  await mkdir(join(tree, "src"));
+  const inSrc = await writeSession(join(tree, "src"), "sess-linked", "ms");
+
+  // What git hands a post-commit hook there, and not in a main worktree: asked
+  // about any directory, git then answers that it is the top of the tree.
+  process.env.GIT_DIR = (await run("git", ["rev-parse", "--absolute-git-dir"], { cwd: tree })).stdout.trim();
+  try {
+    assert.equal((await runCommit({ noUpload: true }, tree)).sessionId, "sess-linked");
+  } finally {
+    delete process.env.GIT_DIR;
+  }
+  assert.equal((await readState())[inSrc]?.commits?.length, 1);
+});
+
+test("a commit stays out of the trees beside and inside this one", async () => {
+  const top = await realpath(await newRepo("isy-commit-trees-"));
+  const session = await writeSession(top, "sess-here", "left-pad");
+  await age(session, 1);
+
+  // Each of these is newer, and each is its own checkout on its own history.
+  const worktree = join(top, ".claude", "worktrees", "other");
+  await mkdir(join(top, ".claude", "worktrees"), { recursive: true });
+  await run("git", ["worktree", "add", "-q", "-b", "nested", worktree], { cwd: top });
+  await writeSession(worktree, "sess-nested-worktree", "ms");
+
+  const vendored = join(top, "vendor", "lib");
+  await mkdir(vendored, { recursive: true });
+  await run("git", ["init", "-q", "-b", "main"], { cwd: vendored });
+  await writeSession(vendored, "sess-nested-repo", "ms");
+
+  // Same prefix on disk, so the same prefix among Claude's project folders.
+  const beside = await newRepo("isy-commit-trees-beside-");
+  await rename(beside, `${top}-beside`);
+  await writeSession(`${top}-beside`, "sess-beside", "ms");
+
+  assert.equal((await runCommit({ noUpload: true }, top)).sessionId, "sess-here");
+  assert.equal((await readState())[session]?.commits?.length, 1);
+
+  assert.equal((await runUpload({ silent: true, all: true }, top)).sent, 1);
+  assert.deepEqual(uploads.map((upload) => upload.sessionId), ["sess-here"]);
+});
+
+test("a session elsewhere in the tree counts only as far back as a sweep looks", async () => {
+  const top = await realpath(await newRepo("isy-commit-subdir-old-"));
+  await mkdir(join(top, "src"));
+  const here = await writeSession(top, "sess-old-here", "left-pad");
+  await age(here, 60);
+  const inSrc = await writeSession(join(top, "src"), "sess-old-src", "ms");
+  await age(inSrc, 30);
+
+  // The directory's own sessions go however old they are, as they always did.
+  assert.equal((await runCommit({ noUpload: true }, top)).sessionId, "sess-old-here");
+  assert.equal((await runUpload({ silent: true, all: true }, top)).sent, 1);
+  assert.deepEqual(uploads.map((upload) => upload.sessionId), ["sess-old-here"]);
 });

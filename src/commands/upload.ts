@@ -1,4 +1,4 @@
-import { detectAgent, presentAgents } from "../agents/index.js";
+import { detectAgent, presentAgents, sessionsInTree } from "../agents/index.js";
 import type { Agent, AgentId, HookInput } from "../agents/index.js";
 import { DEFAULT_API_BASE_URL, buildTranscriptFields, uploadSession } from "../api.js";
 import type { ApiOptions, UploadPayload } from "../api.js";
@@ -9,7 +9,7 @@ import type { GitMetadata, GitResult } from "../git.js";
 import type { DiscoveredSession, IsyConfig } from "../types.js";
 import { logError, logLine } from "../log.js";
 import { parseLines } from "../parser.js";
-import { packageVersion } from "../paths.js";
+import { SWEEP_WINDOW_MS, packageVersion } from "../paths.js";
 import {
   MAX_ATTEMPTS,
   abandon,
@@ -187,15 +187,16 @@ interface Target {
   /** Set when the target came from a scan, which already knows size and mtime. */
   file?: DiscoveredSession;
   /**
-   * Where this session ran. Only a sweep sets it: every other path knows the
-   * directory before it knows the session, because a hook named it.
+   * Where this session ran, when finding it took reading that: a sweep, or a
+   * session from elsewhere in the tree. Every other path knows the directory
+   * before it knows the session, because a hook named it.
    */
   cwd?: string;
 }
 
 /**
- * Every session recorded for this directory whose bytes are not already on the
- * server, across every CLI installed here.
+ * Every session of this work tree whose bytes are not already on the server,
+ * across every CLI installed here.
  *
  * Size and mtime both matching the last accepted upload means the content
  * matches, so an unchanged transcript is never read — and a session that ended
@@ -205,28 +206,14 @@ async function changedSessions(cwd: string, state: ClientState): Promise<Target[
   const targets: Target[] = [];
 
   for (const agent of await presentAgents()) {
-    for (const file of await agent.sessionsIn(cwd)) {
+    for await (const file of sessionsInTree(agent, cwd)) {
       if (looksUnchanged(state[file.path] ?? {}, file)) continue;
-      targets.push({ agent, path: file.path, file });
+      targets.push({ agent, path: file.path, file, cwd: file.cwd });
     }
   }
 
   return targets;
 }
-
-/**
- * How far back a sweep looks. A sweep has no baseline to start from — every
- * session it has never seen reads as changed — so without a window the first
- * one on a machine would upload years of transcripts from every directory the
- * CLI was ever used in. Nothing older than this can reach an analysis anyway:
- * sessions are matched to a pull request by commit SHA, and a transcript
- * untouched for a fortnight belongs to commits that were pushed long ago.
- *
- * ponytail: a fixed window, not a high-water mark. A machine that was offline
- * longer than this loses the tail; move the boundary to a `lastSweepAt` in the
- * config if that ever happens to anyone.
- */
-const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
  * Every recently changed session on this machine, whatever directory it ran in.

@@ -59,8 +59,10 @@ export interface Agent {
    * and names no working directory, so there is nothing to scope the scan to.
    *
    * `cwd` comes back set only where listing already had to read it (Kimi).
+   * `under` lets a listing leave out what it can tell, unread, ran elsewhere; it
+   * is a saving and no promise that the rest ran there.
    */
-  allSessions(): Promise<DiscoveredSession[]>;
+  allSessions(under?: string): Promise<DiscoveredSession[]>;
   /**
    * Where one session ran, for the adapters whose listing does not know. Separate
    * from `allSessions` on purpose: it costs a read, and a sweep only needs it for

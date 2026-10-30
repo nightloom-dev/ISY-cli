@@ -117,13 +117,32 @@ export async function latestSession(cwd: string): Promise<SessionFile | undefine
 }
 
 /**
+ * How far back a sweep looks. A sweep has no baseline to start from — every
+ * session it has never seen reads as changed — so without a window the first
+ * one on a machine would upload years of transcripts from every directory the
+ * CLI was ever used in. Nothing older than this can reach an analysis anyway:
+ * sessions are matched to a pull request by commit SHA, and a transcript
+ * untouched for a fortnight belongs to commits that were pushed long ago.
+ *
+ * ponytail: a fixed window, not a high-water mark. A machine that was offline
+ * longer than this loses the tail; move the boundary to a `lastSweepAt` in the
+ * config if that ever happens to anyone.
+ */
+export const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
  * Every Claude session on this machine, newest first, without opening a single
  * transcript: a scan that runs on a timer must cost `readdir` and `stat`, not a
  * read per session. Which directory each one ran in is `firstCwd`'s job, asked
  * only about the sessions that turned out to have changed.
+ *
+ * `under` skips the project folders that cannot hold a session from that
+ * directory or below it, which keeps a commit from listing the whole machine. A
+ * slug is lossy, so what it lets through may still be from somewhere else.
  */
-export async function allClaudeSessions(): Promise<SessionFile[]> {
+export async function allClaudeSessions(under?: string): Promise<SessionFile[]> {
   const root = claudeProjectsDir();
+  const slug = under === undefined ? undefined : projectSlug(under);
 
   let projects: string[];
   try {
@@ -133,7 +152,10 @@ export async function allClaudeSessions(): Promise<SessionFile[]> {
   }
 
   const sessions: SessionFile[] = [];
-  for (const project of projects) sessions.push(...(await sessionsInDir(join(root, project))));
+  for (const project of projects) {
+    if (slug !== undefined && project !== slug && !project.startsWith(`${slug}-`)) continue;
+    sessions.push(...(await sessionsInDir(join(root, project))));
+  }
 
   return newestFirst(sessions);
 }

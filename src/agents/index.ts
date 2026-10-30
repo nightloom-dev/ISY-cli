@@ -1,8 +1,10 @@
 import { claudeAgent } from "./claude.js";
 import { codexAgent } from "./codex.js";
 import { kimiAgent } from "./kimi.js";
-import { lastActive } from "../paths.js";
-import type { SessionFile } from "../types.js";
+import { isAbsolute, relative, sep } from "node:path";
+import { workTreeTop } from "../git.js";
+import { SWEEP_WINDOW_MS, lastActive } from "../paths.js";
+import type { DiscoveredSession } from "../types.js";
 import type { Agent, AgentId, HookInput } from "./types.js";
 
 export { claudeAgent } from "./claude.js";
@@ -47,9 +49,56 @@ export async function presentAgents(): Promise<Agent[]> {
   return present;
 }
 
+function isWithin(top: string, directory: string): boolean {
+  const path = relative(top, directory);
+  return path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+
 /**
- * Newest session for this directory across every CLI installed here, by when
- * the session itself last wrote.
+ * One CLI's sessions from the work tree `cwd` stands in, newest first: the ones
+ * recorded for `cwd` itself, however old, and those from any other directory of
+ * the tree, as far back as a sweep looks and with that directory set as `cwd`.
+ *
+ * git runs its hooks at the top of the tree, whatever directory the session
+ * started in and the commit ran from, so a listing by the hook's directory
+ * alone never sees a session started further down. A submodule or a worktree
+ * nested inside has a top of its own and stays out. Lazy because a session's
+ * directory costs a read, and a commit only wants the first one.
+ */
+export async function* sessionsInTree(
+  agent: Agent,
+  cwd: string,
+): AsyncGenerator<DiscoveredSession> {
+  const recorded = await agent.sessionsIn(cwd);
+  const top = await workTreeTop(cwd);
+  if (!top) {
+    yield* recorded;
+    return;
+  }
+
+  const here = new Set(recorded.map((file) => file.path));
+  const oldest = Date.now() - SWEEP_WINDOW_MS;
+  const elsewhere = (await agent.allSessions(top)).filter(
+    (file) => !here.has(file.path) && file.modifiedAt.getTime() >= oldest,
+  );
+
+  const listed: DiscoveredSession[] = [...recorded, ...elsewhere];
+  const tops = new Map<string, string | undefined>();
+  for (const file of listed.sort((a, b) => lastActive(b) - lastActive(a))) {
+    if (here.has(file.path)) {
+      yield file;
+      continue;
+    }
+    const directory = file.cwd ?? (await agent.cwdOf(file.path));
+    if (!directory || !isWithin(top, directory)) continue;
+    if (!tops.has(directory)) tops.set(directory, await workTreeTop(directory));
+    if (tops.get(directory) === top) yield { ...file, cwd: directory };
+  }
+}
+
+/**
+ * Newest session of this work tree across every CLI installed here, by when the
+ * session itself last wrote.
  *
  * ponytail: a commit a subagent made, while its session waited on it, is
  * credited by the session's own time, which that subagent does not move; a
@@ -58,14 +107,15 @@ export async function presentAgents(): Promise<Agent[]> {
  */
 export async function newestSession(
   cwd: string,
-): Promise<{ agent: Agent; file: SessionFile } | undefined> {
-  let best: { agent: Agent; file: SessionFile } | undefined;
+): Promise<{ agent: Agent; file: DiscoveredSession } | undefined> {
+  let best: { agent: Agent; file: DiscoveredSession } | undefined;
 
   for (const agent of await presentAgents()) {
-    const file = (await agent.sessionsIn(cwd))[0];
-    if (!file) continue;
-    if (!best || lastActive(file) > lastActive(best.file)) {
-      best = { agent, file };
+    for await (const file of sessionsInTree(agent, cwd)) {
+      if (!best || lastActive(file) > lastActive(best.file)) {
+        best = { agent, file };
+      }
+      break;
     }
   }
 
