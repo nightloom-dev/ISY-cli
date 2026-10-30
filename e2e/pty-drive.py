@@ -56,6 +56,9 @@ def main() -> None:
     def pump(timeout: float) -> bool:
         """Read what is there; False once the child is gone."""
         nonlocal exit_code
+        # Already reaped: a second waitpid raises, and the report would be lost with it.
+        if exit_code is not None:
+            return False
         ready, _, _ = select.select([fd], [], [], timeout)
         if ready:
             try:
