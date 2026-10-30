@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -621,8 +621,13 @@ test("redacts real transcripts without corrupting them", { skip: !existsSync(cor
   assert.ok(redactedLines > 0);
 });
 
-test("redacted output still parses into the same session structure", { skip: !existsSync(corpus) }, async () => {
+test("redacted output still parses into the same session structure", { skip: !existsSync(corpus) }, async (t) => {
   const projects = await readdir(corpus);
+  // Both parses read one copy: a session still being written grows between two
+  // reads of its file, and the counts would differ for no fault of redaction.
+  const scratch = await mkdtemp(join(tmpdir(), "isy-structure-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const file = join(scratch, "session.jsonl");
   let checked = 0;
 
   for (const project of projects) {
@@ -635,19 +640,20 @@ test("redacted output still parses into the same session structure", { skip: !ex
 
     for (const entry of entries) {
       if (!entry.endsWith(".jsonl")) continue;
-      const file = join(corpus, project, entry);
+      const source = join(corpus, project, entry);
+      await copyFile(source, file);
 
       const original = await parseTranscriptFile(file);
       const { lines } = await redactTranscriptFile(file);
       const redacted = parseLines(lines);
 
-      assert.equal(redacted.records.length, original.records.length, `${file} lost records`);
-      assert.equal(redacted.toolUses.length, original.toolUses.length, `${file} lost tool calls`);
+      assert.equal(redacted.records.length, original.records.length, `${source} lost records`);
+      assert.equal(redacted.toolUses.length, original.toolUses.length, `${source} lost tool calls`);
       // Edits, not files: a `sed -i` path is resolved from the command's text,
       // which masking rewrites, so two keys for one file can become one.
       const edits = (session: typeof original) => [...session.fileEdits.values()].reduce((sum, list) => sum + list.length, 0);
-      assert.equal(edits(redacted), edits(original), `${file} lost edits`);
-      assert.equal(redacted.mainPath.size, original.mainPath.size, `${file} lost tree structure`);
+      assert.equal(edits(redacted), edits(original), `${source} lost edits`);
+      assert.equal(redacted.mainPath.size, original.mainPath.size, `${source} lost tree structure`);
       checked += 1;
     }
   }
