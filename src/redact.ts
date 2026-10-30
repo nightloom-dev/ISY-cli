@@ -80,10 +80,20 @@ const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\([^\s"'{}[\]<>()]*\)?[,;]?(?=[\
  *
  * A `$` or a bracket inside belongs to the value (`abc$REST123`, `abc(def)ghi1`), as
  * a password takes any character. They end it only where they start something
- * else: `$PASSWORD` and `$(cat f)` at the front, unless single quotes make that
- * `$` literal, `prefix${X}`, and a call, of which only a name long enough to be a value goes.
+ * else: `$PASSWORD` and `$(cat f)` at the front, `prefix${X}`, and a call, of which
+ * only a name long enough to be a value goes.
+ *
+ * How much more a value takes goes by what is around it. In quotes it runs to the
+ * closing one, the other quote and `{}[]<>` included, though what opens with a
+ * bracket is a placeholder; `$` at the front is literal in single quotes, and in
+ * double ones where no shell would expand it: a hash, or anything with a digit in it
+ * that no all-caps name spells. With no space after an `=` it takes `{}[]<>` too,
+ * short of one closing around the assignment. Spaced from its name and unquoted it is
+ * code as often as not (`token = tokens[index]`), so the limits above hold there.
  */
-const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?!${CALL})(?:${VALUE_CHAR}|(?<=')\$)(?:${VALUE_CHAR}|[$()](?=[^\s"'{}[\]<>])){7,}|${VALUE_CHAR}{8,})`;
+const INNER_DOLLAR_OR_PAREN = String.raw`[$()](?=[^\s"'{}[\]<>])`;
+const LITERAL_DOLLAR = String.raw`\$(?=[^\s"]{0,256}\d)(?![{(])(?![A-Z_][A-Z0-9_]*\b)`;
+const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?<=")(?:${VALUE_CHAR}|${LITERAL_DOLLAR})(?:[^\s"$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=')(?:${VALUE_CHAR}|\$)(?:[^\s'$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=[\w.-]=)(?!=|${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}|[{}[\]<>](?=[^\s"'])){7,}|(?!${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}){7,}|${VALUE_CHAR}{8,})`;
 
 /**
  * `curl -u admin:…`, its flag alone or last among others (`-fsSLu`). What precedes
