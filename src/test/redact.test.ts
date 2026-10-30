@@ -1399,6 +1399,18 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `${fill("<<")} .env`,
     `${fill("<<a ")}\n.env`,
     `<<${" ".repeat(200_000)}.env`,
+    `${fill("if ")}.env`,
+    `${fill("( ")}.env`,
+    `${fill("! ")}.env`,
+    `${" ".repeat(200_000)}.env`,
+    `cat ${fill("a:")}.env`,
+    `cat ${fill(":")}`,
+    `cat ${fill(".env ")}`,
+    `cat ${fill("a.env ")}`,
+    `cat ${"a".repeat(200_000)}.env`,
+    `sed -i ${fill("a ")}.env`,
+    `sed -i ${fill("s/a/b/ ")}.env`,
+    `perl -pi -e ${fill("' ")}.env`,
   ];
   for (const command of shapes) {
     const started = performance.now();
