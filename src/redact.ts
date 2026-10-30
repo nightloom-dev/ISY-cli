@@ -135,10 +135,25 @@ export const BUILTIN_RULES: RedactionRule[] = [
   },
   {
     // After every shape a bearer token can have, so a JWT or a GitHub token
-    // keeps its own label and its marker is not marked again.
+    // keeps its own label and its marker is not marked again. Twenty characters
+    // for a word alone, or eight with a digit: `Bearer authentication` is prose.
     type: "bearer_token",
-    pattern: /\b(Bearer\s+)(?!\[ISY_REDACTED)[A-Za-z0-9._~+/-]{20,}=*/gi,
+    pattern: /\b(Bearer\s+)(?!\[ISY_REDACTED)(?:(?=[A-Za-z._~+/-]*\d)[A-Za-z0-9._~+/-]{8,}|[A-Za-z0-9._~+/-]{20,})=*/gi,
     replacement: `$1${marker("bearer_token")}`,
+  },
+  {
+    // Whatever the scheme (`Basic`, `Token`, `Digest`): the header says what the
+    // word after it is, so it needs no shape. Before the assignment rule, which
+    // would stop at the scheme. A variable or a placeholder is left as it is.
+    type: "authorization",
+    pattern: /\b(authorization["'`]?[ \t]*[:=][ \t]*["'`]?[A-Za-z][A-Za-z0-9-]*[ \t]+)(?!\[ISY_REDACTED)[^\s"'`$<>{}()[\]]{8,}/gi,
+    replacement: `$1${marker("authorization")}`,
+  },
+  {
+    // A cookie header's value runs to the end of the line, spaces and `;` included.
+    type: "cookie",
+    pattern: /\b(cookie["'`]?[ \t]*[:=][ \t]*["'`]?)(?!\[ISY_REDACTED)(?![\s$<{])[^"'`\r\n]{8,}/gi,
+    replacement: `$1${marker("cookie")}`,
   },
   {
     // Any scheme: a password in a URL is one whatever speaks it — rediss,

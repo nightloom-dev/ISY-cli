@@ -255,6 +255,55 @@ test("masks a value under PASS, PWD and the other names a credential goes by, no
   }
 });
 
+test("masks what an Authorization or Cookie header carries, whatever its scheme or length", () => {
+  const auth = marker("authorization");
+  const bearer = marker("bearer_token");
+  const cookie = marker("cookie");
+  const cut: [string, string][] = [
+    ["curl -H 'Authorization: Bearer abcdefghijklmnop' http://127.0.0.1/", `curl -H 'Authorization: Bearer ${auth}' http://127.0.0.1/`],
+    ["curl -H 'Authorization: Bearer Zq8vR2mK9xLpWq7E' http://127.0.0.1/", `curl -H 'Authorization: Bearer ${bearer}' http://127.0.0.1/`],
+    ["Authorization: Token abcdefghijkl", `Authorization: Token ${auth}`],
+    ["authorization: Basic dXNlcjpwYXNz", `authorization: Basic ${auth}`],
+    ["Proxy-Authorization: Basic dXNlcjpwYXNz", `Proxy-Authorization: Basic ${auth}`],
+    [`"Authorization": "Basic dXNlcjpwYXNz"`, `"Authorization": "Basic ${auth}"`],
+    [`headers: { Authorization: \`Basic dXNlcjpwYXNz\` }`, `headers: { Authorization: \`Basic ${auth}\` }`],
+    ["Authorization: dXNlcjpwYXNz", `Authorization: ${marker("assignment")}`],
+    ["Bearer Zq8vR2mK", `Bearer ${bearer}`],
+    ["Cookie: sid=Zq8vR2mK9xLp; theme=dark", `Cookie: ${cookie}`],
+    ["Set-Cookie: sid=Zq8vR2mK9xLp; Path=/; HttpOnly", `Set-Cookie: ${cookie}`],
+    ["curl -H 'Cookie: sid=Zq8vR2mK9xLp; theme=dark' http://127.0.0.1/", `curl -H 'Cookie: ${cookie}' http://127.0.0.1/`],
+    [`{"cookie": "sid=Zq8vR2mK9xLp; theme=dark"}`, `{"cookie": "${cookie}"}`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+
+  for (const text of [
+    "Bearer $TOKEN",
+    "Bearer ${token}",
+    "Bearer <token>",
+    "Bearer authentication is what the docs call it",
+    "Basic authentication is off",
+    "Authorization: Bearer $TOKEN",
+    "Authorization: Bearer ${token}",
+    "Authorization: Bearer <token>",
+    `curl -H "Authorization: Token $API_TOKEN" http://127.0.0.1/`,
+    "the Authorization header carries it",
+    "Cookie: $COOKIE",
+    "Cookie: ${cookie}",
+    "Cookie: <value>",
+    "a cookie jar",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+
+  const input = { headers: { Authorization: "Basic dXNlcjpwYXNz", Cookie: "sid=Zq8vR2mK9xLp; theme=dark" } };
+  assert.deepEqual(throughCall("mcp__http__fetch", input, "plain output").input, {
+    headers: { Authorization: marker("assignment"), Cookie: marker("assignment") },
+  });
+});
+
 test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });
@@ -1154,6 +1203,22 @@ test("every rule gets through text shaped almost like what it matches", () => {
     fill("sshpass -p "),
     fill("docker login "),
     fill("redis-cli -a "),
+    fill("bearer "),
+    `bearer ${"a".repeat(200_000)}`,
+    `bearer ${" ".repeat(200_000)}`,
+    fill("bearer a."),
+    fill("authorization: "),
+    fill("authorization:"),
+    fill("authorization: a "),
+    `authorization:${" ".repeat(200_000)}`,
+    `authorization: a${" ".repeat(200_000)}`,
+    `authorization: ${"a".repeat(200_000)}`,
+    `authorization: ${"a-".repeat(100_000)}`,
+    fill("cookie: "),
+    fill('cookie: "'),
+    fill("cookie: <"),
+    `cookie:${" ".repeat(200_000)}`,
+    `cookie: ${"a".repeat(200_000)}`,
     fill("pass"),
     fill("_pass_"),
     fill("aPass"),
