@@ -5,3 +5,4 @@ dist/
 !src/test/fixtures/**/*.log
 *.tgz
 .env*
+__pycache__/
