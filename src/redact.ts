@@ -537,11 +537,9 @@ function statements(line: string): { parts: string[]; open: boolean } {
 }
 
 /** `VALUE=x`, then `echo "K=$VALUE" > .env`: the value sits where the write only names it. */
-function expandsAssigned(statement: string, command: string): boolean {
-  const expanded = [...statement.matchAll(/\$\{?([A-Za-z_]\w*)/g)];
-  if (expanded.length === 0) return false;
-  const assigned = new Set([...command.matchAll(/(?<![\w$])([A-Za-z_]\w*)=/g)].map((match) => match[1]));
-  return expanded.some((match) => assigned.has(match[1]));
+function expandsAssigned(statement: string, assigned: ReadonlySet<string>): boolean {
+  for (const match of statement.matchAll(/\$\{?([A-Za-z_]\w*)/g)) if (assigned.has(match[1]!)) return true;
+  return false;
 }
 
 /** A write that closes a group or a substitution: `{ …; } > .env`, `(…) | tee .env`, `done > .env`. */
@@ -557,6 +555,8 @@ const GROUP_WRITE = /(?:[})]|\b(?:done|fi|esac))\s*(?:\d?>|&>|\|)/;
  */
 function cutDotenvWrites(command: string, context: RedactContext): string {
   if (!command.includes(".env")) return command;
+  // Once, as a statement asking for itself would rescan the command for each one.
+  const assigned = new Set([...command.matchAll(/(?<![\w$])([A-Za-z_]\w*)=/g)].map((match) => match[1]!));
   const lines = command.split("\n");
   const kept: string[] = [];
   let written: string | undefined;
@@ -579,7 +579,7 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
             // `s|a|b|` and `s#a#b#` split where `s/a/b/` does.
             learnValues(part.replaceAll(/(?<![\w-])s([^\w\s\\])/.exec(part)?.[1] ?? "/", "\n"), context);
             const edit = `sed -i ${marker("dotenv")} ${edited}`;
-            if (expandsAssigned(part, command)) {
+            if (expandsAssigned(part, assigned)) {
               spread = true;
               written ??= edit;
             }
@@ -589,26 +589,28 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
           writes = true;
           written ??= write;
           learnValues(part, context);
-          if (GROUP_WRITE.test(part) || expandsAssigned(part, command)) spread = true;
+          if (GROUP_WRITE.test(part) || expandsAssigned(part, assigned)) spread = true;
           return `${indent}${write}`;
         })
         .join(""),
     );
     const terminator = HEREDOC.exec(lines[i]!)?.[2];
     if (terminator === undefined) continue;
-    let end = lines.findIndex((line, j) => j > i && line.trim() === terminator);
-    if (end === -1) end = lines.length;
+    let end = i + 1;
+    while (end < lines.length && lines[end]!.trim() !== terminator) end += 1;
     const body = lines.slice(i + 1, end);
     if (writes) {
       learnValues(body.join("\n"), context);
-      if (expandsAssigned(body.join("\n"), command)) spread = true;
+      if (expandsAssigned(body.join("\n"), assigned)) spread = true;
       i = end;
       continue;
     }
     // A body is code as often as not, where `cfg.env` is a property and not a file.
     const message = commandSegments(parts.find((part) => HEREDOC.test(part))!).every((segment) => TAKES_MESSAGE.test(segment));
     const namesDotenv = !message && body.some((line) => line.split(WORD_BREAK).some((word) => basename(word).startsWith(".env")));
-    kept.push(...(namesDotenv ? [marker("dotenv")] : body), ...lines.slice(end, end + 1));
+    // One at a time: spread, a body of a few hundred thousand lines overflows the stack.
+    for (const line of namesDotenv ? [marker("dotenv")] : body) kept.push(line);
+    if (end < lines.length) kept.push(lines[end]!);
     i = end;
   }
   // A group or a quoted string over several lines holds the values outside the

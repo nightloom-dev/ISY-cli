@@ -1557,6 +1557,14 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     `tail ${fill("a.outpu ")}`,
     `tail ${fill("a.output.")}`,
     `tail ${fill("-")}.output`,
+    // Each statement here asks what the whole command assigns.
+    fill('echo "$X" > .env\n'),
+    fill("sed -i s/$X/b/ .env\n"),
+    fill('a=b echo "$X" > .env\n'),
+    // Each heredoc here looks for where it ends.
+    `${fill("cat <<a\na\n")}.env`,
+    `${fill("cat > .env <<a\na\n")}`,
+    `cat <<a\n${"\n".repeat(200_000)}a\n.env`,
   ];
   for (const command of shapes) {
     const started = performance.now();
