@@ -391,8 +391,16 @@ function learnValues(value: unknown, context: RedactContext): void {
   };
   for (const [, name, written] of text.matchAll(DOTENV_PAIR)) {
     if (!/^[A-Z_][A-Z0-9_]*$/.test(name!) && !SENSITIVE_KEY.test(name!)) continue;
-    // A shell ends a statement at a `;` the value does not hold: `VALUE=x; echo "K=$VALUE"`.
-    learn(name, /^["']/.test(written!) ? written!.slice(1, -1) : written!.replace(/;$/, ""));
+    if (/^["']/.test(written!)) {
+      learn(name, written!.slice(1, -1));
+      continue;
+    }
+    // A shell ends a word at an operator the value does not hold: `VALUE=x; echo "K=$VALUE"`,
+    // `echo K=x>.env`. A dotenv file may hold one in its value, so the whole goes as well.
+    const whole = written!.replace(/;$/, "");
+    learn(name, whole);
+    const end = whole.search(/[;|&<>)\\]/);
+    if (end > 0) learn(name, whole.slice(0, end));
   }
   for (const line of text.split("\n")) {
     const bare = line.trim();

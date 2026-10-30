@@ -856,6 +856,33 @@ test("cuts what a shell command writes into a dotenv file, and what it printed",
   }
 });
 
+test("a value written into a dotenv file is learned without the shell operator behind it", () => {
+  const value = "Zq8vR2mK9xLp";
+  for (const command of [
+    `echo K=${value}>.env`,
+    `echo K=${value}>>.env`,
+    `echo K=${value}|tee .env`,
+    `(echo K=${value})>.env`,
+    `(echo K=${value}) > .env`,
+    `$(echo K=${value}) > .env`,
+    `cat .env; echo K=${value}>>.env`,
+  ]) {
+    const { lines } = summaryFor([
+      ...callAndResult("Bash", { command }, "done"),
+      { type: "user", message: { role: "user", content: `the key is ${value}` } },
+    ]);
+    assert.ok(!lines.join("\n").includes(value), command);
+  }
+  // A dotenv file may hold them, and the value goes whole as well.
+  const whole = "aZ9bY8cX7&dW6eV5;fU4";
+  const { lines } = summaryFor([
+    ...callAndResult("Read", { file_path: ".env" }, `API_KEY=${whole}`),
+    { type: "user", message: { role: "user", content: `the key is ${whole}, then aZ9bY8cX7` } },
+  ]);
+  assert.ok(!lines.join("\n").includes("aZ9bY8cX7"));
+  assert.ok(!lines.join("\n").includes("fU4"));
+});
+
 test("a redirect or a tee inside a quoted argument writes nothing, unless the command runs that argument", () => {
   for (const command of [
     `echo "add this > .env"`,
@@ -1716,6 +1743,9 @@ test("cutting a write to a dotenv file gets through what looks almost like one",
     fill('echo "$X" > .env\n'),
     fill("sed -i s/$X/b/ .env\n"),
     fill('a=b echo "$X" > .env\n'),
+    `echo K=${fill("a;")}>.env`,
+    `echo K=${"a".repeat(200_000)}>.env`,
+    `${fill("K=aZ9bY8cX7;\n")}>.env`,
     // Each heredoc here looks for where it ends.
     `${fill("cat <<a\na\n")}.env`,
     `${fill("cat > .env <<a\na\n")}`,
