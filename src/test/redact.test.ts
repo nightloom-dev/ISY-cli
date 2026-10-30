@@ -366,6 +366,13 @@ test("a recorded request keeps only the fields that name it", () => {
   ]);
 });
 
+test("a subagent's recorded request still reads as the subagent's", () => {
+  const { lines } = summaryFor([
+    { type: "api-request", sessionId: "s1", agentId: "a1b2", isSidechain: true, parentToolUseID: "toolu_1", params: { model: "claude-opus-5-5" } },
+  ]);
+  assert.deepEqual(JSON.parse(lines[0]!), { type: "api-request", sessionId: "s1", agentId: "a1b2", isSidechain: true, parentToolUseID: "toolu_1" });
+});
+
 test("bridge and artifact records go up without the account and organisation they name", () => {
   // What Claude Code 2.1.312 writes for the session's bridge and its artifacts.
   const records = [

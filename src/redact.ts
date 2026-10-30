@@ -344,9 +344,22 @@ function learnRoot(record: Record<string, unknown>, context: RedactContext): voi
  * `bridge-session` and `artifact-autoreact-ledger` are cut the same way: one
  * names the account and organisation that own the session's bridge, the other
  * the account. The parser reads none of them past their type, so only the
- * fields that name them go.
+ * fields that name them go — and the ones that say a subagent made the request
+ * (`subagents.ts:asSidechain`), or it is counted as the session's own.
  */
-const REQUEST_RECORD_KEYS = new Set(["type", "uuid", "parentUuid", "sessionId", "timestamp", "version", "shapeHash", "hash"]);
+const REQUEST_RECORD_KEYS = new Set([
+  "type",
+  "uuid",
+  "parentUuid",
+  "sessionId",
+  "timestamp",
+  "version",
+  "shapeHash",
+  "hash",
+  "isSidechain",
+  "parentToolUseID",
+  "agentId",
+]);
 const STRIPPED_RECORD_TYPES = new Set([
   "api-request",
   "api-request-shape",
