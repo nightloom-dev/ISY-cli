@@ -164,11 +164,16 @@ export async function runInit(options: { token?: string }, cwd: string): Promise
   if (!kept) console.log(`Token stored in ${configPath()}`);
 
   // A hook that found the key missing or refused parked "run: isy init", not
-  // always last on its line (`formatUploadAlert`), and this is that run. Left
+  // always alone on its line (`formatUploadAlert`), and this is that run. Left
   // parked, the next session start would send the reader back here for
-  // nothing; anything else waiting stays for it.
+  // nothing; the rest of its line, and anything else waiting, stays for it.
   for (const line of (await drainAlerts()).split("\n")) {
-    if (line && !line.includes("run: isy init")) await parkAlert(line);
+    if (!line.includes("run: isy init")) {
+      if (line) await parkAlert(line);
+      continue;
+    }
+    const rest = line.replace(/^ISY: /, "").split(" · ").filter((part) => !part.includes("run: isy init"));
+    if (rest.length > 0) await parkAlert(`ISY: ${rest.join(" · ")}`);
   }
 
   // Hooks go into every CLI actually installed here, and none that is not.

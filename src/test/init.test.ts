@@ -113,5 +113,5 @@ test("isy init answers the alerts that sent the reader to it and keeps the rest"
 
   await quietly(() => runInit({}, cwd));
 
-  assert.equal(await drainAlerts(), "ISY: this month's analyses are used up");
+  assert.equal(await drainAlerts(), "ISY: 1 session(s) given up on\nISY: this month's analyses are used up");
 });
