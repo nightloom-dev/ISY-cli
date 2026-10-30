@@ -363,6 +363,76 @@ test("names the files sed -i and perl -i rewrite, and not their scripts", () => 
   assert.deepEqual(shellEditPaths('sed -i "$SCRIPT" src/a.ts'), ["src/a.ts"], "a quoted variable is the one script");
   assert.deepEqual(shellEditPaths("sed -i $FLAGS 's/a/b/' src/a.ts"), ["src/a.ts"], "a bare one can be flags");
   assert.deepEqual(shellEditPaths(`sed -i 's/a/b/' "$FILE" $OTHER "$DIR/a.ts"`), [], "a variable names no file");
+  assert.deepEqual(shellEditPaths("perl -p -i -e 's/a/b/' src/a.ts"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("perl -0pi -e 's/a/b/' src/a.ts"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("perl -pe 's/a/b/' src/a.ts"), []);
+  assert.deepEqual(shellEditPaths(`ruby -pi -e 'sub("a","b")' src/a.ts`), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths(`ruby -i.bak -pe 'sub("a","b")' src/a.ts`), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("ruby -ne 'puts 1' src/a.ts"), []);
+  assert.deepEqual(shellEditPaths("awk -i inplace '{print}' src/a.ts"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("gawk -i inplace -v x=1 -F : '{print}' src/a.ts src/b.ts"), ["src/a.ts", "src/b.ts"]);
+  assert.deepEqual(shellEditPaths("gawk --include=inplace '{print}' src/a.ts"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("awk -i lib.awk '{print}' src/a.ts"), [], "-i only loads a library");
+  assert.deepEqual(shellEditPaths("awk '{print}' src/a.ts"), []);
+  assert.deepEqual(shellEditPaths("for f in a b; do sed -i 's/a/b/' src/a.ts; done"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("if true; then sudo sed -i 's/a/b/' src/a.ts; fi"), ["src/a.ts"]);
+  assert.deepEqual(shellEditPaths("perl script.pl -input src/a.ts"), [], "a flag of the script's own");
+});
+
+test("whether a command wrote agrees with what it names as edited, for every in-place editor", () => {
+  for (const command of [
+    "sed -i 's/a/b/' a.ts",
+    "perl -pi -e 's/a/b/' a.ts",
+    "perl -0pi -e 's/a/b/' a.ts",
+    "perl -p -i -e 's/a/b/' a.ts",
+    "ruby -pi -e 'x' a.ts",
+    "awk -i inplace '{print}' a.ts",
+    "gawk --include=inplace '{print}' a.ts",
+    "for f in x; do sed -i 's/a/b/' a.ts; done",
+  ]) {
+    assert.equal(shellWrites(command), true, command);
+    assert.deepEqual(shellEditPaths(command), ["a.ts"], command);
+  }
+  for (const command of ["sed 's/a/b/' a.ts", "perl -pe 's/a/b/' a.ts", "ruby -ne 'x' a.ts", "awk '{print}' a.ts", "awk -i lib.awk '{print}' a.ts"]) {
+    assert.equal(shellWrites(command), false, command);
+    assert.deepEqual(shellEditPaths(command), [], command);
+  }
+});
+
+test("telling an in-place edit or a heredoc from anything else gets through 200 KB of text built to stall it", () => {
+  const fill = (unit: string): string => unit.repeat(Math.ceil(200_000 / unit.length));
+  for (const command of [
+    `perl ${fill("-a ")}`,
+    `perl ${fill("-a ")}x`,
+    `ruby ${fill("-a")}`,
+    `ruby -${"a".repeat(200_000)}`,
+    `perl${" ".repeat(200_000)}-a`,
+    `perl ${fill("-a  ")}'x' y`,
+    `awk ${fill("-i ")}`,
+    `awk -i${" ".repeat(200_000)}x`,
+    `awk --include=${" ".repeat(200_000)}x`,
+    `gawk ${fill("--include ")}`,
+    fill("do "),
+    fill("do  "),
+    `${fill("do ")}sed -i x y`,
+    `${fill("sudo\t")}awk`,
+    fill("<<\\"),
+    `<<${" ".repeat(200_000)}`,
+    `cat ${fill("<<-\\")}`,
+  ]) {
+    const started = Date.now();
+    shellWrites(command);
+    shellEditPaths(command);
+    withoutHeredocs(command);
+    const took = Date.now() - started;
+    assert.ok(took < 1000, `took ${took}ms on ${JSON.stringify(command.slice(0, 24))}`);
+  }
+});
+
+test("a heredoc's body is cut whichever way its delimiter is quoted", () => {
+  for (const opener of ["<<EOF", "<<-EOF", "<<'EOF'", '<<"EOF"', "<<\\EOF"]) {
+    assert.equal(withoutHeredocs(`cat > a.txt ${opener}\nDROP DATABASE\nEOF\nnpm test`).includes("DROP DATABASE"), false, opener);
+  }
 });
 
 test("resolves a sed -i path against the directory the command ran in", () => {

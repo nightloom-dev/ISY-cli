@@ -205,11 +205,11 @@ function pushLookup(state: ParseState, use: ToolUse): void {
 }
 
 /**
- * A heredoc opener: `<<EOF`, `<<-EOF`, `<<'PY'`. The delimiter is what ends the
- * body, and quoting it changes nothing about where the body stops. `<<<` is a
- * here-string, whose word is the whole of its input, and it has no body.
+ * A heredoc opener: `<<EOF`, `<<-EOF`, `<<'PY'`, `<<\EOF`. The delimiter is what
+ * ends the body, and quoting it changes nothing about where the body stops. `<<<`
+ * is a here-string, whose word is the whole of its input, and it has no body.
  */
-export const HEREDOC = /(?<!<)<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
+export const HEREDOC = /(?<!<)<<-?\s*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
 
 /**
  * The command with every heredoc body cut out.
@@ -412,7 +412,26 @@ const REDIRECT_WRITE = /(?:^|[^<>&\d])\d*>>?(?!&)\s*(?!\/dev\/|\/tmp\/)[^\s&|;<>
 const TEE_WRITE = /\btee\s+(?:-a\s+)?(?!\/dev\/|\/tmp\/)[^\s&|;-]/;
 const FILE_MUTATORS =
   /^\s*(?:sudo\s+)?(?:patch|truncate|mv|cp|git\s+(?:apply|mv|rm|restore|checkout\s+--))\b/;
-const IN_PLACE_EDITORS = /^\s*(?:sudo\s+)?(?:g?sed|perl)\b/;
+/** What can stand in front of a command and leave it the same command: `do sed -i …`. */
+const LEADING_WORDS = /^\s*(?:(?:sudo|if|then|elif|else|while|until|do)\s+)*/;
+const IN_PLACE_EDITORS = /^(g?sed|g?awk|perl|ruby)\b/;
+/** Theirs is among the flags in front, in a cluster that may hold a digit: `perl -0pi`. */
+const PERL_IN_PLACE = /^\S+(?:\s+-\S+)*?\s+-\w*i/;
+/** To awk `-i` loads a library, and the one that rewrites is gawk's `inplace`. */
+const AWK_IN_PLACE = /(?:^|\s)(?:-i\s*|--include[=\s]\s*)inplace(?:\s|$)/;
+
+/**
+ * Whether a segment, with what its quotes hold emptied out, runs an editor that
+ * rewrites its files: `sed 's/ -i //' a.ts` only prints.
+ */
+function editsInPlace(bare: string): boolean {
+  const called = bare.replace(LEADING_WORDS, "");
+  const editor = IN_PLACE_EDITORS.exec(called)?.[1];
+  if (editor === undefined) return false;
+  if (editor === "perl" || editor === "ruby") return PERL_IN_PLACE.test(called);
+  return (editor.endsWith("awk") ? AWK_IN_PLACE : IN_PLACE).test(called);
+}
+
 /** An interpreter fed a script on stdin: whatever the script writes, the command line cannot say. */
 const INTERPRETER_HEREDOC =
   /(?:^|[\s;&|(])(?:python[0-9.]*|node|deno|bun|tsx|ruby|perl|php|bash|sh|zsh)\b[^\n]*<</;
@@ -440,7 +459,7 @@ export function shellWrites(command: string): boolean {
     // What sits inside quotes is an argument, not an operator: `grep "->" a`.
     const bare = segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''");
     if (REDIRECT_WRITE.test(bare) || TEE_WRITE.test(bare) || FILE_MUTATORS.test(bare)) return true;
-    if (IN_PLACE_EDITORS.test(bare) && (IN_PLACE.test(bare) || /\bperl\s+-\w*i/.test(bare))) return true;
+    if (editsInPlace(bare)) return true;
   }
   return false;
 }
@@ -500,9 +519,12 @@ const SHELL_WORD = /(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"])+/g;
  */
 const SED_SCRIPT_FLAG = /^(?:-e|--expression|-f|--file)$/;
 const PERL_SCRIPT_FLAG = /^-[a-zA-Z]*e$/;
+/** awk's flags that take a word that is neither the script nor a file. */
+const AWK_VALUE_FLAG = /^(?:-[ivF]|--(?:include|assign|field-separator))$/;
 
 /**
- * The files `sed -i` and `perl -i` rewrite: every argument after the script.
+ * The files `sed -i`, `perl -i`, `ruby -i` and `awk -i inplace` rewrite: every
+ * argument after the script.
  * What the edit changed stays unseen — a sed script is a program, not the text
  * it replaces — but where it landed is on the command line, and without it a
  * session editing through sed read to the detectors as one that edited nothing.
@@ -528,26 +550,30 @@ export function shellEditPaths(command: string, cwd?: string): string[] {
       else dir = dir === undefined || to === undefined || /^[~$-]/.test(to) ? undefined : posix.join(dir, to);
       continue;
     }
-    if (!IN_PLACE_EDITORS.test(segment)) continue;
-    const perl = /^\s*(?:sudo\s+)?perl\b/.test(segment);
     // The same test `shellWrites` applies, on the same unquoted text, so the two
-    // agree on what was written: `sed 's/ -i //' a.ts` only prints.
-    const bare = segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''");
-    if (!(perl ? /\bperl\s+-\w*i/.test(bare) : IN_PLACE.test(bare))) continue;
+    // agree on what was written.
+    if (!editsInPlace(segment.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''"))) continue;
+    const called = segment.replace(LEADING_WORDS, "");
+    const scriptFlag = /^(?:perl|ruby)\b/.test(called) ? PERL_SCRIPT_FLAG : SED_SCRIPT_FLAG;
+    const awk = /^g?awk\b/.test(called);
 
     let scriptSeen = false;
-    let scriptNext = false;
-    const words = segment.replace(/^\s*sudo\s+/, "").match(SHELL_WORD) ?? [];
+    let skipNext = false;
+    const words = called.match(SHELL_WORD) ?? [];
     for (const word of words.slice(1)) {
       if (/^\d*[<>|]|^&/.test(word)) break;
       const token = word.replace(/["']/g, "");
-      if (scriptNext) {
-        scriptNext = false;
+      if (skipNext) {
+        skipNext = false;
         continue;
       }
-      if ((perl ? PERL_SCRIPT_FLAG : SED_SCRIPT_FLAG).test(token)) {
+      if (scriptFlag.test(token)) {
         scriptSeen = true;
-        scriptNext = true;
+        skipNext = true;
+        continue;
+      }
+      if (awk && AWK_VALUE_FLAG.test(token)) {
+        skipNext = true;
         continue;
       }
       if (/^--(?:expression|file)=/.test(token)) scriptSeen = true;
