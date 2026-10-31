@@ -125,6 +125,17 @@ export async function branchExists(cwd: string, name: string): Promise<boolean> 
   return (await git(cwd, ["rev-parse", "--verify", "-q", `refs/heads/${name}`])) !== undefined;
 }
 
+/** `git -c` by the environment, as `-c` ends a key at its first `=` and a merge driver's name may hold one. */
+function withConfig(keys: string[], value: string): NodeJS.ProcessEnv {
+  const before = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_COUNT: String(before + keys.length) };
+  keys.forEach((key, index) => {
+    env[`GIT_CONFIG_KEY_${before + index}`] = key;
+    env[`GIT_CONFIG_VALUE_${before + index}`] = value;
+  });
+  return env;
+}
+
 /**
  * The files HEAD changed, from the top of the repository wherever `cwd` is. For a
  * merge those are the ones its author settled, whichever side they took, and none
@@ -136,9 +147,8 @@ export async function branchExists(cwd: string, name: string): Promise<boolean> 
  */
 export async function filesInHead(cwd: string): Promise<string[]> {
   const show = ["show", "--root", "-z", "--format=", "--name-only", "--no-renames"];
-  const drivers = await git(cwd, ["config", "--name-only", "--get-regexp", "^merge\\..*\\.driver$"]);
-  const quiet = drivers?.split("\n").flatMap((driver) => ["-c", `${driver}=false`]) ?? [];
-  const files = (await git(cwd, [...quiet, ...show, "--remerge-diff", "HEAD", "--"])) ?? (await git(cwd, [...show, "HEAD", "--"]));
+  const drivers = (await git(cwd, ["config", "--name-only", "--get-regexp", "^merge\\..*\\.driver$"]))?.split("\n") ?? [];
+  const files = (await git(cwd, [...show, "--remerge-diff", "HEAD", "--"], withConfig(drivers, "false"))) ?? (await git(cwd, [...show, "HEAD", "--"]));
   return files ? files.split("\0").filter(Boolean) : [];
 }
 

@@ -56,6 +56,44 @@ test("listing a merge's files does not run the repository's merge driver again",
   assert.equal(await readFile(ran, "utf8"), taken);
 });
 
+test("a merge driver stays out of the listing whatever its name holds, and what the environment sets stays too", async () => {
+  const cwd = await makeRepo();
+  const ran = join(cwd, ".git", "driver-ran");
+  const commit = async (file: string, text: string) => {
+    await writeFile(join(cwd, file), text);
+    await run("git", ["add", "."], { cwd });
+    await run("git", ["commit", "-q", "-m", file], { cwd });
+  };
+  await commit(".gitattributes", "*.lock merge=a=b\n");
+  await commit("x.lock", "base\n");
+  await run("git", ["config", "merge.a=b.driver", `echo ran >> ${ran}; exit 1`], { cwd });
+  await run("git", ["switch", "-q", "-c", "side"], { cwd });
+  await commit("x.lock", "side\n");
+  await run("git", ["switch", "-q", "main"], { cwd });
+  await commit("x.lock", "main\n");
+  await assert.rejects(run("git", ["merge", "side"], { cwd }));
+  await writeFile(join(cwd, "x.lock"), "settled\n");
+  await run("git", ["add", "."], { cwd });
+  await run("git", ["commit", "-q", "--no-edit"], { cwd });
+  const before = await readFile(ran, "utf8");
+
+  assert.deepEqual(await filesInHead(cwd), ["x.lock"]);
+  assert.equal(await readFile(ran, "utf8"), before);
+
+  // Without this the driver's stand-in takes the place of what was set before it.
+  const saved = { ...process.env };
+  Object.assign(process.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "merge.a=b.name", GIT_CONFIG_VALUE_0: "set" });
+  try {
+    assert.deepEqual(await filesInHead(cwd), ["x.lock"]);
+    assert.equal(await readFile(ran, "utf8"), before);
+  } finally {
+    for (const key of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+});
+
 test("normalizes every remote URL form to owner/repo", () => {
   const cases: [string, string][] = [
     ["https://github.com/unwinned/ISY.git", "unwinned/ISY"],
