@@ -859,4 +859,55 @@ test("a command only looks when every part of it is known to, and anything else 
   ]) {
     assert.equal(shellOnlyLooks(command), false, command);
   }
+
+  // A write whose target only the shell can spell out, or that a flag hides.
+  for (const command of [
+    "sed -i 's/one/two/' src/*.txt",
+    "sed -i 's/one/two/' $(git ls-files '*.txt')",
+    "sed -i 's/one/two/' $(grep -rl one src)",
+    'for f in src/*.txt; do sed -i "s/one/two/" "$f"; done',
+    "for f in a b; do echo x > src/$f.txt; done",
+    "awk -i inplace '{print}' src/*.txt",
+    'cat README > "src/$(echo a).txt"',
+    'printf x > "$OUT"',
+    "sed -i 's/a/b/' src/{a,b}.txt",
+    "sudo sed -i 's/one/two/' src/*.txt",
+    "cd src && sed -i 's/one/two/' *.txt",
+    "git checkout other -- src/a.txt",
+    "git checkout stash@{0} -- .",
+    "git checkout HEAD~1 src/a.txt",
+    "git checkout other src/a.txt",
+    "git checkout -p other -- f",
+    "git checkout --ours a.txt",
+    "git -C app checkout other -- a.txt",
+    "yq -i '.a=1' chart.yaml",
+    "yq e -i '.a=1' chart.yaml",
+    "sort -o src/a.txt src/a.txt",
+    "sort -u --output=a.txt a.txt",
+    "uniq in.txt out.txt",
+    "uniq -c in.txt out.txt",
+  ]) {
+    assert.equal(shellOnlyLooks(command), false, command);
+  }
+
+  // The same words where nothing is written: these name no target at all.
+  for (const command of [
+    "git checkout main",
+    "git checkout -",
+    "git checkout -b feat",
+    "git checkout -b feat origin/main",
+    "git checkout -q feat | tail -3",
+    "git -C app checkout --track origin/x",
+    "cat src/*.txt",
+    "grep -n one src/*.txt",
+    "echo $(date)",
+    "yq '.a' chart.yaml",
+    "sort -u a.txt",
+    "sort a.txt | uniq -c",
+    "uniq a.txt",
+    "ls src/*.txt 2>/dev/null",
+    'echo "$x" > /tmp/out',
+  ]) {
+    assert.equal(shellOnlyLooks(command), true, command);
+  }
 });

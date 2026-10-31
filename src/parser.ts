@@ -516,17 +516,33 @@ const GIT_LOOKS = new Set([
   "config", "remote", "fetch", "push", "branch", "tag", "worktree", "switch", "checkout", "add", "commit",
 ]);
 
+/** What only the shell can turn into a file's name, so the command line never spells it. */
+const SHELL_EXPANDS = /[*?$`{]/;
+
+/** The one `git checkout` that stands on a branch and takes no file from anywhere. */
+const CHECKOUT_BRANCH = /\bcheckout(?:\s+(?:-[bB]\s+\S+|-[qft]|--(?:quiet|force|track|detach)))*(?:\s+\S+)?\s*$/;
+
+/** Readers that write when a flag or a second name says so. */
+const WRITES_BY_ARGUMENT =
+  /^(?:sort\s(?:.*\s)?(?:-[a-zA-Z]*o|--output)|yq\s(?:.*\s)?(?:-[a-zA-Z]*i|--inplace)|uniq(?:\s+-\S+)*\s+[^\s-]\S*\s+[^\s-])/;
+
 /**
  * Whether a shell command leaves nothing behind for a commit to hold, apart from
  * what it writes by name (`shellWrites`). Anything not known here reads as no: a
- * formatter, a build, a script write what nobody can say from the command line.
+ * formatter, a build, a script write what nobody can say from the command line, and
+ * neither can anyone say which files a write through a glob or a variable took.
  */
 export function shellOnlyLooks(command: string): boolean {
-  return commandSegments(withoutHeredocs(command)).every((segment) => {
+  // `commandSegments` lifts a substitution out of its segment, and it may be the target.
+  const substitutionsKept = withoutHeredocs(command).replace(/\$\([^()]*\)/g, "$$_$&");
+  return commandSegments(substitutionsKept).every((segment) => {
+    if (shellWrites(segment) && SHELL_EXPANDS.test(segment.replace(/'[^']*'/g, ""))) return false;
     const bare = withoutQuoted(segment);
     const subcommand = GIT_CALL.exec(bare)?.[1];
+    if (subcommand === "checkout") return CHECKOUT_BRANCH.test(bare);
     if (subcommand !== undefined) return GIT_LOOKS.has(subcommand);
     const called = bare.replace(LEADING_WORDS, "");
+    if (WRITES_BY_ARGUMENT.test(called)) return false;
     return called.trim() === "" || SHELL_READERS.test(called) || SHELL_LOOKS.test(called);
   });
 }
