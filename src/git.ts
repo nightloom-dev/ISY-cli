@@ -187,6 +187,23 @@ export async function addedLines(cwd: string, shas: string[]): Promise<string[] 
   return lines;
 }
 
+/**
+ * The commit HEAD replaced, in git's own record of it: the reflog's entry before an
+ * amend, or the pick a rebase stands on. Nothing an amend or a pick changed need look
+ * like what it replaced.
+ */
+export async function commitHeadReplaced(cwd: string): Promise<string | undefined> {
+  const [last, before] = (await git(cwd, ["reflog", "-2", "--no-show-signature", "--format=%H %gs", "HEAD"]))?.split("\n") ?? [];
+  if (last && /^\S+ commit \(amend\): /.test(last)) return before?.split(" ")[0];
+  const done = await git(cwd, ["rev-parse", "--git-path", "rebase-merge/done"]);
+  try {
+    const pick = (await readFile(resolve(cwd, done ?? ""), "utf8")).trim().split("\n").at(-1)?.split(/\s+/)[1];
+    return pick && (await git(cwd, ["rev-parse", "--verify", "-q", `${pick}^{commit}`]));
+  } catch {
+    return undefined;
+  }
+}
+
 /** The files a merge at HEAD changed on the branch it stands on. No merge, no files. */
 export async function filesMergedIntoHead(cwd: string): Promise<string[]> {
   if (!(await git(cwd, ["rev-parse", "-q", "--verify", "HEAD^2"]))) return [];

@@ -1295,6 +1295,60 @@ test("work a session's mark holds stays its own when it moves to another branch 
   }
 });
 
+test("a commit git says replaced a session's mark stays its own, though it shares no line with it", async () => {
+  const amended = async (cwd: string, content: string) => {
+    await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+    await writeFile(join(cwd, "f.txt"), content);
+    await run("git", ["add", "."], { cwd });
+    await run("git", ["commit", "-q", "--amend", "--no-edit"], { cwd });
+  };
+  const moves: [string, (cwd: string) => Promise<void>][] = [
+    ["the only line it changed, changed again by an amend", (cwd) => amended(cwd, longWith("human"))],
+    ["a mode change amended with a line", async (cwd) => {
+      await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+      await run("git", ["update-index", "--chmod=+x", "f.txt"], { cwd });
+      await run("git", ["commit", "-q", "--amend", "--no-edit"], { cwd });
+    }],
+    ["the line a pick stopped on, settled to neither side", async (cwd) => {
+      await run("git", ["switch", "-q", "-c", "theirs", "up"], { cwd });
+      await commitFile(cwd, "f.txt", longWith("upstream"));
+      await run("git", ["switch", "-q", "-c", "feat", "main"], { cwd });
+      await assert.rejects(() => run("git", ["rebase", "theirs"], { cwd }));
+      await writeFile(join(cwd, "f.txt"), longWith("both"));
+      await run("git", ["add", "."], { cwd });
+      // As the hook sees each pick of a rebase: HEAD is the new commit, and the rebase goes on.
+      await run("git", ["commit", "-q", "-m", "settled"], { cwd });
+    }],
+  ];
+  for (const [name, move] of moves) {
+    const { cwd } = await markedLongFile("isy-commit-rewrote-");
+    await move(cwd);
+    assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined, name);
+    await writeFile(sessionStatePath(), "{}\n");
+  }
+
+  // An amend of a commit that was never the session's says nothing of it.
+  const { cwd, path } = await markedLongFile("isy-commit-rewrote-");
+  await run("git", ["switch", "-q", "-c", "other"], { cwd });
+  await commitFile(cwd, "h.txt", "human\n");
+  await run("git", ["commit", "-q", "--amend", "-m", "again"], { cwd });
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+  assert.equal((await readState())[path]!.commits?.length, 1);
+});
+
+test("a line stays what it says through a formatter's punctuation", async () => {
+  const cwd = await newRepo("isy-commit-formatted-");
+  const path = await writeSession(cwd, "sess-formatted", "left-pad");
+  await onBranch(path, "main");
+  const body = Array.from({ length: 10 }, (_, index) => `call('value ${index}')`).join("\n");
+  await commitFile(cwd, "own.ts", `${body}\n`);
+  await runCommit({ noUpload: true }, cwd);
+  await run("git", ["reset", "-q", "--soft", "HEAD~1"], { cwd });
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  await commitFile(cwd, "own.ts", `${body.replaceAll("'", '"').replaceAll(")", ");")}\n`);
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+});
+
 test("a merge that settled a file of a session's mark stays its own, unless it kept what stood here", async () => {
   const settles: [string, string | undefined][] = [
     ["by hand, with both sides on one line", longWith("agent+up")],

@@ -3,7 +3,7 @@ import { basename, relative, resolve } from "node:path";
 import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
-import { addedLines, blobsOf, branchExists, currentBranch, filesInHead, filesMergedIntoHead, headSha, maskRootsFor } from "../git.js";
+import { addedLines, blobsOf, branchExists, commitHeadReplaced, currentBranch, filesInHead, filesMergedIntoHead, headSha, maskRootsFor } from "../git.js";
 import { errorMessage, logError } from "../log.js";
 import { maskPath } from "../mask-paths.js";
 import { gitCommands, mayWrite, mcpOnlyReads, parseLines, shellOnlyLooks, shellWrites } from "../parser.js";
@@ -111,6 +111,7 @@ interface HeadWork {
   files: string[];
   blobs: () => Promise<Map<string, Set<string>>>;
   lines: () => Promise<Set<string> | undefined>;
+  replaced: () => Promise<string | undefined>;
   rootsIn: (directory: string) => Promise<MaskRoots>;
 }
 
@@ -119,9 +120,9 @@ function once<T>(ask: () => Promise<T>): () => Promise<T> {
   return () => (answer ??= ask());
 }
 
-/** Lines by what they say: indentation and line endings change without changing that, and `}` says nothing. */
+/** Lines by what they say: indentation, line endings and a formatter's punctuation change without changing that, and `}` says nothing. */
 function linesSaying(lines: string[]): Set<string> {
-  return new Set(lines.map((line) => line.replace(/\s+/g, "")).filter((line) => /[\p{L}\p{N}]/u.test(line)));
+  return new Set(lines.map((line) => line.replace(/[^\p{L}\p{N}]+/gu, "")).filter((line) => line.length > 0));
 }
 
 /**
@@ -131,9 +132,9 @@ function linesSaying(lines: string[]): Set<string> {
  * keeps the commit, as it did before branches were looked at.
  *
  * ponytail: a share of whole lines. Work rewritten down to under a tenth of both sides
- * is not recognised, nor a commit that changes the only line a session wrote, and small
- * commits that happen to share `return nil` are, moving the session to that branch as
- * it always did. Weigh lines by how rare they are if that shows up.
+ * is not recognised, nor a redo by hand that changes the only line a session wrote, and
+ * small commits that happen to share `return nil` are, moving the session to that branch
+ * as it always did. Weigh lines by how rare they are if that shows up.
  */
 async function sharesItsLines(session: ParsedSession, marks: string[], head: HeadWork): Promise<boolean> {
   const [inHead, inMarks] = await Promise.all([head.lines(), marks.length > 0 ? addedLines(head.cwd, marks) : []]);
@@ -146,11 +147,11 @@ async function sharesItsLines(session: ParsedSession, marks: string[], head: Hea
 
 /**
  * Whether HEAD holds work from behind the session's last mark, however it got here:
- * a blob one of its marks left, which is an amend, a redo, a pick or a rebase on another
- * branch, or a rename of one; a file of a mark that a merge settled to other than what
- * stood on its branch; a file it edited that no mark took, which is its edits split over
- * commits; or lines it wrote (`sharesItsLines`). A clean merge shows none of these: it
- * changes no file of its own.
+ * an amend or a pick of one of its marks, by git's own record; a blob one of its marks
+ * left, which is an amend, a redo, a pick or a rebase on another branch, or a rename of
+ * one; a file of a mark that a merge settled to other than what stood on its branch; a
+ * file it edited that no mark took, which is its edits split over commits; or lines it
+ * wrote (`sharesItsLines`). A clean merge shows none of these: it changes no file of its own.
  */
 async function holdsMovedWork(
   session: ParsedSession,
@@ -160,6 +161,8 @@ async function holdsMovedWork(
 ): Promise<boolean> {
   const marks = state.commits?.map((mark) => mark.sha) ?? [];
   if (marks.length > 0) {
+    const replaced = await head.replaced();
+    if (replaced && marks.includes(replaced)) return true;
     const marked = await blobsOf(head.cwd, marks);
     // A deleted file's blob is all zeros, and says something only of that file.
     const left = new Set([...marked.values()].flatMap((blobs) => [...blobs]).filter((blob) => !/^0+$/.test(blob)));
@@ -308,6 +311,7 @@ async function sessionOfCommit(
       const lines = await addedLines(cwd, ["HEAD"]);
       return lines && linesSaying(lines);
     }),
+    replaced: once(() => commitHeadReplaced(cwd)),
     rootsIn,
   };
   // Asking takes the git calls above and what a directory or a branch adds, so
