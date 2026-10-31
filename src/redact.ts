@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { fileLines } from "./lines.js";
-import { HEREDOC, commandSegments, shellEditWords, withoutHeredocs } from "./parser.js";
+import { type Budget, HEREDOC, STRUCTURES, commandSegments, mayParse, shellEditWords, withoutHeredocs } from "./parser.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
@@ -379,6 +379,7 @@ interface RedactContext {
   bashInputTouchedDotenv: boolean;
   /** What dotenv files held, as far as the session showed them (`learnValues`). */
   learned: Set<string>;
+  structures: Budget;
   /**
    * Mutable: a transcript names its own working directory on every record, so a
    * caller that did not pass one still gets repository-relative paths. The
@@ -1255,6 +1256,7 @@ function createContext(options: RedactOptions, invalid: string[]): RedactContext
     envToolUseIds: new Set(),
     bashInputTouchedDotenv: false,
     learned: new Set(),
+    structures: { left: STRUCTURES },
     // The home directory is this machine's and is never in the transcript's
     // gift, so it is read here rather than passed by every caller.
     roots: resolveRoots({ cwd: options.cwd, home: options.home ?? homedir() }),
@@ -1276,6 +1278,12 @@ function summarize(
 function redactOneLine(line: string, context: RedactContext): { line: string; unparsed: boolean } {
   const trimmed = line.trim();
   if (trimmed.length === 0) return { line: trimmed, unparsed: false };
+
+  // Parsing and copying it would hold twice what the parser allows itself to keep.
+  if (!mayParse(trimmed, context.structures)) {
+    count(context, "oversized", 1);
+    return { line: marker("oversized"), unparsed: true };
+  }
 
   let parsed: unknown;
   try {

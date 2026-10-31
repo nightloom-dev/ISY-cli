@@ -940,7 +940,7 @@ const LINE_CHARS = 64 * 1024 * 1024;
  * What comes past it, or past `LINE_CHARS`, reads as a write nobody can name, and is
  * not read. Raise it if sessions of 500 MB turn up.
  */
-const STRUCTURES = 4_000_000;
+export const STRUCTURES = 4_000_000;
 
 function structuresIn(line: string): number {
   let count = 0;
@@ -948,6 +948,11 @@ function structuresIn(line: string): number {
     for (let at = line.indexOf(opening); at !== -1; at = line.indexOf(opening, at + 1)) count += 1;
   }
   return count;
+}
+
+/** Whether a line of a transcript may be parsed at all, which spends its part of `STRUCTURES` if so. */
+export function mayParse(line: string, structures: Budget): boolean {
+  return line.length <= LINE_CHARS && spend(structures, structuresIn(line));
 }
 
 function pushLine(state: ParseState, line: string): void {
@@ -959,7 +964,7 @@ function pushLine(state: ParseState, line: string): void {
     return;
   }
 
-  if (trimmed.length > LINE_CHARS || !spend(state.structures, structuresIn(trimmed))) {
+  if (!mayParse(trimmed, state.structures)) {
     state.skipped.malformedJson += 1;
     state.opaqueWrite = true;
     return;

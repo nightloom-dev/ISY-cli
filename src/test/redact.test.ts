@@ -2667,3 +2667,14 @@ test("a dotenv read's result is learned from and cut however deep it nests", () 
   assert.equal((JSON.parse(lines[1]!) as { message: { content: { content: string }[] } }).message.content[0]!.content, marker("dotenv"));
   assert.equal((JSON.parse(lines[2]!) as { message: { content: string } }).message.content, `the phrase is ${marker("dotenv")}`);
 });
+
+test("a line too dear to parse is cut whole, and so is what comes past the session's limit", () => {
+  const blocks = (count: number) => JSON.stringify({ type: "user", x: Array(count).fill({}) });
+  const one = redactLines([blocks(4_000_001), JSON.stringify({ type: "user", uuid: "after" })], { home: "/home/u" });
+  assert.equal(one.lines[0], marker("oversized"));
+  assert.equal(JSON.parse(one.lines[1]!).uuid, "after", "a line of its own does not take the rest with it");
+
+  const many = redactLines(Array.from({ length: 5 }, () => blocks(1_000_000)), { home: "/home/u" });
+  assert.equal(many.lines.filter((line) => line === marker("oversized")).length, 1);
+  assert.equal(many.summary.counts.oversized, 1);
+});
