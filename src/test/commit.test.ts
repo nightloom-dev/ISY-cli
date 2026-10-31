@@ -1636,6 +1636,29 @@ test("what a session wrote through the shell counts when the commit holds a file
   assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
 });
 
+test("a git too slow to say what a commit added leaves the session its commit, in the time telling apart has, and asks for no fetch", async () => {
+  const cwd = await newRepo("isy-commit-slow-lines-");
+  await onBranch(await writeSession(cwd, "sess-slow-lines", "left-pad"), "main");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  await commitFile(cwd, "other.md");
+
+  const bin = await mkdtemp(join(tmpdir(), "isy-commit-bin-"));
+  const log = join(bin, "lazy");
+  const real = (await run("sh", ["-c", "command -v git"], { cwd })).stdout.trim();
+  const script = `#!/bin/sh\ncase " $* " in *" -p "*) echo "\${GIT_NO_LAZY_FETCH:-}" >> "${log}"; exec sleep 30 ;; esac\nexec "${real}" "$@"\n`;
+  await writeFile(join(bin, "git"), script, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  const started = performance.now();
+  try {
+    assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  } finally {
+    process.env.PATH = path;
+  }
+  assert.ok(performance.now() - started < 4500, `held ${Math.round(performance.now() - started)} ms`);
+  assert.equal((await readFile(log, "utf8")).trim(), "1");
+});
+
 test("a root commit shows what it holds, whatever log.showroot says", async () => {
   // A file the session edited and no mark took, by its name.
   let cwd = await newRepo("isy-commit-root-");

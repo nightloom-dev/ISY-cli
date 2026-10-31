@@ -152,7 +152,7 @@ function linesSaying(lines: string[]): Set<string> {
  * as it always did. Weigh lines by how rare they are if that shows up.
  */
 async function sharesItsLines(session: ParsedSession, marks: string[], head: HeadWork): Promise<boolean> {
-  const [inHead, inMarks] = await Promise.all([head.lines(), marks.length > 0 ? addedLines(head.cwd, marks) : []]);
+  const [inHead, inMarks] = await Promise.all([head.lines(), marks.length > 0 ? addedLines(head.cwd, marks, TELLING_APART_MS) : []]);
   if (!inHead || !inMarks) return true;
   const written = [...session.fileEdits.values()].flat().flatMap((edit) => (edit.newString ?? edit.content ?? "").split("\n"));
   const work = linesSaying([...inMarks, ...written]);
@@ -323,7 +323,7 @@ async function sessionOfCommit(
     files,
     blobs: once(() => blobsOf(cwd, ["HEAD"])),
     lines: once(async () => {
-      const lines = await addedLines(cwd, ["HEAD"]);
+      const lines = await addedLines(cwd, ["HEAD"], TELLING_APART_MS);
       return lines && linesSaying(lines);
     }),
     replaced: once(() => commitHeadReplaced(cwd)),

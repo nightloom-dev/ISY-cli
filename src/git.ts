@@ -21,11 +21,11 @@ export type GitResult =
   | { ok: true; metadata: GitMetadata }
   | { ok: false; reason: GitFailure };
 
-async function gitOutput(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+async function gitOutput(cwd: string, args: string[], env?: NodeJS.ProcessEnv, timeout = GIT_TIMEOUT_MS): Promise<string> {
   const { stdout } = await run("git", args, {
     cwd,
     env,
-    timeout: GIT_TIMEOUT_MS,
+    timeout,
     maxBuffer: 4 * 1024 * 1024,
     windowsHide: true,
   });
@@ -172,17 +172,19 @@ export async function blobsOf(cwd: string, shas: string[]): Promise<Map<string, 
 }
 
 /**
- * The lines the given commits add, in any file, or undefined when git could not say.
- * As in `blobsOf`, a merge adds none and a commit gone from the repository is passed
- * over. What a hook someone waits on reads is the repository's text, so no textconv
- * or external diff gets to run.
+ * The lines the given commits add, in any file, or undefined when git could not say
+ * by `timeoutMs`. As in `blobsOf`, a merge adds none and a commit gone from the repository
+ * is passed over. What a hook someone waits on reads is the repository's text, so no
+ * textconv or external diff gets to run, and a partial clone goes to the network for
+ * none of it. A git older than 2.45 knows no such setting and may start that fetch,
+ * which outlives the timeout.
  */
-export async function addedLines(cwd: string, shas: string[]): Promise<string[] | undefined> {
+export async function addedLines(cwd: string, shas: string[], timeoutMs: number): Promise<string[] | undefined> {
   let diff: string;
   try {
     diff = await gitOutput(cwd, [
       "log", "--root", "--no-walk", "--ignore-missing", "--format=", "-p", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", ...shas, "--",
-    ]);
+    ], { ...process.env, GIT_NO_LAZY_FETCH: "1" }, timeoutMs);
   } catch {
     return undefined;
   }
