@@ -11,7 +11,7 @@ import { gunzipSync } from "node:zlib";
 import { claudeAgent } from "../agents/index.js";
 import { writeConfig } from "../config.js";
 import { formatCommit, runCommit, wordsOf } from "../commands/commit.js";
-import { currentBranch } from "../git.js";
+import { collectGitMetadata, currentBranch } from "../git.js";
 import { formatUploadAlert, runUpload } from "../commands/upload.js";
 import {
   COMMIT_COMMAND,
@@ -1187,6 +1187,23 @@ test("a commit passes over a newer session on another branch for the one standin
   await commitFile(cwd, "README.md");
   assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-standing");
   assert.equal((await readState())[elsewhere]?.commits, undefined);
+});
+
+test("a tag named like the branch does not change the branch's name", async () => {
+  const cwd = await newRepo("isy-commit-tagged-");
+  await run("git", ["switch", "-q", "-c", "release"], { cwd });
+  await run("git", ["tag", "release"], { cwd });
+  const path = await writeSession(cwd, "sess-tagged", "left-pad");
+  await onBranch(path, "release");
+  assert.equal(await currentBranch(cwd), "release");
+
+  await commitFile(cwd, "human.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  assert.equal((await readState())[path]!.branch, "release");
+
+  const metadata = await collectGitMetadata(cwd);
+  assert.ok(metadata.ok);
+  assert.equal(metadata.metadata.branch, "release");
 });
 
 test("a rebase counts as the branch it rebases, not as no branch at all", async () => {
