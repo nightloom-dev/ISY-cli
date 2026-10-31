@@ -162,8 +162,9 @@ database or to a model.
   request, so every other commit made there afterwards must not leave one. A
   command nobody can read, or an MCP tool whose name does not say it only reads
   (`parser.ts:mcpOnlyReads`), keeps it, because what it wrote may be the commit, and
-  so does a file as one of its marks left it, or that it edited and no mark took:
-  work amended, picked or rebased elsewhere (`commit.ts:holdsMovedWork`).
+  so does a file as one of its marks left it, a file it edited and no mark took, or
+  lines it wrote or its marks added: work amended, picked or rebased elsewhere, changed
+  on the way or not (`commit.ts:holdsMovedWork`).
 - **Stage 0 is calibrated with the server.** The induced corpus and the
   snapshots it is calibrated against live there, so a detector change is
   verified by publishing a prerelease (`1.2.0-next.0` lands on `next`) and

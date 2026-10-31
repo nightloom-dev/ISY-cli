@@ -21,20 +21,24 @@ export type GitResult =
   | { ok: true; metadata: GitMetadata }
   | { ok: false; reason: GitFailure };
 
+async function gitOutput(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+  const { stdout } = await run("git", args, {
+    cwd,
+    env,
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: 4 * 1024 * 1024,
+    windowsHide: true,
+  });
+  return stdout;
+}
+
 async function git(
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await run("git", args, {
-      cwd,
-      env,
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: 4 * 1024 * 1024,
-      windowsHide: true,
-    });
-    const value = stdout.trim();
+    const value = (await gitOutput(cwd, args, env)).trim();
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -150,6 +154,39 @@ export async function blobsOf(cwd: string, shas: string[]): Promise<Map<string, 
     blobs.set(path, (blobs.get(path) ?? new Set()).add(fields[index]!.split(" ")[3]!));
   }
   return blobs;
+}
+
+/**
+ * The lines the given commits add, in any file, or undefined when git could not say.
+ * As in `blobsOf`, a merge adds none and a commit gone from the repository is passed
+ * over. What a hook someone waits on reads is the repository's text, so no textconv
+ * or external diff gets to run.
+ */
+export async function addedLines(cwd: string, shas: string[]): Promise<string[] | undefined> {
+  let diff: string;
+  try {
+    diff = await gitOutput(cwd, [
+      "log", "--no-walk", "--ignore-missing", "--format=", "-p", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", ...shas, "--",
+    ]);
+  } catch {
+    return undefined;
+  }
+  const lines: string[] = [];
+  // Past a file's `@@` every line is the diff's own, so `+++ b/path` above it is no line added.
+  let inHunk = false;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) inHunk = false;
+    else if (line.startsWith("@@")) inHunk = true;
+    else if (inHunk && line.startsWith("+")) lines.push(line.slice(1));
+  }
+  return lines;
+}
+
+/** The files a merge at HEAD changed on the branch it stands on. No merge, no files. */
+export async function filesMergedIntoHead(cwd: string): Promise<string[]> {
+  if (!(await git(cwd, ["rev-parse", "-q", "--verify", "HEAD^2"]))) return [];
+  const files = await git(cwd, ["diff", "-z", "--name-only", "--no-renames", "HEAD^1", "HEAD", "--"]);
+  return files ? files.split("\0").filter(Boolean) : [];
 }
 
 /**

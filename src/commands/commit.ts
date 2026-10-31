@@ -3,7 +3,7 @@ import { basename, relative, resolve } from "node:path";
 import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
-import { blobsOf, branchExists, currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
+import { addedLines, blobsOf, branchExists, currentBranch, filesInHead, filesMergedIntoHead, headSha, maskRootsFor } from "../git.js";
 import { errorMessage, logError } from "../log.js";
 import { maskPath } from "../mask-paths.js";
 import { gitCommands, mayWrite, mcpOnlyReads, parseLines, shellOnlyLooks, shellWrites } from "../parser.js";
@@ -40,6 +40,8 @@ const SHELL_CALL_MS = 10 * 60_000;
  */
 const TELLING_APART_MS = 1_000;
 const TELLING_APART_BYTES = 16 * 1024 * 1024;
+/** How much of the smaller of two pieces of work they must share to be the same work. */
+const SAME_WORK_SHARE = 0.1;
 
 /** The transcript holds a shell call before the command starts, and its answer only after. */
 function isRunning(use: ToolUse): boolean {
@@ -103,11 +105,39 @@ async function carriesItsWork(
   );
 }
 
+/** Lines by what they say: indentation and line endings change without changing that, and `}` says nothing. */
+function linesSaying(lines: string[]): Set<string> {
+  return new Set(lines.map((line) => line.replace(/\s+/g, "")).filter((line) => /[\p{L}\p{N}]/u.test(line)));
+}
+
+/**
+ * Whether HEAD's lines are in good part lines the session wrote, or its marks added,
+ * in any file: work moved here and changed on the way, by a human's touch, a formatter,
+ * a rename, or a side that changed the same file. When git cannot say, the session
+ * keeps the commit, as it did before branches were looked at.
+ *
+ * ponytail: a share of whole lines. Work rewritten down to under a tenth of both sides
+ * is not recognised, nor a commit that changes the only line a session wrote, and small
+ * commits that happen to share `return nil` are, moving the session to that branch as
+ * it always did. Weigh lines by how rare they are if that shows up.
+ */
+async function sharesItsLines(session: ParsedSession, marks: string[], cwd: string): Promise<boolean> {
+  const [inHead, inMarks] = await Promise.all([addedLines(cwd, ["HEAD"]), marks.length > 0 ? addedLines(cwd, marks) : []]);
+  if (!inHead || !inMarks) return true;
+  const written = [...session.fileEdits.values()].flat().flatMap((edit) => (edit.newString ?? edit.content ?? "").split("\n"));
+  const head = linesSaying(inHead);
+  const work = linesSaying([...inMarks, ...written]);
+  const shared = [...head].filter((line) => work.has(line)).length;
+  return shared > 0 && shared >= SAME_WORK_SHARE * Math.min(head.size, work.size);
+}
+
 /**
  * Whether HEAD holds work from behind the session's last mark, however it got here:
- * a file as one of its marks left it, which is an amend, a redo, a pick or a rebase
- * on another branch, or a file it edited that no mark took, which is its edits split
- * over commits. A clean merge shows neither: it changes no file of its own.
+ * a blob one of its marks left, which is an amend, a redo, a pick or a rebase on another
+ * branch, or a rename of one; a file of a mark that a merge settled to other than what
+ * stood on its branch; a file it edited that no mark took, which is its edits split over
+ * commits; or lines it wrote (`sharesItsLines`). A clean merge shows none of these: it
+ * changes no file of its own.
  */
 async function holdsMovedWork(
   session: ParsedSession,
@@ -117,14 +147,23 @@ async function holdsMovedWork(
   cwd: string,
   rootsIn: (directory: string) => Promise<MaskRoots>,
 ): Promise<boolean> {
-  const marks = state.commits?.map((mark) => mark.sha);
-  if (!marks?.length) return false;
-  const marked = await blobsOf(cwd, marks);
-  for (const [file, blobs] of await blobsOf(cwd, ["HEAD"])) {
-    if ([...blobs].some((blob) => marked.get(file)?.has(blob))) return true;
+  const marks = state.commits?.map((mark) => mark.sha) ?? [];
+  if (marks.length > 0) {
+    const marked = await blobsOf(cwd, marks);
+    // A deleted file's blob is all zeros, and says something only of that file.
+    const left = new Set([...marked.values()].flatMap((blobs) => [...blobs]).filter((blob) => !/^0+$/.test(blob)));
+    for (const [file, blobs] of await blobsOf(cwd, ["HEAD"])) {
+      if ([...blobs].some((blob) => left.has(blob) || marked.get(file)?.has(blob))) return true;
+    }
+    const settled = files.filter((file) => marked.has(file));
+    if (settled.length > 0) {
+      const merged = new Set(await filesMergedIntoHead(cwd));
+      if (settled.some((file) => merged.has(file))) return true;
+    }
+    const unmarked = files.filter((file) => !marked.has(file));
+    if (await carriesItsWork(session, 0, new Set(unmarked), new Set(unmarked.map((file) => basename(file))), directory, rootsIn)) return true;
   }
-  const unmarked = files.filter((file) => !marked.has(file));
-  return carriesItsWork(session, 0, new Set(unmarked), new Set(unmarked.map((file) => basename(file))), directory, rootsIn);
+  return sharesItsLines(session, marks, cwd);
 }
 
 /** How an agent leaves for another branch itself. A rename is told by the old name being gone. */
