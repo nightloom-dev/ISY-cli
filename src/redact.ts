@@ -654,7 +654,17 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
     // A glob in the list is that file as far as a write goes.
     if (file !== undefined) files.set(name!, file.replace(/[*?]/g, ""));
   }
-  const resolved = (text: string): string => text.replace(VARIABLE, (whole, name: string) => files.get(name) ?? whole);
+  // ponytail: one budget for the command, as a long name used in every statement otherwise
+  // grows it past what memory holds. A write past the budget reads as no write, as one
+  // through a variable nothing knows does; a real command spends a few hundred bytes of it.
+  let room = 1 << 16;
+  const resolved = (text: string): string =>
+    text.replace(VARIABLE, (whole, name: string) => {
+      const file = files.get(name);
+      if (file === undefined || file.length > room) return whole;
+      room -= file.length;
+      return file;
+    });
   const editedFile = (text: string): string | undefined => shellEditPaths(resolved(text).replace(VARIABLE_DIR, "")).find(isDotenvPath);
   const lines = command.split("\n");
   const kept: string[] = [];

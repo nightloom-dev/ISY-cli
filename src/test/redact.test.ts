@@ -1966,3 +1966,20 @@ test("a backslash outside quotes opens no quote, so a dotenv write behind one is
     assert.equal(throughCall("Bash", { command }, "plain output").input.command, command);
   }
 });
+
+test("a variable naming a dotenv file, used all over a command, costs no more than the command is long", () => {
+  for (const command of [
+    `F=${"a".repeat(1000)}.env; echo ${"$F ".repeat(66_000)}`,
+    `F=${"a".repeat(8000)}.env; echo ${"$F ".repeat(24_000)}`,
+    `F=${"a".repeat(100_000)}.env;${"$F;".repeat(33_000)}`,
+    `F=${"a".repeat(100_000)}.env; echo ${"$F ".repeat(33_000)}`,
+    `F=${"a".repeat(250)}.env;${"$F;".repeat(66_000)}`,
+  ]) {
+    const started = performance.now();
+    const { lines } = redactLines([JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } })]);
+    const took = performance.now() - started;
+    assert.equal(lines.length, 1);
+    assert.ok(took < 5000, `took ${Math.round(took)}ms on ${command.slice(0, 12)}…`);
+  }
+  assert.equal(throughCall("Bash", { command: "F=.env; echo K=Zq8vR2mK9xLp > $F" }, "plain output").input.command, `${marker("dotenv")} > .env`);
+});
