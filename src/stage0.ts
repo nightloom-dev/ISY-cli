@@ -62,27 +62,30 @@ function inTree(candidate: Candidate, cwd: string | undefined): boolean {
 }
 
 /**
- * Calls, edits and files read past which stage 0 finds nothing. Its detectors hold
- * each edit up to each read and each call, which is seconds here and hours at what
- * 50 MB can hold, on the thread that serves requests. The largest of 1215 real
- * sessions has 7600.
+ * What stage 0 may hold up to each other, past which it finds nothing. Its detectors
+ * take each edit to each other edit, call, file read and record, which is seconds
+ * here and hours at what 50 MB can hold, on the thread that serves requests. Length
+ * alone costs nothing: the largest real session, with its subagents, has 100 million
+ * pairs, and the next has 36 million from 20 thousand calls and 72 file edits.
  *
- * ponytail: the session goes on with no findings. Make the detectors linear if real
- * sessions come near this.
+ * ponytail: the session goes on with no findings, and a file read through a glob
+ * compiles for each edit, so this limit is minutes if every read of a stranger's is
+ * one. Make the detectors linear if real sessions come near this.
  */
-const MOST_ITEMS = 20_000;
+const MOST_PAIRS = 500_000_000;
 
-function tooManyItems(session: ParsedSession): boolean {
-  let items = session.toolUses.length + session.filesRead.size;
-  for (const edits of session.fileEdits.values()) items += edits.length;
-  return items > MOST_ITEMS;
+function tooManyPairs(session: ParsedSession): boolean {
+  // An edit call that records no edit is still looked up against what was read.
+  let edits = session.meta.editToolUses;
+  for (const recorded of session.fileEdits.values()) edits += recorded.length;
+  return edits * (edits + session.toolUses.length + session.filesRead.size + session.records.length) > MOST_PAIRS;
 }
 
 export function runStage0(session: ParsedSession): Stage0Result {
   const thinkingBlocks = session.meta.thinkingBlocks;
   const reason = eligibility(session);
 
-  if (reason || tooManyItems(session)) {
+  if (reason || tooManyPairs(session)) {
     return {
       sessionId: session.sessionId,
       eligible: reason === undefined,
