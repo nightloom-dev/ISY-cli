@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { fileLines } from "./lines.js";
-import { HEREDOC, commandSegments, shellEditPaths, withoutHeredocs } from "./parser.js";
+import { HEREDOC, commandSegments, shellEditWords, withoutHeredocs } from "./parser.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
@@ -667,6 +667,18 @@ const VARIABLE_DIR = /\$\{?\w+\}?\//g;
 const SED_TEXT_COMMAND = /(?<=^|['"\s])(?:\$|\d{1,12}|\/[^/\n]{0,256}\/)[ \t]{0,8}[aic]\\?[ \t]{0,8}/g;
 
 /**
+ * An in-place editor wherever a statement runs it: behind `time`, `/usr/bin/`,
+ * `docker exec app`, in the quotes of `ssh host "…"`. Only where to read from, as the
+ * parse says whether it edits and what.
+ *
+ * ponytail: its flags ahead of its script, and the usual editors. `time sed 's/a/b/' -i .env`
+ * or `sh -c "ex .env"` keeps its script, as a command nothing recognises does.
+ */
+const EDITOR_CALL = /(?<![\w.-])(?:g?sed|g?awk|perl|ruby)(?:\s+-\S+)*?\s+(?:-[a-zA-Z0-9]*[iI]|--in-place|--include)/;
+/** What hands an editor its files from in front of it: `find … -exec sed -i`, `… | xargs sed -i`. */
+const FEEDS_FILES = /\s-(?:exec|ok)(?:dir)?\s|\bxargs\s/;
+
+/**
  * The text of an edit's script: `s|a|b|` and `s#a#b#` split where `s/a/b/` does, and
  * `sub("a","b")`, whose values have no name to go by, at its quotes.
  */
@@ -707,17 +719,29 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
       room -= file.length;
       return file;
     });
-  const editedFile = (text: string): string | undefined => shellEditPaths(resolved(text).replace(VARIABLE_DIR, "")).find(isDotenvPath);
+  const parsedEdit = (text: string): string | undefined =>
+    shellEditWords(resolved(text).replace(VARIABLE_DIR, "").replace(/\\\n/g, " ")).find(isDotenvPath);
+  const editedFile = (text: string): string | undefined => {
+    const call = EDITOR_CALL.exec(text);
+    const before = text.slice(0, call?.index ?? 0);
+    // `git commit -m "sed -i …"` only speaks of one.
+    if (call === null || TEXT_ARGUMENTS.test(before.slice(before.lastIndexOf("|") + 1))) return parsedEdit(text);
+    return parsedEdit(text.slice(call.index)) ?? (FEEDS_FILES.test(before) ? resolved(before).split(WORD_BREAK).find(isDotenvPath) : undefined);
+  };
   const lines = command.split("\n");
   const kept: string[] = [];
   let written: string | undefined;
   let spread = false;
   for (let i = 0; i < lines.length; i += 1) {
     let writes = false;
-    const { parts, open } = statements(lines[i]!);
-    // A line that goes on in the next (`\`, a trailing pipe) is one statement
-    // with it, and the values may sit on either.
-    if (open || /[\\|]\s*$/.test(lines[i]!)) spread = true;
+    // A backslash joins them, to the shell and so here.
+    const first = i;
+    while (lines[i]!.endsWith("\\") && i + 1 < lines.length) i += 1;
+    const line = lines.slice(first, i + 1).join("\n");
+    const { parts, open } = statements(line);
+    // A line that goes on in the next (a trailing pipe, an open quote) is one
+    // statement with it, and the values may sit on either.
+    if (open || /[\\|]\s*$/.test(line)) spread = true;
     kept.push(
       parts
         .map((part) => {
@@ -745,7 +769,7 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
         })
         .join(""),
     );
-    const terminator = HEREDOC.exec(lines[i]!)?.[2];
+    const terminator = HEREDOC.exec(line)?.[2];
     if (terminator === undefined) continue;
     let end = i + 1;
     while (end < lines.length && lines[end]!.trim() !== terminator) end += 1;
@@ -779,6 +803,12 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
     for (const line of namesDotenv ? [marker("dotenv")] : body) kept.push(line);
     if (end < lines.length) kept.push(lines[end]!);
     i = end;
+  }
+  // A quoted script over several lines is an edit that no one of them shows.
+  const editAcross = written === undefined && spread ? parsedEdit(command) : undefined;
+  if (editAcross !== undefined) {
+    learnEdit(command, context);
+    written = `sed -i ${marker("dotenv")} ${editAcross}`;
   }
   // A group or a quoted string over several lines holds the values outside the
   // statement that names the file (`{ echo A=1; echo B=2; } > .env`), so the

@@ -614,6 +614,11 @@ const AWK_VALUE_FLAG = /^(?:-[ivF]|--(?:include|assign|field-separator))$/;
  * written); a glob names files this cannot list.
  */
 export function shellEditPaths(command: string, cwd?: string): string[] {
+  return shellEditWords(command, cwd).filter((word) => !/[*?]/.test(word));
+}
+
+/** As `shellEditPaths`, with a glob left in: to say what a command edits, `.env*` is as good as a file. */
+export function shellEditWords(command: string, cwd?: string): string[] {
   const paths: string[] = [];
   let dir = cwd;
 
@@ -659,7 +664,7 @@ export function shellEditPaths(command: string, cwd?: string): string[] {
         scriptSeen = true;
         continue;
       }
-      if (token.startsWith("$") || /[*?]/.test(token) || /^[./]+$/.test(token)) continue;
+      if (token.startsWith("$") || /^[./]+$/.test(token)) continue;
       if (dir === undefined || token.startsWith("~")) paths.push(token.replace(/^\.\//, ""));
       else paths.push(token.startsWith("/") ? posix.normalize(token) : posix.join(dir, token));
     }

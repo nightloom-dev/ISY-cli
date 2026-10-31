@@ -1279,6 +1279,76 @@ test("an in-place edit of a dotenv file loses its script, and stays an edit", ()
   assert.equal(throughCall("Bash", { command: kept }, "plain output").input.command, kept);
 });
 
+test("an in-place edit of a dotenv file loses its script behind whatever runs it, over any lines, and through a glob", () => {
+  const m = marker("dotenv");
+  const value = "Hy4tN7wB2cQs";
+  const script = `'s/^K=.*/K=${value}/'`;
+  const cases: [string, string][] = [
+    [`sudo -u app sed -i ${script} .env`, `sed -i ${m} .env`],
+    [`LC_ALL=C sed -i ${script} .env`, `sed -i ${m} .env`],
+    [`time sed -i ${script} .env`, `sed -i ${m} .env`],
+    [`/usr/bin/sed -i ${script} .env`, `sed -i ${m} .env`],
+    [`env LC_ALL=C timeout 5 sed -i ${script} .env`, `sed -i ${m} .env`],
+    [`(sed -i ${script} .env)`, `sed -i ${m} .env)`],
+    [`time perl -pi -e ${script} .env`, `sed -i ${m} .env`],
+    [`docker exec app sed -i ${script} /app/.env`, `sed -i ${m} /app/.env`],
+    [`kubectl exec pod -- sed -i ${script} /app/.env`, `sed -i ${m} /app/.env`],
+    // In the quotes of what runs it, among whatever else they hold.
+    [`ssh host "sed -i ${script} /srv/.env"`, `sed -i ${m} /srv/.env`],
+    [`bash -c "sed -i ${script} .env"`, `sed -i ${m} .env`],
+    [`sh -c 'sed -i "s/^K=.*/K=${value}/" .env'`, `sed -i ${m} .env`],
+    [`ssh host "cd /srv && sed -i ${script} .env && systemctl restart app"`, `sed -i ${m} .env`],
+    // The files come from in front of it.
+    [`find . -name .env -exec sed -i ${script} {} +`, `sed -i ${m} .env`],
+    [`find . -name '.env*' -exec sed -i ${script} {} \\;`, `sed -i ${m} .env*`],
+    [`find . -name '.env*' | xargs sed -i ${script}`, `sed -i ${m} .env*`],
+    [`ls .env* | xargs -n1 sed -i ${script}`, `sed -i ${m} .env*`],
+    [`grep -rl old --include='*.env' . | xargs sed -i 's/old/${value}/'`, `sed -i ${m} *.env`],
+    // Files a glob stands for.
+    [`sed -i ${script} .env*`, `sed -i ${m} .env*`],
+    [`sed -i ${script} apps/*/.env`, `sed -i ${m} apps/*/.env`],
+    // A line the shell joins to the next, and a quoted script over several.
+    [`sed -i ${script} \\\n  .env`, `sed -i ${m} .env`],
+    [`sed -i \\\n  ${script} \\\n  .env`, `sed -i ${m} .env`],
+    [`sed -i \\\n  -e ${script} \\\n  -e 's/^B=.*/B=2/' \\\n  .env`, `sed -i ${m} .env`],
+    [`sed -i '/^K=/c\\\nK=${value}' .env`, `sed -i ${m} .env`],
+    [`sed -i '$a\\\nK=${value}' .env`, `sed -i ${m} .env`],
+    [`sed -i 's/^A=.*/A=1/\ns/^K=.*/K=${value}/' .env`, `sed -i ${m} .env`],
+    [`perl -pi -e 's/^A=.*/A=1/;\ns/^K=.*/K=${value}/' .env`, `sed -i ${m} .env`],
+  ];
+  for (const [command, expected] of cases) {
+    const session = summaryFor([
+      ...callAndResult("Bash", { command, description: "set the key" }, ""),
+      { type: "user", message: { role: "user", content: `the key is ${value}` } },
+    ]);
+    const out = throughCall("Bash", { command, description: "set the key" });
+    assert.equal(out.input.command, expected, command);
+    assert.ok(!session.lines.join("\n").includes(value), command);
+    assert.equal(redactOne(expected), expected, command);
+  }
+
+  // What only speaks of an editor, or runs one on something else.
+  for (const kept of [
+    "git commit -m \"sed -i 's/a/b/' .env\"",
+    "cd app && git commit -m \"sed -i 's/a/b/' .env\"",
+    "echo \"sed -i 's/a/b/' .env\"",
+    "gh pr create --body \"run sed -i 's/a/b/' .env first\"",
+    "docker run --env-file .env app sed -i 's/a/b/' /etc/app.conf",
+    "find . -name '*.ts' -exec sed -i 's/process.env/x/' {} +",
+    "find . -name '*.ts' | xargs sed -i 's/.env/x/'",
+    "time sed -i 's/.env/x/' src/a.ts",
+    "time sed -i 's/a/b/' src/*.env.ts",
+    "ssh host \"sed -i 's/a/b/' /etc/app.conf\"",
+    "sed -n '1p' .env | sed -i 's/a/b/' src/a.ts",
+    "time sed 's/a/b/' .env",
+    "ruby -Ilib x.rb .env",
+    "sed -i 's/a/b/' src/a.ts \\\n  src/b.ts",
+  ]) {
+    assert.equal(throughCall("Bash", { command: kept }, "plain output").input.command, kept);
+  }
+  assert.deepEqual(shellEditPaths(`sed -i ${m} .env*`, "."), [], "and a glob still names no file to the parse");
+});
+
 test("cuts what a ! command typed in Claude Code printed from a dotenv file, or wrote into one", () => {
   const turn = (content: string) => ({ type: "user", message: { role: "user", content } });
   const { lines } = summaryFor([
