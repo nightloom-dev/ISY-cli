@@ -854,6 +854,8 @@ test("the rules for a dropped exception get through 200 KB of text built to stal
     `catch(x)${" ".repeat(size)}`,
     `catch{${" ".repeat(size)}`,
     fill(`catch${" ".repeat(400)}`),
+    fill("catch(x"),
+    fill("except:# "),
     `except:${"\n".repeat(size)}`,
     `except:${" ".repeat(size)}`,
     `except:\n${"\n".repeat(size)}`,
@@ -874,6 +876,18 @@ test("the rules for a dropped exception get through 200 KB of text built to stal
       const took = performance.now() - started;
       assert.ok(took < 1000, `took ${Math.round(took)}ms on ${JSON.stringify(text.slice(0, 24))}…`);
     }
+  }
+});
+
+test("the rules for a dropped exception read a long line as well as a short one", () => {
+  const tuple = Array.from({ length: 25 }, (_, index) => `SomeLongError${index}`).join(", ");
+  for (const [filePath, content] of [
+    ["/repo/src/a.py", `try:\n    a()\nexcept (${tuple}):\n    pass\n`],
+    ["/repo/src/a.py", `try:\n    a()\nexcept OSError:  # ${"x".repeat(500)}\n    pass\n`],
+    ["/repo/src/a.ts", `try { a(); } catch (e: ${"T".repeat(300)}) {}`],
+  ] as const) {
+    const found = detectErrorSuppressed(writtenAfterCheck(content, false, filePath));
+    assert.equal(found[0]?.detail, "an exception is caught and dropped", content.slice(0, 40));
   }
 });
 
