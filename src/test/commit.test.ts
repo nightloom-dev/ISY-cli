@@ -19,6 +19,7 @@ import {
   autoInstallGitHook,
   gitHookInstalled,
   installGitHook,
+  hooksLeftToTheUser,
   postCommitPath,
   prePushPath,
   removeGitHook,
@@ -377,6 +378,107 @@ test("a hook linked in from elsewhere stays linked when its block is rewritten",
 
   assert.equal((await lstat(path)).isSymbolicLink(), true);
   assert.ok((await readFile(script, "utf8")).includes(COMMIT_COMMAND));
+});
+
+test("takes the block out of a hook in another language, byte for byte, and never adds it again", async () => {
+  const hooks: Record<string, Buffer> = {
+    python: Buffer.from("#!/usr/bin/env python3\nimport sys\n\n\n\nsys.exit(0)\n"),
+    "python given flags": Buffer.from("#!/usr/bin/env -S python3 -u\nimport sys\n"),
+    node: Buffer.from("#!/usr/bin/env node\nprocess.exit(0);"),
+    perl: Buffer.from("#!/usr/bin/perl\r\nexit 0;\r\n"),
+    "not UTF-8": Buffer.concat([Buffer.from("#!/usr/bin/python\n# caf"), Buffer.from([0xe9]), Buffer.from("\n")]),
+  };
+
+  for (const [label, original] of Object.entries(hooks)) {
+    const fresh = await newRepo("isy-hook-foreign-");
+    const commit = (await postCommitPath(fresh))!;
+    const cut = original.indexOf("\n") + 1;
+    // Where every older isy put it: under the shebang, above the user's script.
+    await writeFile(
+      commit,
+      Buffer.concat([original.subarray(0, cut), Buffer.from(OLD_COMMIT_BLOCK), original.subarray(cut)]),
+    );
+    await chmod(commit, 0o700);
+    assert.equal(await gitHookInstalled(fresh), false, label);
+
+    await cli(fresh, ["commit", "--hook"]);
+
+    assert.deepEqual(await readFile(commit), original, label);
+    assert.equal((await stat(commit)).mode & 0o777, 0o700, label);
+
+    // Nothing that runs later puts it back.
+    await installGitHook(fresh);
+    await autoInstallGitHook(fresh);
+    await cli(fresh, ["commit", "--hook"]);
+    assert.deepEqual(await readFile(commit), original, label);
+    assert.ok((await readFile((await prePushPath(fresh))!, "utf8")).includes(PUSH_COMMAND), label);
+    assert.equal(await gitHookInstalled(fresh), true, label);
+    assert.deepEqual((await hooksLeftToTheUser(fresh)).map((hook) => hook.name), ["post-commit"], label);
+  }
+});
+
+test("takes a block out of a hook in another language in a shared directory too, and on logout", async () => {
+  const original = "#!/usr/bin/env python3\nimport sys\n\n\n\nsys.exit(0)";
+  const damaged = `#!/usr/bin/env python3\n${OLD_COMMIT_BLOCK}import sys\n\n\n\nsys.exit(0)`;
+
+  const shared = await newRepo("isy-hook-foreign-shared-");
+  await mkdir(join(shared, "githooks"));
+  await run("git", ["config", "core.hooksPath", "githooks"], { cwd: shared });
+  await writeFile(join(shared, "githooks", "post-commit"), damaged);
+  await cli(shared, ["check", "--hook"]);
+  assert.equal(await readFile(join(shared, "githooks", "post-commit"), "utf8"), original);
+
+  const fresh = await newRepo("isy-hook-foreign-logout-");
+  const commit = (await postCommitPath(fresh))!;
+  await writeFile(commit, damaged);
+  assert.equal(await removeGitHook(fresh), "removed");
+  assert.equal(await readFile(commit, "utf8"), original);
+});
+
+test("a push and a commit go through a hook in another language, with the session's hook run before them", async () => {
+  const fresh = await newRepo("isy-hook-foreign-push-");
+  const bare = await mkdtemp(join(tmpdir(), "isy-hook-foreign-bare-"));
+  await run("git", ["init", "-q", "--bare", "-b", "main"], { cwd: bare });
+  const body = "#!/usr/bin/env node\nprocess.exit(0);\n";
+  for (const path of [(await postCommitPath(fresh))!, (await prePushPath(fresh))!]) {
+    await writeFile(path, body);
+    await chmod(path, 0o755);
+  }
+
+  assert.equal(await autoInstallGitHook(fresh), "already-present");
+
+  const committed = await run("git", ["commit", "-q", "--allow-empty", "-m", "next"], { cwd: fresh });
+  assert.equal(committed.stderr, "");
+  await run("git", ["push", "-q", bare, "main"], { cwd: fresh });
+  assert.equal(await readFile((await prePushPath(fresh))!, "utf8"), body);
+});
+
+test("a compiled hook is left alone, and a hook git hands to sh is not", async () => {
+  const fresh = await newRepo("isy-hook-compiled-");
+  const compiled = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x00, 0xff, 0xfe, 0x00, 0x0a]);
+  const commit = (await postCommitPath(fresh))!;
+  await writeFile(commit, compiled);
+  await installGitHook(fresh);
+  assert.deepEqual(await readFile(commit), compiled);
+
+  for (const shell of [
+    "#!/bin/sh",
+    "#! /bin/sh -e",
+    "#!/bin/bash",
+    "#!/usr/bin/env bash",
+    "#!/usr/bin/env -S bash -e",
+    "#!/usr/bin/zsh",
+    "#!/bin/ksh",
+    "#!/bin/dash",
+    "#!/bin/ash",
+    "#!/nix/store/abc-bash-5.2/bin/bash",
+    "# no shebang at all",
+  ]) {
+    await writeFile(commit, `${shell}\necho mine\n`);
+    await installGitHook(fresh);
+    assert.ok((await readFile(commit, "utf8")).includes(COMMIT_COMMAND), shell);
+    assert.equal(await gitHookInstalled(fresh), true, shell);
+  }
 });
 
 test("writes where core.hooksPath points, not where it does not", async () => {

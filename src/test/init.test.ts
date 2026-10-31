@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -8,6 +9,8 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { drainAlerts, parkAlert } from "../alert.js";
 import { runInit } from "../commands/init.js";
+import { collectStatus, formatStatus } from "../commands/status.js";
+import { COMMIT_COMMAND, PUSH_COMMAND } from "../githook.js";
 import { HOOK_COMMAND } from "../hook.js";
 
 const saved = {
@@ -127,6 +130,29 @@ test("isy init answers the alerts that sent the reader to it and keeps the rest"
   await quietly(() => runInit({}, cwd));
 
   assert.equal(await drainAlerts(), "ISY: 1 session(s) given up on\nISY: this month's analyses are used up");
+});
+
+test("isy init says what to add to a hook it cannot go into, and status says it was left", async () => {
+  const repo = await mkdtemp(join(tmpdir(), "isy-init-foreign-"));
+  await new Promise((resolve, reject) =>
+    execFile("git", ["init", "-q"], { cwd: repo }, (error) => (error ? reject(error) : resolve(undefined))),
+  );
+  const prePush = join(repo, ".git", "hooks", "pre-push");
+  const body = "#!/usr/bin/env python3\nimport sys\n";
+  await writeFile(prePush, body);
+  await chmod(prePush, 0o755);
+
+  const output = await printed(() => runInit({ token: "isy_held" }, repo));
+
+  assert.equal(await readFile(prePush, "utf8"), body);
+  assert.match(output, /Added the post-commit hooks? in /);
+  assert.doesNotMatch(output, /post-commit and pre-push/);
+  assert.match(output, /pre-push .*not a shell script \(python3\)/);
+  assert.ok(output.includes(PUSH_COMMAND), "the line to add, as it stands in a shell hook");
+  assert.ok(!output.includes(COMMIT_COMMAND), "the commit hook took its block, nothing to add");
+
+  const status = formatStatus(await collectStatus(repo));
+  assert.match(status, /git hooks\s+installed, except pre-push/);
 });
 
 test("isy init ends on what is left before a first analysis", async () => {

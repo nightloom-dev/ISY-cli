@@ -3,12 +3,18 @@ import { chmod, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "n
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { NPX_ISY } from "./hook.js";
+import { logLine } from "./log.js";
 
 const run = promisify(execFile);
 
 const GIT_TIMEOUT_MS = 5000;
 const SHEBANG = "#!/bin/sh";
-const BEGIN = "# isy:begin — managed by isy, do not edit inside this block";
+/**
+ * A hook is read and written as latin1, one character to a byte, so that what a
+ * user's script holds comes back out as it went in, valid UTF-8 or not. So the
+ * one character here that is not ASCII is spelled as its bytes.
+ */
+const BEGIN = Buffer.from("# isy:begin — managed by isy, do not edit inside this block").toString("latin1");
 const END = "# isy:end";
 
 /**
@@ -51,10 +57,33 @@ export type GitHookOutcome =
   | "already-present"
   | "removed"
   | "absent"
-  | "not-a-repository";
+  | "not-a-repository"
+  | "not-shell";
 
 function block(command: string): string {
   return `${BEGIN}\n${command}\n${END}`;
+}
+
+/** The program a shebang line runs, looking through `env`. */
+function interpreter(contents: string): string | undefined {
+  if (!contents.startsWith("#!")) return undefined;
+  const [program = "", ...rest] = contents.slice(2).split("\n", 1)[0]!.trim().split(/\s+/);
+  const name = basename(program);
+  if (name !== "env") return name;
+  return basename(rest.find((word) => !word.startsWith("-") && !word.includes("=")) ?? "");
+}
+
+/**
+ * Whether the block can stand in this hook. It is shell, and in a python, node or
+ * perl script it is a syntax error that takes the user's hook down with it: for
+ * pre-push, that rejects the push. Prepended to a compiled program it destroys it.
+ * A file with no shebang is shell: git hands it to sh. An interpreter not known
+ * here is left alone, which costs a hook and breaks nothing.
+ */
+function takesBlock(contents: string): boolean {
+  if (contents.includes("\0")) return false;
+  const program = interpreter(contents);
+  return program === undefined || /^(?:a|ba|da|k|mk|pdk|y|z)?sh\d*$/.test(program);
 }
 
 /**
@@ -114,7 +143,7 @@ export function prePushPath(cwd: string): Promise<string | undefined> {
 
 async function readHook(path: string): Promise<string | undefined> {
   try {
-    return await readFile(path, "utf8");
+    return await readFile(path, "latin1");
   } catch {
     return undefined;
   }
@@ -129,7 +158,7 @@ async function readHook(path: string): Promise<string | undefined> {
 async function replaceHook(path: string, contents: string): Promise<void> {
   const target = await realpath(path);
   const temporary = join(dirname(target), `.${basename(target)}.isy-${process.pid}`);
-  await writeFile(temporary, contents, "utf8");
+  await writeFile(temporary, contents, "latin1");
   await chmod(temporary, (await stat(target)).mode & 0o7777);
   await rename(temporary, target);
 }
@@ -142,17 +171,41 @@ function existingBlock(contents: string): string | undefined {
   return stop < 0 ? undefined : contents.slice(start, stop + END.length);
 }
 
+/** The file without its block and the newline `insert` gave it: what the user had before. */
+function withoutBlock(contents: string, existing: string): string {
+  const start = contents.indexOf(existing);
+  const stop = start + existing.length;
+  return contents.slice(0, start) + contents.slice(contents[stop] === "\n" ? stop + 1 : stop);
+}
+
 async function oneInstalled(cwd: string, hook: { name: string; command: string }): Promise<boolean> {
   const path = await hookPath(cwd, hook.name);
   if (!path) return false;
   const contents = await readHook(path);
-  return contents !== undefined && existingBlock(contents) === block(hook.command);
+  if (contents === undefined) return false;
+  // Nothing is missing from a hook that takes no block, and `isy init` cannot add it.
+  return existingBlock(contents) === (takesBlock(contents) ? block(hook.command) : undefined);
 }
 
 /** True only with every hook in place: half-wired is not installed. */
 export async function gitHookInstalled(cwd: string): Promise<boolean> {
   for (const hook of GIT_HOOKS) if (!(await oneInstalled(cwd, hook))) return false;
   return true;
+}
+
+/** The hooks that take no block, and what each would have to run: wiring them is the user's to do. */
+export async function hooksLeftToTheUser(
+  cwd: string,
+): Promise<{ name: string; command: string; language: string }[]> {
+  const left: { name: string; command: string; language: string }[] = [];
+  for (const hook of GIT_HOOKS) {
+    const path = await hookPath(cwd, hook.name);
+    const contents = path === undefined ? undefined : await readHook(path);
+    if (contents !== undefined && !takesBlock(contents)) {
+      left.push({ ...hook, language: interpreter(contents) ?? "compiled" });
+    }
+  }
+  return left;
 }
 
 async function installOne(
@@ -166,12 +219,21 @@ async function installOne(
   const desired = block(hook.command);
 
   if (contents === undefined) {
-    await writeFile(path, `${SHEBANG}\n${desired}\n`, "utf8");
+    await writeFile(path, `${SHEBANG}\n${desired}\n`, "latin1");
     await chmod(path, 0o755);
     return "installed";
   }
 
   const existing = existingBlock(contents);
+  if (!takesBlock(contents)) {
+    // An older isy put it there, and every run of this hook has failed since.
+    if (existing !== undefined) {
+      await replaceHook(path, withoutBlock(contents, existing));
+      logLine(`git hooks: took the block back out of ${path}: not a shell script`);
+    }
+    return "not-shell";
+  }
+
   if (existing === desired) {
     // A hook git will not execute is not installed, whatever the file says.
     await chmod(path, 0o755);
@@ -236,16 +298,21 @@ function isShared(location: { hooks: string; gitDir: string }): boolean {
 /**
  * Bring the blocks an older isy wrote up to date where they stand, adding none:
  * what every run from a hook does first, so that an upgrade reaches a repository
- * the next time anything happens in it, with no `isy init` to go through.
+ * the next time anything happens in it, with no `isy init` to go through. A block
+ * that is only old waits in a shared directory. One that breaks its hook comes out
+ * wherever it is: the file goes back to what the user had, and a push stops failing.
  */
 export async function repairGitHook(cwd: string): Promise<void> {
   const location = await hookLocation(cwd);
-  if (!location || isShared(location)) return;
+  if (!location) return;
 
   for (const hook of GIT_HOOKS) {
     const contents = await readHook(resolve(location.hooks, hook.name));
-    const existing = contents === undefined ? undefined : existingBlock(contents);
-    if (existing !== undefined && existing !== block(hook.command)) await installOne(cwd, hook);
+    if (contents === undefined) continue;
+    const existing = existingBlock(contents);
+    if (existing === undefined) continue;
+    const old = existing !== block(hook.command) && !isShared(location);
+    if (old || !takesBlock(contents)) await installOne(cwd, hook);
   }
 }
 
@@ -275,14 +342,14 @@ async function removeOne(cwd: string, name: string): Promise<GitHookOutcome> {
   const existing = existingBlock(contents);
   if (existing === undefined) return "absent";
 
-  const stripped = contents.replace(existing, "").replace(/\n{3,}/g, "\n\n");
+  const stripped = withoutBlock(contents, existing);
 
   if (stripped.replace(SHEBANG, "").trim().length === 0) {
     await rm(path, { force: true });
     return "removed";
   }
 
-  await writeFile(path, stripped.endsWith("\n") ? stripped : `${stripped}\n`, "utf8");
+  await replaceHook(path, stripped);
   return "removed";
 }
 

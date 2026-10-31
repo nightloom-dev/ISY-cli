@@ -101,7 +101,7 @@ function checkProblems(check: CheckReport, verified: string[]): HealthProblem[] 
       files: [],
     });
   } else if (check.gitHook === "installed") {
-    verified.push("the repository's post-commit and pre-push hooks carry the isy block");
+    verified.push("the repository's post-commit and pre-push hooks carry the isy block, or are not shell scripts and were left alone");
   }
 
   if (check.api !== undefined && check.api !== "ok") {

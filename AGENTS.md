@@ -123,7 +123,10 @@ database or to a model.
   for the git hooks of the repository it stands in (`githook.ts:repairGitHook`),
   swapping the file whole, because a shell reads a script as it runs it. A
   directory core.hooksPath points out of the git directory waits for `isy init`,
-  and so does Codex, which asks again for a hook it has not seen. In a Kimi config a hook is isy's by
+  and so does Codex, which asks again for a hook it has not seen. The block is
+  shell, so a git hook in another language takes none (`githook.ts:takesBlock`):
+  `isy init` says what to add by hand, and a block an older isy left in one comes
+  out byte for byte. In a Kimi config a hook is isy's by
   its parsed `command` (`kimi-config.ts`), not by the comments around isy's
   block: both Kimi CLIs write their config back without comments, and Kimi
   Code's migration copies Kimi CLI's hooks into its own.

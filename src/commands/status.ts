@@ -3,7 +3,7 @@ import { series } from "./check.js";
 import type { AgentId } from "../agents/index.js";
 import { DEFAULT_API_BASE_URL } from "../api.js";
 import { readConfig } from "../config.js";
-import { gitHookInstalled, gitHooksDir } from "../githook.js";
+import { gitHookInstalled, gitHooksDir, hooksLeftToTheUser } from "../githook.js";
 import { packageVersion, projectSlug } from "../paths.js";
 import { countQueue } from "../queue.js";
 import { updateNotice } from "../update.js";
@@ -56,6 +56,8 @@ export interface StatusReport {
     sessions: number;
     /** The per-repository git hooks that start the fast loop. */
     gitHook: "installed" | "missing" | "not-a-repository";
+    /** Hooks written in another language: they take no block, and `isy init` says what to add. */
+    gitHooksLeft: string[];
   };
   agents: AgentSessions[];
   /** The newest session for this directory, whichever CLI produced it. */
@@ -139,6 +141,7 @@ export async function collectStatus(cwd: string): Promise<StatusReport> {
       slug: projectSlug(cwd),
       sessions: agents.reduce((total, entry) => total + entry.sessions, 0),
       gitHook,
+      gitHooksLeft: (await hooksLeftToTheUser(cwd)).map((hook) => hook.name),
     },
     agents,
     latestSession: newest,
@@ -181,9 +184,11 @@ export function formatStatus(report: StatusReport): string {
     lines.push(
       row(
         "git hooks",
-        report.project.gitHook === "installed"
-          ? "installed"
-          : "missing — run isy init here to analyse on every commit and push",
+        report.project.gitHook !== "installed"
+          ? "missing — run isy init here to analyse on every commit and push"
+          : report.project.gitHooksLeft.length > 0
+            ? `installed, except ${series(report.project.gitHooksLeft)}: not a shell script, isy init says what to add`
+            : "installed",
       ),
     );
   }

@@ -4,7 +4,7 @@ import { drainAlerts, parkAlert } from "../alert.js";
 import { DEFAULT_API_BASE_URL, verifyToken } from "../api.js";
 import { readConfig, writeConfig } from "../config.js";
 import { presentAgents } from "../agents/index.js";
-import { GIT_HOOKS, gitHooksDir, installGitHook } from "../githook.js";
+import { GIT_HOOKS, gitHooksDir, hooksLeftToTheUser, installGitHook } from "../githook.js";
 import { logLine } from "../log.js";
 import { awaitPairedKey, openPairing } from "../pairing.js";
 import type { Pairing } from "../pairing.js";
@@ -203,13 +203,24 @@ export async function runInit(options: { token?: string }, cwd: string): Promise
   if (gitHook === "not-a-repository") {
     console.log(`${cwd} is not a git repository, so no git hooks were added.`);
   } else {
-    const names = GIT_HOOKS.map((hook) => hook.name).join(" and ");
+    const left = await hooksLeftToTheUser(cwd);
+    const names = GIT_HOOKS.filter((hook) => !left.some((other) => other.name === hook.name))
+      .map((hook) => hook.name)
+      .join(" and ");
     const where = await gitHooksDir(cwd);
-    console.log(
-      gitHook === "installed"
-        ? `Added the ${names} hooks in ${where}`
-        : `The ${names} hooks are already present in ${where}`,
-    );
+    if (names) {
+      console.log(
+        gitHook === "installed"
+          ? `Added the ${names} ${left.length > 0 ? "hook" : "hooks"} in ${where}`
+          : `The ${names} ${left.length > 0 ? "hook is" : "hooks are"} already present in ${where}`,
+      );
+    }
+    for (const hook of left) {
+      console.log(
+        `The ${hook.name} hook in ${where} is not a shell script (${hook.language}), so isy left it as it was. ` +
+          `To send sessions from it, have it run this through sh:\n  ${hook.command}`,
+      );
+    }
   }
 
   if (verified.githubLogin) console.log(`Signed in as ${verified.githubLogin}`);
