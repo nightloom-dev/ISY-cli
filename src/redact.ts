@@ -381,9 +381,18 @@ function worthLearning(name: string | undefined, value: string): boolean {
  * the floors above, which keep short values from shredding the text.
  */
 function learnValues(value: unknown, context: RedactContext): void {
-  if (Array.isArray(value)) return value.forEach((item) => learnValues(item, context));
-  if (isObject(value)) return Object.values(value).forEach((item) => learnValues(item, context));
-  if (typeof value !== "string") return;
+  // A loop and not a call per level: what a dotenv read returned goes whatever it holds,
+  // and a result nested deeper than the stack must not take the session with it.
+  const pending = [value];
+  while (pending.length > 0) {
+    const item = pending.pop();
+    if (Array.isArray(item)) for (const inner of item) pending.push(inner);
+    else if (isObject(item)) for (const inner of Object.values(item)) pending.push(inner);
+    else if (typeof item === "string") learnText(item, context);
+  }
+}
+
+function learnText(value: string, context: RedactContext): void {
   // `printf 'A=1\nB=2\n' > .env` holds its lines as written, and `echo K=\"v\" > .env` a quoted value.
   const text = value.replace(/\\n/g, "\n").replace(/\\(["'])/g, "$1");
   const learn = (name: string | undefined, found: string): void => {
@@ -874,6 +883,27 @@ function fromBase(value: string, base: string | undefined): string {
   return resolve(base, value);
 }
 
+/**
+ * The rules, then the paths. A pattern that runs out of backtrack stack on a run of
+ * millions of characters reports it as a RangeError, and then nothing says how much of
+ * the text is a secret: all of it goes, as the session around it can still go out.
+ */
+function scrubbed(text: string, context: RedactContext, key?: string): string {
+  try {
+    const secretsGone = applyRules(text, context.rules, (type, amount) => count(context, type, amount));
+    // Paths last: a secret already replaced by its marker must not then be read
+    // as a directory, and `[ISY_REDACTED:…]` carries no slash to be read as one.
+    const onMask = (amount: number): void => count(context, "path", amount);
+    return key && PATH_KEYS.has(key)
+      ? maskPath(fromBase(secretsGone, context.base), context.roots, onMask)
+      : maskPaths(secretsGone, context.roots, onMask);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    count(context, "oversized", 1);
+    return marker("oversized");
+  }
+}
+
 function redactValue(value: unknown, context: RedactContext, key?: string): unknown {
   if (typeof value === "string") {
     if (key && SENSITIVE_KEY.test(key) && value.length >= MIN_SENSITIVE_VALUE) {
@@ -881,15 +911,7 @@ function redactValue(value: unknown, context: RedactContext, key?: string): unkn
       count(context, "assignment", 1);
       return marker("assignment");
     }
-    const secretsGone = applyRules(value, context.rules, (type, amount) =>
-      count(context, type, amount),
-    );
-    // Paths last: a secret already replaced by its marker must not then be read
-    // as a directory, and `[ISY_REDACTED:…]` carries no slash to be read as one.
-    const onMask = (amount: number): void => count(context, "path", amount);
-    return key && PATH_KEYS.has(key)
-      ? maskPath(fromBase(secretsGone, context.base), context.roots, onMask)
-      : maskPaths(secretsGone, context.roots, onMask);
+    return scrubbed(value, context, key);
   }
 
   if (Array.isArray(value)) return value.map((item) => redactValue(item, context));
@@ -1065,13 +1087,7 @@ function redactOneLine(line: string, context: RedactContext): { line: string; un
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    const secretsGone = applyRules(trimmed, context.rules, (type, amount) =>
-      count(context, type, amount),
-    );
-    return {
-      line: maskPaths(secretsGone, context.roots, (amount) => count(context, "path", amount)),
-      unparsed: true,
-    };
+    return { line: scrubbed(trimmed, context), unparsed: true };
   }
 
   if (!isObject(parsed)) {

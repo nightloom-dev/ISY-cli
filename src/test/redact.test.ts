@@ -1983,3 +1983,36 @@ test("a variable naming a dotenv file, used all over a command, costs no more th
   }
   assert.equal(throughCall("Bash", { command: "F=.env; echo K=Zq8vR2mK9xLp > $F" }, "plain output").input.command, `${marker("dotenv")} > .env`);
 });
+
+test("a run of millions of characters costs the text it sits in, not the session", () => {
+  const size = 8_000_000;
+  for (const text of [
+    `Authorization: ${"a".repeat(size)}`,
+    `authorization=${"a".repeat(size)}`,
+    `Authorization: Bearer ${"QUJD+/==".repeat(size / 8)}`,
+    `Cookie: ${"a=b; ".repeat(size / 5)}`,
+    `password=${"a".repeat(size)}`,
+    `sk-${"a".repeat(size)}`,
+    `/home/x/${"a/".repeat(size / 2)}`,
+  ]) {
+    const { lines, summary } = redactLines([
+      JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: text }] } }),
+      `not json: ${text}`,
+    ]);
+    const content = (JSON.parse(lines[0]!) as { message: { content: { content: string }[] } }).message.content[0]!.content;
+    assert.equal(content, marker("oversized"), text.slice(0, 24));
+    assert.equal(lines[1], marker("oversized"), text.slice(0, 24));
+    assert.equal(summary.counts.oversized, 2);
+  }
+});
+
+test("a dotenv read's result is learned from and cut however deep it nests", () => {
+  const depth = 200_000;
+  const { lines } = redactLines([
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/p/.env" } }] } }),
+    `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":${"[".repeat(depth)}"MAILER_PHRASE=Zq8vR2mK9xLp"${"]".repeat(depth)}}]}}`,
+    JSON.stringify({ type: "user", message: { role: "user", content: "the phrase is Zq8vR2mK9xLp" } }),
+  ]);
+  assert.equal((JSON.parse(lines[1]!) as { message: { content: { content: string }[] } }).message.content[0]!.content, marker("dotenv"));
+  assert.equal((JSON.parse(lines[2]!) as { message: { content: string } }).message.content, `the phrase is ${marker("dotenv")}`);
+});
