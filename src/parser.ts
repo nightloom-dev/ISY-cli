@@ -619,10 +619,10 @@ const PATH_MAX = 4096;
  * paths they spell out. Every word of a command is joined to its directory, so two
  * bytes of command cost a directory's length, and records repeat that as often as a
  * transcript has room: no cap per command bounds it. Past this a command already seen
- * to write still counts, and the rest count as writes nobody can name. The largest of
- * 1215 real sessions spends 2.7 MB.
+ * to write still counts, and the rest count as writes nobody can name. The largest
+ * real session, with its subagents, spends 13 MB.
  */
-const SHELL_CHARS = 16 * 1024 * 1024;
+const SHELL_CHARS = 32 * 1024 * 1024;
 /** What keeping a path costs besides its characters, so that short ones spend `SHELL_CHARS` too. */
 const PATH_COST = 64;
 /** The longest command read, against 39 KB in real sessions, and short of the 8 MB word that overflows the stack of the patterns reading it. */

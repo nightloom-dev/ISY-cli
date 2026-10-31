@@ -478,7 +478,7 @@ test("a directory no filesystem could hold is no directory, so what is edited in
 
 test("what one session's shell commands spell out is bounded over the whole transcript", () => {
   const words = (record: number) => Array.from({ length: 100 }, (_, word) => `f${record}_${word}`).join(" ");
-  const records = Array.from({ length: 500 }, (_, index) => ({
+  const records = Array.from({ length: 1000 }, (_, index) => ({
     ...assistant(`u${index}`, index === 0 ? null : `u${index - 1}`, [
       { type: "tool_use", id: `t${index}`, name: "Bash", input: { command: `sed -i x ${words(index)}` } },
     ]),
@@ -487,20 +487,20 @@ test("what one session's shell commands spell out is bounded over the whole tran
   const session = parseLines(jsonl(records));
   const chars = [...session.fileEdits.keys()].reduce((sum, path) => sum + path.length, 0);
   assert.ok(session.fileEdits.size > 1000, `kept ${session.fileEdits.size}`);
-  assert.ok(chars <= 16 * 1024 * 1024, `spelled out ${chars} characters`);
+  assert.ok(chars <= 32 * 1024 * 1024, `spelled out ${chars} characters`);
   assert.equal(session.meta.hasFileEdits, true);
 });
 
 test("a shell edit past what a session may spell out still counts as one, and only adds no path", () => {
   // Words past what they may cost, for few bytes of command.
-  const spent = Array.from({ length: 300 }, (_, index) =>
+  const spent = Array.from({ length: 600 }, (_, index) =>
     assistant(`u${index}`, index === 0 ? null : `u${index - 1}`, [
       { type: "tool_use", id: `t${index}`, name: "Bash", input: { command: `cat ${"a.ts ".repeat(1_000)}` } },
     ]),
   );
   const session = parseLines(jsonl([
     ...spent,
-    assistant("u300", "u299", [{ type: "tool_use", id: "t300", name: "Bash", input: { command: "sed -i x z.ts" } }]),
+    assistant("u600", "u599", [{ type: "tool_use", id: "t600", name: "Bash", input: { command: "sed -i x z.ts" } }]),
   ]));
   assert.equal(session.meta.hasFileEdits, true);
   assert.equal(session.fileEdits.size, 0);
@@ -509,6 +509,19 @@ test("a shell edit past what a session may spell out still counts as one, and on
   assert.deepEqual(shellEditPaths("sed -i x z.ts", "/repo", { left: 8 }), []);
   assert.deepEqual(shellReadPaths("cat z.ts", { left: 8 }), []);
   assert.deepEqual(shellEditPaths("sed -i x z.ts", "/repo", { left: 1000 }), ["/repo/z.ts"]);
+});
+
+test("a session with more shell than the longest real ones is read to its end", () => {
+  const session = parseLines(jsonl([
+    ...Array.from({ length: 400 }, (_, index) =>
+      assistant(`u${index}`, index === 0 ? null : `u${index - 1}`, [
+        { type: "tool_use", id: `t${index}`, name: "Bash", input: { command: `echo ${"a".repeat(50_000)}` } },
+      ]),
+    ),
+    assistant("u400", "u399", [{ type: "tool_use", id: "t400", name: "Bash", input: { command: "sed -i x z.ts" } }]),
+  ]));
+  assert.equal(session.fileEdits.size, 1);
+  assert.ok(session.toolUses.every((use) => typeof use.input.command === "string"));
 });
 
 test("a command too long to read counts as a write nobody can name, and nothing reads it after", () => {
