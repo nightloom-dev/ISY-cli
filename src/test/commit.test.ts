@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -980,6 +980,33 @@ test("a commit holding what a session edited goes to it, though another wrote af
   await writeSession(join(old, "docs"), "sess-reader-old", "ms");
   await commitFile(old, "src/f0.ts");
   assert.equal((await runCommit({ noUpload: true }, old)).sessionId, "sess-reader-old");
+});
+
+test("a transcript that cannot be read costs the commit no one else's mark", { skip: process.getuid?.() === 0 }, async () => {
+  const cwd = await realpath(await newRepo("isy-commit-unreadable-"));
+  await mkdir(join(cwd, "pkg"));
+  const below = await writeSession(join(cwd, "pkg"), "sess-below", "ms");
+  const older = await writeSession(cwd, "sess-older", "left-pad");
+  await age(below, 2 / 1440);
+  await age(older, 1 / 1440);
+  const newest = await writeSession(cwd, "sess-newest", "ms");
+  await commitFile(cwd, "whatever.txt");
+
+  // Where a session ran is read off its transcript too, for one further down the tree.
+  await chmod(below, 0o000);
+  await chmod(older, 0o000);
+  assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-newest");
+  assert.equal((await readState())[newest]?.commits?.length, 1);
+
+  await chmod(older, 0o600);
+  await chmod(newest, 0o000);
+  assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-older");
+
+  // None left to ask is a commit with no mark, never a hook that dies.
+  await chmod(older, 0o000);
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /could be read/);
+
+  for (const path of [below, older, newest]) await chmod(path, 0o600);
 });
 
 test("a CLI that records no branch is judged by the one its upload found", async () => {

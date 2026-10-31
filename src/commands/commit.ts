@@ -145,9 +145,16 @@ async function sessionOfCommit(
   const read = [];
   for (const { agent, file } of latest) {
     if (read.length > 0 && Date.now() >= deadline) break;
-    const lines = await agent.redactedLines(file.path, { extraPatterns, cwd: file.cwd ?? cwd });
-    const entry = { agent, file, session: parseLines(lines) };
-    if (entry.session.toolUses.some(mayBeCommitting)) return entry;
+    let session: ParsedSession;
+    try {
+      session = parseLines(await agent.redactedLines(file.path, { extraPatterns, cwd: file.cwd ?? cwd }));
+    } catch {
+      // Listed a moment ago: gone since, or never this user's to read. One such
+      // file says nothing about the commit, and the others are still there to ask.
+      continue;
+    }
+    const entry = { agent, file, session };
+    if (session.toolUses.some(mayBeCommitting)) return entry;
     read.push(entry);
   }
 
@@ -156,7 +163,7 @@ async function sessionOfCommit(
       if (await carriesItsWork(entry.session, states[entry.file.path] ?? {}, cwd)) return entry;
     }
   }
-  return read[0]!;
+  return read[0];
 }
 
 export async function runCommit(
@@ -175,7 +182,12 @@ export async function runCommit(
 
   const config = await readConfig();
   const states = await readState();
-  const { agent, file, session } = await sessionOfCommit(latest, cwd, states, config.extraRedactPatterns);
+  const chosen = await sessionOfCommit(latest, cwd, states, config.extraRedactPatterns);
+  if (!chosen) {
+    report.skipped = "no session here could be read";
+    return report;
+  }
+  const { agent, file, session } = chosen;
   report.agent = agent.id;
   report.sessionId = file.sessionId;
   report.records = session.records.length;

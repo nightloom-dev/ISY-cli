@@ -89,7 +89,8 @@ export async function* sessionsInTree(
       yield file;
       continue;
     }
-    const directory = file.cwd ?? (await agent.cwdOf(file.path));
+    // Listed a moment ago, and one that cannot be opened now says nothing of the rest.
+    const directory = file.cwd ?? (await agent.cwdOf(file.path).catch(() => undefined));
     if (!directory || !isWithin(top, directory)) continue;
     if (!tops.has(directory)) tops.set(directory, await workTreeTop(directory));
     if (tops.get(directory) === top) yield { ...file, cwd: directory };
