@@ -420,11 +420,15 @@ const FILE_MUTATORS =
   /^\s*(?:sudo\s+)?(?:patch|truncate|mv|cp|git\s+(?:apply|mv|rm|restore|checkout\s+--))\b/;
 /** What can stand in front of a command and leave it the same command: `do sed -i …`. */
 const LEADING_WORDS = /^\s*(?:(?:sudo|if|then|elif|else|while|until|do)\s+)*/;
-const IN_PLACE_EDITORS = /^(g?sed|g?awk|perl|ruby)\b/;
-/** Theirs is among the flags in front, in a cluster that may hold a digit: `perl -0pi`. */
-const PERL_IN_PLACE = /^\S+(?:\s+-\S+)*?\s+-\w*i/;
-/** To awk `-i` loads a library, and the one that rewrites is gawk's `inplace`. */
-const AWK_IN_PLACE = /(?:^|\s)(?:-i\s*|--include[=\s]\s*)inplace(?:\s|$)/;
+const IN_PLACE_EDITORS = /^(g?sed|g?awk|perl|ruby)(?=\s|$)/;
+/**
+ * Theirs is among the flags in front, in a cluster that may hold a digit: `perl -0pi`.
+ * Only behind flags that take nothing glued to them, as `-Ilib`, `-rdigest` and
+ * `-Mstrict` hold an `i` that is no flag.
+ */
+const PERL_IN_PLACE = /^\S+(?:\s+-\S+)*?\s+-[0-9acdlnpsStTuUvwWXy]*i/;
+/** To awk `-i` loads a library, and the one that rewrites is gawk's `inplace`, unless another flag takes the word. */
+const AWK_IN_PLACE = /(?:^|\s)(?=-)(?<!\s-[efFv]\s+)(?:-i\s*|--include[=\s]\s*)inplace(?:\s|$)/;
 
 /**
  * What quotes hold, emptied out: an operator in there is an argument, as in

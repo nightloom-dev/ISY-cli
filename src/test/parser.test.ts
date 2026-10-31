@@ -506,6 +506,54 @@ test("a command splits the way a shell would, not the way a regex does", () => {
   assert.deepEqual(commandSegments("a \\\nb"), ["a \\", "b"]);
 });
 
+test("a load path, a required library or a program named like an editor edits nothing", () => {
+  for (const command of [
+    "ruby -Ilib -Itest test/foo_test.rb",
+    "ruby -Ilib -e 'puts 1'",
+    "bundle exec ruby -Ilib -Itest test/foo_test.rb",
+    "ruby -rdigest -e 'puts 1'",
+    "ruby -ruri -e 'puts 1'",
+    "ruby -rfileutils -e 'puts 1'",
+    "ruby -rbigdecimal x.rb",
+    "ruby -W:no-experimental x.rb",
+    "ruby -Eiso-8859-1 x.rb",
+    "ruby-build -i",
+    "ruby-install -i /opt",
+    "perl -Ilib t/x.t",
+    "perl -Mstrict -e 1",
+    "perl -MList::Util=sum -e 1",
+    "perl -Mlib=lib t/x.t",
+    "perl -ei a.ts",
+    "awk -f -i inplace f",
+    "gawk -v -i inplace f",
+  ]) {
+    assert.equal(shellWrites(command), false, command);
+    assert.deepEqual(shellEditPaths(command), [], command);
+  }
+  for (const command of [
+    "perl -pi -e 's/a/b/' a.ts",
+    "perl -0pi -e 's/a/b/' a.ts",
+    "perl -0777pi -e 's/a/b/' a.ts",
+    "perl -wpi -e 's/a/b/' a.ts",
+    "perl -i -pe 's/a/b/' a.ts",
+    "perl -i.bak -pe 's/a/b/' a.ts",
+    "perl -pie 's/a/b/' a.ts",
+    "perl -Ilib -pi -e 's/a/b/' a.ts",
+    "perl -CSDA -Mutf8 -pi -e 's/a/b/' a.ts",
+    "ruby -i.bak -pe 'x' a.ts",
+    "ruby -rjson -pi -e 'x' a.ts",
+    "gawk -i inplace '{print}' a.ts",
+    "awk -f x.awk -i inplace a.ts",
+  ]) {
+    assert.equal(shellWrites(command), true, command);
+  }
+  const session = parseLines([
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ruby -Ilib -Itest test/foo_test.rb" } }] } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "1 runs, 0 failures" }] } }),
+  ]);
+  assert.equal(session.meta.hasFileEdits, false);
+});
+
 test("tells a shell command that writes a file from one that only looks", () => {
   for (const command of [
     "sed -i 's/old/new/' src/a.ts",
