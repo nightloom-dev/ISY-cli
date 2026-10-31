@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { collectGitMetadata, normalizeRemote } from "../git.js";
+import { collectGitMetadata, filesInHead, normalizeRemote } from "../git.js";
 
 const run = promisify(execFile);
 
@@ -20,6 +20,41 @@ async function makeRepo(remote?: string): Promise<string> {
   if (remote) await run("git", ["remote", "add", "origin", remote], { cwd: dir });
   return dir;
 }
+
+test("listing a merge's files does not run the repository's merge driver again", async () => {
+  const cwd = await makeRepo();
+  const ran = join(cwd, ".git", "driver-ran");
+  const commit = async (file: string, text: string) => {
+    await writeFile(join(cwd, file), text);
+    await run("git", ["add", "."], { cwd });
+    await run("git", ["commit", "-q", "-m", file], { cwd });
+  };
+  await commit(".gitattributes", "*.lock merge=custom\n");
+  await commit("x.lock", "base\n");
+  await run("git", ["config", "merge.custom.driver", `echo ran >> ${ran}; exit 1`], { cwd });
+  await run("git", ["switch", "-q", "-c", "side"], { cwd });
+  await commit("x.lock", "side\n");
+  await run("git", ["switch", "-q", "main"], { cwd });
+  await commit("x.lock", "main\n");
+  await assert.rejects(run("git", ["merge", "side"], { cwd }));
+  await writeFile(join(cwd, "x.lock"), "settled\n");
+  await run("git", ["add", "."], { cwd });
+  await run("git", ["commit", "-q", "--no-edit"], { cwd });
+  const before = await readFile(ran, "utf8");
+
+  assert.deepEqual(await filesInHead(cwd), ["x.lock"]);
+  assert.equal(await readFile(ran, "utf8"), before);
+
+  // A side taken whole is still a file its author settled.
+  await run("git", ["reset", "-q", "--hard", "HEAD~1"], { cwd });
+  await assert.rejects(run("git", ["merge", "side"], { cwd }));
+  await writeFile(join(cwd, "x.lock"), "side\n");
+  await run("git", ["add", "."], { cwd });
+  await run("git", ["commit", "-q", "--no-edit"], { cwd });
+  const taken = await readFile(ran, "utf8");
+  assert.deepEqual(await filesInHead(cwd), ["x.lock"]);
+  assert.equal(await readFile(ran, "utf8"), taken);
+});
 
 test("normalizes every remote URL form to owner/repo", () => {
   const cases: [string, string][] = [

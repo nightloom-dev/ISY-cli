@@ -129,11 +129,16 @@ export async function branchExists(cwd: string, name: string): Promise<boolean> 
  * The files HEAD changed, from the top of the repository wherever `cwd` is. For a
  * merge those are the ones its author settled, whichever side they took, and none
  * of what it brings in clean. A git older than 2.35 refuses the flag, and there a
- * merge lists only what differs from both sides.
+ * merge lists only what differs from both sides. The flag merges again, and a merge
+ * driver of the repository's may take any time and do anything besides, in a hook
+ * someone is waiting on, so each one stands in as `false`: a conflict that left its
+ * side as it was, which tells whether what was settled differs from it just as well.
  */
 export async function filesInHead(cwd: string): Promise<string[]> {
   const show = ["show", "-z", "--format=", "--name-only", "--no-renames"];
-  const files = (await git(cwd, [...show, "--remerge-diff", "HEAD", "--"])) ?? (await git(cwd, [...show, "HEAD", "--"]));
+  const drivers = await git(cwd, ["config", "--name-only", "--get-regexp", "^merge\\..*\\.driver$"]);
+  const quiet = drivers?.split("\n").flatMap((driver) => ["-c", `${driver}=false`]) ?? [];
+  const files = (await git(cwd, [...quiet, ...show, "--remerge-diff", "HEAD", "--"])) ?? (await git(cwd, [...show, "HEAD", "--"]));
   return files ? files.split("\0").filter(Boolean) : [];
 }
 
