@@ -436,14 +436,15 @@ const MAX_LEARNED_VALUES = 500;
 /**
  * A value worth cutting wherever it turns up. Under a secret's name it only has to
  * be no plain word. Under any other, it has to be long and not plainly public:
- * `BASE_URL=http://localhost:3000`, `APP_DIR=/srv/app`, `HOST=api.example.com`, a name
- * in lower case: `MODEL=whisper-large-v3`, `REGION=eu-central-1`, or words and spaces:
- * `START_CMD="npm run build"`, whose going would blind whatever reads the commands. A
- * generated value gives itself away with twelve letters and digits in a row, which
- * none of those has.
+ * `BASE_URL=http://localhost:3000`, `APP_DIR=/srv/app`, `HOST=docs.example.com`, a name:
+ * `MODEL=whisper-large-v3`, `APP_NAME=MyCoolApplication`, a list: `METHODS=GET,POST,PUT`,
+ * or words and spaces: `START_CMD="npm run build"`, whose going would blind whatever
+ * reads the commands. A generated value gives itself away with a sign none of those
+ * has, or twelve letters and digits in a row, both among them.
  *
- * ponytail: a passphrase in words under a name nothing knows stays where it is quoted
- * outside the read itself; telling it from a command takes more than its shape.
+ * ponytail: a passphrase in words, or generated in short groups (`ABCD1-EFGH2-IJKL3`),
+ * under a name nothing knows stays where it is quoted outside the read itself; telling
+ * it from a command or a name takes more than its shape.
  */
 function worthLearning(name: string | undefined, value: string): boolean {
   if (value.length < MIN_SENSITIVE_VALUE || value.startsWith("$")) return false;
@@ -451,8 +452,7 @@ function worthLearning(name: string | undefined, value: string): boolean {
   if (name !== undefined && SENSITIVE_KEY.test(name)) return true;
   if (value.length < MIN_LEARNED_VALUE || /\s/.test(value)) return false;
   if (/^[~.]{0,2}\/[\w./-]*$/.test(value)) return false;
-  const named = /[/.:]/.test(value) ? /^[\w.:/-]*$/.test(value) : /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/.test(value);
-  return !named || /[A-Za-z0-9]{12}/.test(value);
+  return !/^[\w.:/,=-]*$/.test(value) || GENERATED.test(value);
 }
 
 /**

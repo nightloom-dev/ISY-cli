@@ -1215,6 +1215,42 @@ test("what a dotenv file holds in plain view does not shred the session", () => 
   assert.equal((parsed[1]!.message.content as { input: { file_path: string } }[])[0]!.input.file_path, "src/payments-module/a.ts");
 });
 
+test("a long ordinary value under a name nothing knows stays, and a generated one goes", () => {
+  const m = marker("dotenv");
+  const quoted = (line: string): string => {
+    const { lines } = summaryFor([...callAndResult("Read", { file_path: "/repo/.env" }, line), { type: "user", uuid: "u", message: { role: "user", content: `the value ${line.slice(line.indexOf("=") + 1)} here` } }]);
+    return (JSON.parse(lines.at(-1)!) as { message: { content: string } }).message.content;
+  };
+  for (const line of [
+    "DOCS_URL=https://documentation.example.com",
+    "ORIGIN=https://www.transportation.example.org",
+    "BUCKET=s3://organisation-production-backups",
+    "APP_NAME=MyCoolApplication",
+    "DB_NAME=PRODUCTION_DATABASE",
+    "ALLOWED_METHODS=GET,POST,PUT,DELETE",
+    "FONT_STACK=Helvetica,Arial,sans-serif",
+    "CLOUD_REGION=northamerica-northeast1",
+    "SERVICE=transcription-service",
+    "IMAGE=registry.example.com/backend:202410201230",
+    "NODE_OPTIONS=--max-old-space-size=4096",
+    "CACHE_CONTROL=public,max-age=31536000",
+    "CIPHER=TLS_AES_256_GCM_SHA384",
+  ]) {
+    const value = line.slice(line.indexOf("=") + 1);
+    assert.equal(quoted(line), `the value ${value} here`);
+  }
+  for (const line of [
+    "MAILER_PHRASE=Zq8vR2mK9xLp",
+    "UPSTREAM=abcd1234efgh5678",
+    "SESSION_ID=550e8400-e29b-41d4-a716-446655440abc",
+    "HOOK=https://hooks.example.com/services/T0000/B0000/XXXXabcd1234",
+    "WEIRD=p@ss-w0rd!x#9zz",
+    "BLOB=dGVzdGluZ3Rlc3Rpbmc=",
+  ]) {
+    assert.equal(quoted(line), `the value ${m} here`);
+  }
+});
+
 test("cuts what a shell command writes into a dotenv file, and what it printed", () => {
   const m = marker("dotenv");
   const cases: [string, string][] = [
