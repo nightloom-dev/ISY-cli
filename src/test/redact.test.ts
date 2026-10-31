@@ -2675,6 +2675,6 @@ test("a line too dear to parse is cut whole, and so is what comes past the sessi
   assert.equal(JSON.parse(one.lines[1]!).uuid, "after", "a line of its own does not take the rest with it");
 
   const many = redactLines(Array.from({ length: 5 }, () => blocks(1_000_000)), { home: "/home/u" });
-  assert.equal(many.lines.filter((line) => line === marker("oversized")).length, 1);
-  assert.equal(many.summary.counts.oversized, 1);
+  assert.deepEqual(many.lines.map((line) => line === marker("oversized")), [false, false, false, true, true]);
+  assert.equal(many.summary.counts.oversized, 2);
 });
