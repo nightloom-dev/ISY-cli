@@ -32,12 +32,13 @@ function anyCase(source: string): string {
 /**
  * `pass` and `pwd` count only as a word of their own, as `compass`, `bypass`, and the
  * shell's `PWD` and `OLDPWD` are all over a transcript: `DB_PASS`, `db-pass`, `dbPass`,
- * `DB_PWD`, `jdbc.pwd`, `Uid=sa;Pwd=…`.
+ * `DB_PWD`, `jdbc.pwd`, `Uid=sa;Pwd=…`, and `Pwd=…` as only a connection string spells it.
  */
 const SECRET_WORD = [
-  anyCase("password|passwd|passphrase|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|credentials?|authorization|auth|cookie"),
+  anyCase("password|passwd|passphrase|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|account[-_]?key|credentials?|authorization|auth|cookie"),
   `(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?<![bB][yY])(?=[A-Z]))${anyCase("pass")}`,
   `(?:(?<=[;_]|[A-Za-z0-9][.-])|(?<=[a-z0-9])(?=[A-Z]))${anyCase("pwd")}`,
+  "(?<![A-Za-z0-9])Pwd",
 ].join("|");
 
 /**
@@ -94,6 +95,12 @@ const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\([^\s"'{}[\]<>()]*\)?[,;]?(?=[\
 const INNER_DOLLAR_OR_PAREN = String.raw`[$()](?=[^\s"'{}[\]<>])`;
 const LITERAL_DOLLAR = String.raw`\$(?=[^\s"]{0,256}\d)(?![{(])(?![A-Z_][A-Z0-9_]*\b)`;
 const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?<=")(?:${VALUE_CHAR}|${LITERAL_DOLLAR})(?:[^\s"$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=')(?:${VALUE_CHAR}|\$)(?:[^\s'$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=[\w.-]=)(?!=|${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}|[{}[\]<>](?=[^\s"'])){7,}|(?!${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}){7,}|${VALUE_CHAR}{8,})`;
+
+/**
+ * `=>`, `:=`, a comparison and a subscript's `"] =`: what is code as often as data
+ * (`password => password.trim()`), unless what follows is in quotes.
+ */
+const BEFORE_QUOTED = String.raw`["']?\]?\s*(?:=>|:=|={1,3}|!={1,2})\s*["']`;
 
 /** What nobody types by hand: twelve letters and digits in a row, both among them, as `documentation` and `202410201230` are not. */
 const GENERATED_RUN = String.raw`(?=[A-Za-z]{0,11}\d)(?=\d{0,11}[A-Za-z])[A-Za-z0-9]{12}`;
@@ -241,19 +248,34 @@ export const BUILTIN_RULES: RedactionRule[] = [
   {
     // The name may close a quote of its own: `"password": "…"`.
     type: "assignment",
-    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])${NOT_SAID_IN_PASSING}(${PLAIN_NAME})(["']?\s*[=:]\s*)(["']?)${SECRET_VALUE}`, "g"),
-    replacement: `$1$2$3${marker("assignment")}`,
+    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])${NOT_SAID_IN_PASSING}(${PLAIN_NAME})(["']?\s*[=:]\s*["']?|${BEFORE_QUOTED})${SECRET_VALUE}`, "g"),
+    replacement: `$1$2${marker("assignment")}`,
   },
   {
-    // A camelCase name counts where it is plainly data — a quoted key with a
-    // quoted value (`{"accessToken":"…"}`) or `name=value` with no space, as
-    // `.npmrc` writes `_authToken=` — and not in `adminPassword = someVariable`.
+    // A camelCase name counts where it is plainly data — with a quoted value
+    // (`accessToken: "…"`) or as `name=value` with no space, as `.npmrc` writes
+    // `_authToken=` — and not in `adminPassword = someVariable`.
+    type: "assignment",
+    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])(${CAMEL_NAME})(=|["']?\s*:\s*["']|${BEFORE_QUOTED})${SECRET_VALUE}`, "g"),
+    replacement: `$1$2${marker("assignment")}`,
+  },
+  {
+    // What SQL, `.netrc` and XML have for a separator. `password '…'` only in single quotes,
+    // as SQL writes it, since `grep password "src/auth"` names none; a tag only with its
+    // close, since `bot<token>/getUpdates` is a placeholder.
     type: "assignment",
     pattern: new RegExp(
-      String.raw`(?<=["'])(${CAMEL_NAME})(["']\s*:\s*["'])${SECRET_VALUE}|(?<![A-Za-z0-9_.-])(${CAMEL_NAME})(=)${SECRET_VALUE}`,
+      String.raw`(\b${anyCase("password")}\s+'|\b${anyCase("identified")}\s+${anyCase("by")}\s+["']|\bmachine\s+\S{1,256}\s+login\s+\S{1,256}\s+password\s+["']?)${SECRET_VALUE}` +
+        String.raw`|(<${secretName()}>)${SECRET_VALUE}(?=<\/)`,
       "g",
     ),
-    replacement: `$1$2$3$4${marker("assignment")}`,
+    replacement: `$1$2${marker("assignment")}`,
+  },
+  {
+    // What signs a URL, up to its next parameter.
+    type: "assignment",
+    pattern: new RegExp(String.raw`([?&](?:[xX]-(?:${anyCase("amz")}|${anyCase("goog")})-)?${anyCase("sig")}(?:${anyCase("nature")})?=)(?!\[ISY_REDACTED|\$)[^\s&"'#]{8,}`, "g"),
+    replacement: `$1${marker("assignment")}`,
   },
   {
     // `--password hunter2000`, `--api-key "…"`: a name like any other, with a
@@ -266,8 +288,8 @@ export const BUILTIN_RULES: RedactionRule[] = [
   {
     // From the word back to the name, as the name from its front is a scan at every capital.
     type: "assignment",
-    pattern: new RegExp(String.raw`KEY(?<=(?<![A-Za-z0-9_])${KEY_NAME})(["']?\s*[=:]\s*)(["']?)(?=[^\s"']{0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
-    replacement: `KEY$1$2${marker("assignment")}`,
+    pattern: new RegExp(String.raw`KEY(?<=(?<![A-Za-z0-9_])${KEY_NAME})(["']?\]?\s*[=:]\s*["']?)(?=[^\s"']{0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
+    replacement: `KEY$1${marker("assignment")}`,
   },
   {
     // The quote opens before the name or after its colon, and only one of the two

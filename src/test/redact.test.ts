@@ -279,6 +279,108 @@ test("masks a password passed on a command line, and nothing else on it", () => 
   }
 });
 
+test("masks a credential in the shapes code and config files spell it in", () => {
+  const m = marker("assignment");
+  const value = "hG7xQ2pLm9Wz4Rt8";
+  const cut: [string, string][] = [
+    // A camelCase name with a quoted value is data, whatever stands between them.
+    [`clientSecret: "${value}"`, `clientSecret: "${m}"`],
+    [`authToken: "${value}",`, `authToken: "${m}",`],
+    [`accessToken: '${value}',`, `accessToken: '${m}',`],
+    [`const dbPass = "${value}";`, `const dbPass = "${m}";`],
+    [`userPassword = "${value}"`, `userPassword = "${m}"`],
+    [`accessToken="${value}"`, `accessToken="${m}"`],
+    [`this.authToken = "${value}";`, `this.authToken = "${m}";`],
+    // What is code as often as data, unless what follows is in quotes.
+    [`'password' => '${value}'`, `'password' => '${m}'`],
+    [`"password" => "${value}"`, `"password" => "${m}"`],
+    [`:password => "${value}"`, `:password => "${m}"`],
+    [`'dbPassword' => '${value}'`, `'dbPassword' => '${m}'`],
+    [`password := "${value}"`, `password := "${m}"`],
+    [`password:="${value}"`, `password:="${m}"`],
+    [`password == "${value}"`, `password == "${m}"`],
+    [`password === "${value}"`, `password === "${m}"`],
+    [`password != "${value}"`, `password != "${m}"`],
+    [`if (password !== '${value}') {`, `if (password !== '${m}') {`],
+    [`os.environ["DB_PASSWORD"] = "${value}"`, `os.environ["DB_PASSWORD"] = "${m}"`],
+    [`os.environ['API_KEY']='${value}'`, `os.environ['API_KEY']='${m}'`],
+    [`ENV["STRIPE_KEY"] = "${value}"`, `ENV["STRIPE_KEY"] = "${m}"`],
+    // SQL.
+    [`CREATE USER a WITH PASSWORD '${value}'`, `CREATE USER a WITH PASSWORD '${m}'`],
+    [`ALTER USER a PASSWORD '${value}';`, `ALTER USER a PASSWORD '${m}';`],
+    [`create user a with password '${value}'`, `create user a with password '${m}'`],
+    [`GRANT ALL ON *.* TO a IDENTIFIED BY '${value}'`, `GRANT ALL ON *.* TO a IDENTIFIED BY '${m}'`],
+    [`identified by "${value}"`, `identified by "${m}"`],
+    // XML.
+    [`<password>${value}</password>`, `<password>${m}</password>`],
+    [`<Password>${value}</Password>`, `<Password>${m}</Password>`],
+    [`<apiKey>${value}</apiKey>`, `<apiKey>${m}</apiKey>`],
+    [`<clientSecret>${value}</clientSecret>`, `<clientSecret>${m}</clientSecret>`],
+    // `.netrc`, on a line or over three.
+    [`machine h login a password ${value}`, `machine h login a password ${m}`],
+    [`machine h\n  login a\n  password ${value}\n`, `machine h\n  login a\n  password ${m}\n`],
+    // A connection string, which runs on past the `;`.
+    [`AccountKey=${value};`, `AccountKey=${m}`],
+    [`DefaultEndpointsProtocol=https;AccountName=a;AccountKey=${value};EndpointSuffix=x`, `DefaultEndpointsProtocol=https;AccountName=a;AccountKey=${m}`],
+    [`Pwd=${value};`, `Pwd=${m}`],
+    // A signed URL, which a request's other parameters do not sign.
+    [`https://a.blob.core.windows.net/c/b?sv=2024&sig=${value}&se=2025`, `https://a.blob.core.windows.net/c/b?sv=2024&sig=${m}&se=2025`],
+    [`?sig=${value}`, `?sig=${m}`],
+    [`https://b.s3.amazonaws.com/k?X-Amz-Signature=${value}`, `https://b.s3.amazonaws.com/k?X-Amz-Signature=${m}`],
+    [`https://x/y?a=1&x-goog-signature=${value}#top`, `https://x/y?a=1&x-goog-signature=${m}#top`],
+    [`https://x/y?Signature=${value}&Expires=1`, `https://x/y?Signature=${m}&Expires=1`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+
+  for (const text of [
+    "password => password.trim()",
+    "token => token.length",
+    "const check = secret => secret.value;",
+    `password := os.Getenv("DB_PASSWORD")`,
+    "token := jwt.New()",
+    "password == confirmPassword",
+    "password === confirmPassword",
+    "token != null",
+    "auth === undefined",
+    "adminPassword = someVariable",
+    "dbPass: process.env.DB_PASS",
+    "authToken: getToken()",
+    "this.authToken = req.headers.token;",
+    'clientSecret: "${process.env.CLIENT_SECRET}"',
+    'clientSecret: "$CLIENT_SECRET"',
+    'clientSecret: "<your secret>"',
+    'authToken: "short"',
+    "CREATE USER a WITH PASSWORD :pw",
+    "ALTER USER a PASSWORD $1",
+    "IDENTIFIED BY password",
+    "identified by $1",
+    "the password 'short'",
+    "<password>${DB_PASSWORD}</password>",
+    "<password>{{ password }}</password>",
+    "<password>short</password>",
+    "<password></password>",
+    "<dbname>production_database</dbname>",
+    "https://api.telegram.org/bot<token>/getUpdates",
+    "machine h login a password $NETRC_PASSWORD",
+    "machine learning models login with password",
+    "Pwd=$DB_PASSWORD;",
+    "PWD=/srv/someone/projects",
+    "pwd=/srv/someone/projects",
+    "AccountKey=$STORAGE_KEY;",
+    "https://x/y?design=abcdefghijklm",
+    "https://x/y?a=1&assign=abcdefghijklm",
+    "https://x/y?sig=short",
+    "https://x/y?sig=$SIGNATURE",
+    "https://x/y?signature=",
+    "grep password src/auth/login.ts",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+});
+
 test("masks an assigned secret whole when it holds a dollar sign or a bracket", () => {
   const m = marker("assignment");
   const cut: [string, string][] = [
