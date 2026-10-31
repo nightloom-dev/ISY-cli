@@ -2400,6 +2400,16 @@ test("every rule gets through text shaped almost like what it matches", () => {
     `password=${"a".repeat(200_000)}(`,
     `password=${"a.".repeat(100_000)}`,
     `password=a(${"b".repeat(200_000)}`,
+    fill("="),
+    fill(":"),
+    fill("token= "),
+    fill("token: "),
+    fill('token"=('),
+    fill(`${" ".repeat(1_000)}=`),
+    fill(`${"s".repeat(1_000)}token=(`),
+    fill(`${"s".repeat(1_000)}Token=(`),
+    fill(`token${" ".repeat(1_000)}=(`),
+    fill(`token=${" ".repeat(1_000)}(`),
   ];
   for (const text of shapes) {
     for (const rule of BUILTIN_RULES) {
@@ -2408,6 +2418,16 @@ test("every rule gets through text shaped almost like what it matches", () => {
       const took = performance.now() - started;
       assert.ok(took < 1000, `${rule.pattern.source.slice(0, 30)} took ${Math.round(took)}ms on ${text.slice(0, 12)}…`);
     }
+  }
+});
+
+test("a credential's name is looked for from its separator, so a word with none costs one scan", () => {
+  const text = "s".repeat(32_000_000);
+  for (const rule of BUILTIN_RULES.filter((candidate) => candidate.type === "assignment")) {
+    const started = performance.now();
+    applyRules(text, [rule]);
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `${rule.pattern.source.slice(0, 30)} took ${Math.round(took)}ms`);
   }
 });
 

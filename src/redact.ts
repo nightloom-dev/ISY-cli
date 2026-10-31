@@ -50,12 +50,10 @@ const SECRET_WORD = [
  * in a real corpus as often as the secrets do, and none of them is one.
  */
 function secretName(atWord = ""): string {
-  // This runs at every character of every word, so the letters the words start with go first.
+  // From the front this runs at every character of a word, so the letters the words start with go first.
   return String.raw`[A-Za-z0-9_.-]*?(?=[aAcCpPsStT])${atWord}(?:${SECRET_WORD})${anyCase("(?:[-_]?key)?(?:[-_]?base)?")}(?![A-Za-z0-9_.-])`;
 }
 
-/** The word glued to what came before, but not as a camelCase hump. */
-const PLAIN_NAME = secretName("(?!(?<=[a-z0-9])[A-Z])");
 /** `adminPassword`, `_authToken`: as often a variable in code as a key in a file. */
 const CAMEL_NAME = secretName("(?<=[a-z0-9])(?=[A-Z])");
 
@@ -67,6 +65,8 @@ const CAMEL_NAME = secretName("(?<=[a-z0-9])(?=[A-Z])");
  * takes its `=` with no space.
  */
 const NOT_SAID_IN_PASSING = String.raw`(?!PASS:[ \t]|(?:${anyCase("pass|auth|credentials?|cookie")})["']?\s*[=:]\s+(?!["'])[^\d\s]*(?:\s|$))`;
+/** The word glued to what came before, but not as a camelCase hump. */
+const PLAIN_NAME = NOT_SAID_IN_PASSING + secretName("(?!(?<=[a-z0-9])[A-Z])");
 
 const VALUE_CHAR = String.raw`[^\s"'{}()[\]<>$]`;
 /**
@@ -101,10 +101,17 @@ const LITERAL_DOLLAR = String.raw`\$(?=[^\s"]{0,256}\d)(?![{(])(?![A-Z_][A-Z0-9_
 const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?<=")(?:${VALUE_CHAR}|${LITERAL_DOLLAR})(?:[^\s"$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=')(?:${VALUE_CHAR}|\$)(?:[^\s'$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=[\w.-]=)(?!=|${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}|[{}[\]<>](?=[^\s"'])){7,}|(?!${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}){7,}|${VALUE_CHAR}{8,})`;
 
 /**
+ * A separator with a name before it, looked for from the separator back: from the front,
+ * a name costs a look at every letter of every word.
+ */
+const afterName = (name: string, between: string, separator: string): string => String.raw`${separator}(?<=(?<![A-Za-z0-9_.-])${name}${between}${separator})`;
+/** The space or quote a name may have before its separator. */
+const CLOSED = String.raw`["']?\s*`;
+/**
  * `=>`, `:=`, a comparison and a subscript's `"] =`: what is code as often as data
  * (`password => password.trim()`), unless what follows is in quotes.
  */
-const BEFORE_QUOTED = String.raw`["']?\]?\s*(?:=>|:=|={1,3}|!={1,2})\s*["']`;
+const beforeQuoted = (name: string): string => afterName(name, String.raw`["']?\]?\s*`, "(?:=>|:=|={1,3}|!={1,2})") + String.raw`\s*["']`;
 
 /** What nobody types by hand: twelve letters and digits in a row, both among them, as `documentation` and `202410201230` are not. */
 const GENERATED_RUN = String.raw`(?=[A-Za-z]{0,11}\d)(?=\d{0,11}[A-Za-z])[A-Za-z0-9]{12}`;
@@ -288,16 +295,16 @@ export const BUILTIN_RULES: RedactionRule[] = [
   {
     // The name may close a quote of its own: `"password": "…"`.
     type: "assignment",
-    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])${NOT_SAID_IN_PASSING}(${PLAIN_NAME})(["']?\s*[=:]\s*["']?|${BEFORE_QUOTED})${SECRET_VALUE}`, "g"),
-    replacement: `$1$2${marker("assignment")}`,
+    pattern: new RegExp(String.raw`(${afterName(PLAIN_NAME, CLOSED, "[=:]")}\s*["']?|${beforeQuoted(PLAIN_NAME)})${SECRET_VALUE}`, "g"),
+    replacement: `$1${marker("assignment")}`,
   },
   {
     // A camelCase name counts where it is plainly data — with a quoted value
     // (`accessToken: "…"`) or as `name=value` with no space, as `.npmrc` writes
     // `_authToken=` — and not in `adminPassword = someVariable`.
     type: "assignment",
-    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])(${CAMEL_NAME})(=|["']?\s*:\s*["']|${BEFORE_QUOTED})${SECRET_VALUE}`, "g"),
-    replacement: `$1$2${marker("assignment")}`,
+    pattern: new RegExp(String.raw`(${afterName(CAMEL_NAME, "", "=")}|${afterName(CAMEL_NAME, CLOSED, ":")}\s*["']|${beforeQuoted(CAMEL_NAME)})${SECRET_VALUE}`, "g"),
+    replacement: `$1${marker("assignment")}`,
   },
   {
     // What SQL, `.netrc` and XML have for a separator. `password '…'` only in single quotes,
