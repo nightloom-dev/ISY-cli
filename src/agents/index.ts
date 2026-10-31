@@ -63,7 +63,8 @@ function isWithin(top: string, directory: string): boolean {
  * started in and the commit ran from, so a listing by the hook's directory
  * alone never sees a session started further down. A submodule or a worktree
  * nested inside has a top of its own and stays out. Lazy because a session's
- * directory costs a read, and a commit only wants the first one.
+ * directory costs a read, and a commit only wants the first one; `readsElsewhere`
+ * limits those reads for a caller nobody can keep waiting.
  */
 export async function* sessionsInTree(
   agent: Agent,

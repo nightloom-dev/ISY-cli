@@ -1,4 +1,4 @@
-import { basename, relative } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
@@ -78,13 +78,15 @@ async function carriesItsWork(
   state: SessionState,
   committed: Set<string>,
   names: Set<string>,
-  roots: () => Promise<MaskRoots>,
+  directory: string,
+  rootsIn: (directory: string) => Promise<MaskRoots>,
 ): Promise<boolean> {
   const since = state.commits?.at(-1)?.records ?? 0;
-  // A transcript read as it is holds paths as the agent wrote them, and git names
-  // a file from the top of the tree: the rule the upload rewrites them by.
+  // A transcript read as it is holds paths as the agent wrote them, from where it
+  // stood or in full, and git names a file from the top of the tree.
   for (const [path, edits] of session.fileEdits) {
-    if (edits.some((edit) => edit.recordIndex >= since) && committed.has(maskPath(path, await roots()))) return true;
+    if (!edits.some((edit) => edit.recordIndex >= since)) continue;
+    if (committed.has(maskPath(resolve(directory, path), await rootsIn(directory)))) return true;
   }
 
   return session.toolUses.some(
@@ -139,7 +141,9 @@ async function isItsCommit(
   const since = state.commits?.at(-1)?.records ?? 0;
   const calls = session.toolUses.filter((use) => use.recordIndex >= since);
   if (calls.some(leavesUnknown)) return true;
-  return session.meta.gitBranch === branch && (calls.some(movesBranch) || !(await branchExists(cwd, own)));
+  // A CLI that records no branch leaves the row as all there is to go on.
+  if ((session.meta.gitBranch ?? branch) !== branch) return false;
+  return calls.some(movesBranch) || !(await branchExists(cwd, own));
 }
 
 /** The git commands that fire the post-commit hook, each pick of a rebase included. */
@@ -215,8 +219,7 @@ async function sessionOfCommit(
   const askUntil = deadline + TELLING_APART_MS;
   for (const entry of read) {
     const state = states[entry.file.path] ?? {};
-    const directory = entry.file.cwd ?? cwd;
-    if (await carriesItsWork(entry.session, state, committed, names, () => rootsIn(directory))) return entry;
+    if (await carriesItsWork(entry.session, state, committed, names, entry.file.cwd ?? cwd, rootsIn)) return entry;
     if (Date.now() >= askUntil) break;
   }
   for (const entry of read) {

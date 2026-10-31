@@ -899,6 +899,22 @@ test("a session in a subdirectory is matched against the commit from the top of 
   assert.equal((await readState())[path]!.commits?.length, 1);
 });
 
+test("an edit named from where the session stood is matched from the top of the repository", async () => {
+  const top = await realpath(await newRepo("isy-commit-relative-"));
+  await mkdir(join(top, "pkg"));
+  const path = await writeSession(join(top, "pkg"), "sess-relative", "left-pad");
+  await appendTurn(path, "sess-relative", {
+    type: "tool_use", id: "t-edit", name: "Edit",
+    input: { file_path: "lib/x.ts", old_string: "a", new_string: "b" },
+  }, OLD);
+  await onBranch(path, "main");
+
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd: top });
+  await commitFile(top, "pkg/lib/x.ts");
+  assert.equal((await runCommit({ noUpload: true }, top)).skipped, undefined);
+  assert.equal((await readState())[path]!.commits?.length, 1);
+});
+
 test("what a session wrote through the shell counts when the commit holds a file it mentions", async () => {
   const cwd = await newRepo("isy-commit-shell-");
   const path = await writeSession(cwd, "sess-shell", "left-pad");
@@ -1138,6 +1154,11 @@ test("a CLI that records no branch is judged by the one its upload found", async
   await commitFile(cwd, "README.md");
   assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
   assert.equal((await readState())[path]!.commits, undefined);
+
+  // Once that branch is gone under another name, its row goes too.
+  await run("git", ["branch", "-m", "main", "trunk"], { cwd });
+  await commitFile(cwd, "other.md");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
 });
 
 test("a resume that only read from a branch does not make that branch its own", async () => {
