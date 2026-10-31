@@ -69,8 +69,12 @@ const CAMEL_NAME = secretName("(?<=[a-z0-9])(?=[A-Z])");
 const NOT_SAID_IN_PASSING = String.raw`(?!PASS:[ \t]|(?:${anyCase("pass|auth|credentials?|cookie")})["']?\s*[=:]\s+(?!["'])[^\d\s]*(?:\s|$))`;
 
 const VALUE_CHAR = String.raw`[^\s"'{}()[\]<>$]`;
-/** `hash(input)`, `foo.bar(baz),`: a call, which in quotes is a password with a bracket in it. */
-const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\([^\s"'{}[\]<>()]*\)?[,;]?(?=[\s"'{}[\]<>]|$)`;
+/**
+ * `hash(input)`, `foo.bar(baz).qux(),`, `f(g(x))`: a call, which in quotes is a password
+ * with a bracket in it, and so is `abc(def)ghi1` anywhere, as code puts nothing like that
+ * after a closing bracket.
+ */
+const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\((?![^\s"'{}[\]<>]{0,256}\)[\w$#@~\\])`;
 
 /**
  * What an assigned secret looks like: long enough to be one, and not code. A

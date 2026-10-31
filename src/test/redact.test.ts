@@ -607,6 +607,51 @@ test("masks an assigned secret whole when it holds a dollar sign or a bracket", 
   assert.equal(redactOne("token: getToken()"), `token: ${m}()`);
 });
 
+test("reads a chain of calls as one call, and a bracket with a letter after it as a password", () => {
+  const m = marker("assignment");
+  for (const text of [
+    "password = hash(input).digest('hex')",
+    "password = hash(input).digest();",
+    "password=hash(input).digest()",
+    "secret: foo.bar(baz).qux()",
+    "secret = foo.bar(baz).qux(),",
+    "password = input().strip()",
+    "password = String(input).trim()",
+    "password = foo().bar",
+    "password = foo().bar.baz()",
+    "token = foo(bar(baz))",
+    "token = foo(bar(baz)),",
+    "wrap(password = hash(input))",
+    "wrap(password = hash(input));",
+    "token = foo(x)!",
+    "token = foo(x)?.bar",
+    "token = foo(x)[0]",
+    "token = foo(x)+1",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+  // A call's long name goes, and what it is called with stays.
+  const cut: [string, string][] = [
+    ["token = getToken().trim()", `token = ${m}().trim()`],
+    ["token=getToken().trim()", `token=${m}().trim()`],
+    ["token: getToken().trim(),", `token: ${m}().trim(),`],
+    ["const token = jwt.sign(payload).toString();", `const token = ${m}(payload).toString();`],
+    ["const token = jwt.sign(payload,key).toString();", `const token = ${m}(payload,key).toString();`],
+    ["token: this.auth.getToken().pipe(take(1)),", `token: ${m}().pipe(take(1)),`],
+    ["password = generate(16).toString(36).slice(2)", `password = ${m}(16).toString(36).slice(2)`],
+    [`secret = Buffer.from(x).toString("hex")`, `secret = ${m}(x).toString("hex")`],
+    ["token: useToken().value", `token: ${m}().value`],
+    ["PASSWORD=abc(def)ghi12345", `PASSWORD=${m}`],
+    ["password = abc(def)ghi12345", `password = ${m}`],
+    ["PASSWORD=abc(def)ghi(j)k", `PASSWORD=${m}`],
+    [`password = "hash(input).digest"`, `password = "${m}"`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("masks a value under PASS, PWD and the other names a credential goes by, not under words that hold them", () => {
   const m = marker("assignment");
   const cut: [string, string][] = [
