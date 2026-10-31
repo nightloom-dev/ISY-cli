@@ -1198,6 +1198,32 @@ test("a file named HEAD does not cost a commit the list of what it holds", async
   assert.equal((await readState())[path]!.branch, "feat");
 });
 
+test("a merge is known by the conflict it settled, whichever side that took", async () => {
+  for (const settled of ["feat's", "both"]) {
+    const cwd = await newRepo("isy-commit-settled-");
+    await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+    const path = await writeSession(cwd, "sess-settled", "left-pad");
+    await onBranch(path, "feat");
+    await commitFile(cwd, "a.txt", "feat's");
+    await runCommit({ noUpload: true }, cwd);
+
+    await run("git", ["switch", "-q", "main"], { cwd });
+    await commitFile(cwd, "a.txt", "main's");
+    await run("git", ["merge", "-q", "feat"], { cwd }).catch(() => undefined);
+    await appendTurn(path, "sess-settled", {
+      type: "tool_use",
+      id: "t-settle",
+      name: "Edit",
+      input: { file_path: join(cwd, "a.txt"), old_string: "<<<<<<<", new_string: settled },
+    }, OLD);
+    await commitFile(cwd, "a.txt", settled);
+
+    assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined, settled);
+    assert.equal((await readState())[path]!.branch, "main", settled);
+    await writeFile(sessionStatePath(), "{}\n");
+  }
+});
+
 test("a session in a subdirectory is matched against the commit from the top of the repository", async () => {
   const top = await realpath(await newRepo("isy-commit-carried-sub-"));
   await mkdir(join(top, "pkg"));

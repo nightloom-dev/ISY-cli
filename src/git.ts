@@ -121,9 +121,15 @@ export async function branchExists(cwd: string, name: string): Promise<boolean> 
   return (await git(cwd, ["rev-parse", "--verify", "-q", `refs/heads/${name}`])) !== undefined;
 }
 
-/** The files HEAD changed, from the top of the repository wherever `cwd` is. */
+/**
+ * The files HEAD changed, from the top of the repository wherever `cwd` is. For a
+ * merge those are the ones its author settled, whichever side they took, and none
+ * of what it brings in clean. A git older than 2.35 refuses the flag, and there a
+ * merge lists only what differs from both sides.
+ */
 export async function filesInHead(cwd: string): Promise<string[]> {
-  const files = await git(cwd, ["show", "-z", "--format=", "--name-only", "--no-renames", "HEAD", "--"]);
+  const show = ["show", "-z", "--format=", "--name-only", "--no-renames"];
+  const files = (await git(cwd, [...show, "--remerge-diff", "HEAD", "--"])) ?? (await git(cwd, [...show, "HEAD", "--"]));
   return files ? files.split("\0").filter(Boolean) : [];
 }
 
