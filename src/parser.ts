@@ -473,6 +473,29 @@ export function shellWrites(command: string): boolean {
 }
 
 /**
+ * A `git` call as a shell runs one: what can stand in front of it, the global
+ * flags, then the subcommand. `if FOO=1 git -C app -c a=b commit -m x`. Read with
+ * what quotes hold emptied out, so a value with a space in it is one word.
+ */
+const GIT_CALL =
+  /^\s*(?:[({!]\s*|(?:sudo|if|then|elif|else|while|until|do|time|command|env)\s+|\w+=\S*\s+)*git\s+(?:-[Cc]\s+\S+\s+|--?[^\s=]+(?:=\S*)?\s+){0,8}([a-z][\w-]*)/;
+
+/**
+ * The git subcommands a shell command runs, in the order it runs them. By command
+ * and not by word: `pytest tests/git/`, `npm --prefix tools/commit run dev` and a
+ * message saying "git commit" run none.
+ */
+export function gitCommands(command: string): string[] {
+  if (!command.includes("git")) return [];
+  const found: string[] = [];
+  for (const segment of commandSegments(withoutHeredocs(command))) {
+    const subcommand = GIT_CALL.exec(withoutQuoted(segment))?.[1];
+    if (subcommand !== undefined) found.push(subcommand);
+  }
+  return found;
+}
+
+/**
  * `sed -i` rewrites the file; whatever else it is, it is not a look at it. GNU
  * takes any backup suffix (`-i.bak`, `-ie`), the flag rides in a cluster
  * (`-Ei`), and BSD spells it `-I`.

@@ -3,7 +3,7 @@ import { latestSessions } from "../agents/index.js";
 import type { AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
 import { currentBranch, filesInHead, headSha } from "../git.js";
-import { mayWrite, parseLines, shellWrites } from "../parser.js";
+import { gitCommands, mayWrite, parseLines, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
 import { candidateKey, namedBranch, readState, unseen, updateSession, withCommit } from "../state.js";
@@ -116,11 +116,14 @@ async function isItsCommit(
   return carriesItsWork(session, state, cwd);
 }
 
-/** A shell call still running that could be the one this commit came out of. */
-function mayBeCommitting(use: ToolUse): boolean {
+/** The git commands that fire the post-commit hook, each pick of a rebase included. */
+const COMMIT_MAKERS = new Set(["commit", "rebase", "cherry-pick", "revert", "am", "pull"]);
+
+/** A shell call still running whose command makes commits, so this one may have come out of it. */
+function isCommitting(use: ToolUse): boolean {
   const { command } = use.input;
   if (typeof command !== "string" || !isRunning(use)) return false;
-  return wordsOf(command).some((word) => word === "git" || word === "commit");
+  return gitCommands(command).some((subcommand) => COMMIT_MAKERS.has(subcommand));
 }
 
 /**
@@ -133,7 +136,8 @@ function mayBeCommitting(use: ToolUse): boolean {
  * ponytail: the newest session's read, which runCommit needs anyway, is the only
  * one sure to happen. A long transcript takes seconds to read, so past
  * `TELLING_APART_MS` the rest are not asked and the newest of those read so far can
- * take a commit that was not its own. Two sessions running git at once go the same way.
+ * take a commit that was not its own. Two sessions running git at once go the same
+ * way, and so does a commit one of them is making in another repository.
  */
 async function sessionOfCommit(
   latest: Awaited<ReturnType<typeof latestSessions>>,
@@ -154,7 +158,7 @@ async function sessionOfCommit(
       continue;
     }
     const entry = { agent, file, session };
-    if (session.toolUses.some(mayBeCommitting)) return entry;
+    if (session.toolUses.some(isCommitting)) return entry;
     read.push(entry);
   }
 

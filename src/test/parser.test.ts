@@ -14,6 +14,7 @@ import {
   shellEditPaths,
   shellReadPaths,
   shellWrites,
+  gitCommands,
   withoutHeredocs,
 } from "../parser.js";
 import { subagentsOf } from "../subagents.js";
@@ -682,4 +683,40 @@ test("a session whose subagent edited files counts as editing, even without its 
     toolResult("b", "a", "toolu_agent", { toolUseResult: { agentId: "ad7e", toolStats: { editFileCount: 0 } } }),
   ]));
   assert.equal(untouched.meta.hasFileEdits, false);
+});
+
+test("a git command is told by what the shell runs, not by the words in it", () => {
+  const cases: [string, string[]][] = [
+    ["git commit -m x", ["commit"]],
+    ["git add . && git commit -am x", ["add", "commit"]],
+    ["cd app && git -C sub -c user.name='A B' --no-pager commit", ["commit"]],
+    ["GIT_AUTHOR_NAME=x sudo git rebase main", ["rebase"]],
+    ["if git pull --rebase; then echo ok; fi", ["pull"]],
+    ["(git cherry-pick abc)", ["cherry-pick"]],
+    ["git commit-tree abc", ["commit-tree"]],
+    ["pytest tests/git/ -x", []],
+    ["tail -f ~/git/app/server.log", []],
+    ["cd ~/git/other && npm test", []],
+    ["npm --prefix tools/commit run dev", []],
+    ['echo "git commit -m x"', []],
+    ["cat > note.md <<'EOF'\ngit commit -m x\nEOF", []],
+    ["git --version", []],
+  ];
+  for (const [command, expected] of cases) assert.deepEqual(gitCommands(command), expected, command);
+});
+
+test("telling a git command from anything else gets through 200 KB of text built to stall it", () => {
+  for (const text of [
+    "git ".repeat(50_000),
+    `git ${"-x ".repeat(66_000)}`,
+    `git ${"-C a ".repeat(40_000)}`,
+    `${"a=b ".repeat(50_000)}git commit`,
+    `${"( ".repeat(100_000)}git`,
+    `git commit "${'\\"'.repeat(100_000)}`,
+  ]) {
+    const started = performance.now();
+    gitCommands(text);
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `took ${Math.round(took)} ms`);
+  }
 });

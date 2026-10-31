@@ -956,6 +956,29 @@ test("a commit goes to the session making it, though others wrote after it", asy
   assert.equal(state[beside]?.commits, undefined);
 });
 
+test("a running command that only says git or commit takes nothing from the session whose work it is", async () => {
+  for (const busy of [
+    "pytest tests/git/ -x",
+    "git fetch origin",
+    "git log -p | less",
+    "tail -f ~/git/app/server.log",
+    "cd ~/git/other && npm test",
+    "npm --prefix tools/commit run dev",
+  ]) {
+    const cwd = await realpath(await newRepo("isy-commit-word-"));
+    const older = await writeSession(cwd, "sess-busy", "left-pad");
+    await appendTurn(older, "sess-busy", shell("t-busy", busy), new Date().toISOString());
+    await age(older, 1 / 1440);
+    const newest = await writeSession(cwd, "sess-worker", "ms");
+
+    await commitFile(cwd, "src/f0.ts");
+    assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-worker", busy);
+    assert.equal((await readState())[newest]?.commits?.length, 1, busy);
+    assert.equal((await readState())[older]?.commits, undefined, busy);
+    await writeFile(sessionStatePath(), "{}\n");
+  }
+});
+
 test("a commit holding what a session edited goes to it, though another wrote after it", async () => {
   const cwd = await realpath(await newRepo("isy-commit-holder-"));
   await mkdir(join(cwd, "docs"));
