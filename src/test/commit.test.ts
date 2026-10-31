@@ -1224,6 +1224,46 @@ test("a merge is known by the conflict it settled, whichever side that took", as
   }
 });
 
+test("an edit through a symlinked directory is matched against where the file really is", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-through-link-"));
+  await commitFile(cwd, "real/a.txt", "one");
+  await symlink("real", join(cwd, "link"));
+  const path = await writeSession(cwd, "sess-through-link", "left-pad");
+  await appendTurn(path, "sess-through-link", {
+    type: "tool_use",
+    id: "t-link",
+    name: "Edit",
+    input: { file_path: join(cwd, "link/a.txt"), old_string: "one", new_string: "two" },
+  }, OLD);
+  await onBranch(path, "main");
+
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  await commitFile(cwd, "real/a.txt", "two");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+});
+
+test("an MCP tool whose name does not say it only reads keeps the commit with its session", async () => {
+  for (const [tool, input, kept] of [
+    ["mcp__ide__executeCode", { code: "open('a','w')" }, true],
+    ["mcp__x__format_all", {}, true],
+    ["mcp__github__get_file_contents", { path: "a.txt" }, false],
+    ["mcp__fs__readFile", { path: "a.txt" }, false],
+    ["mcp__docs__search", { query: "x" }, false],
+  ] as const) {
+    const cwd = await newRepo("isy-commit-mcp-");
+    const path = await writeSession(cwd, "sess-mcp", "left-pad");
+    await appendTurn(path, "sess-mcp", { type: "tool_use", id: "t-mcp", name: tool, input }, OLD);
+    await onBranch(path, "main");
+    await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+    await commitFile(cwd, "README.md");
+
+    const { skipped } = await runCommit({ noUpload: true }, cwd);
+    if (kept) assert.equal(skipped, undefined, tool);
+    else assert.match(skipped ?? "", /another branch/, tool);
+    await writeFile(sessionStatePath(), "{}\n");
+  }
+});
+
 test("a session in a subdirectory is matched against the commit from the top of the repository", async () => {
   const top = await realpath(await newRepo("isy-commit-carried-sub-"));
   await mkdir(join(top, "pkg"));
@@ -1574,6 +1614,7 @@ test("a command nobody can read keeps the commit with its session, and one that 
     ["for f in src/*.ts; do sed -i 's/a/b/' $f; done", "src/a.ts", true],
     ["git checkout other -- src/a.ts", "src/a.ts", true],
     ["sort -o src/a.txt src/a.txt", "src/a.txt", true],
+    ["gh pr checkout 12", "README.md", true],
     ["git status && git log -3 && cat README.md", "README.md", false],
     ["git add -A && git commit -m notes.md && git push", "docs/notes.md", false],
     ["gh pr create --fill", "other.md", false],

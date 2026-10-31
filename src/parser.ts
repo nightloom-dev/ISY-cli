@@ -414,6 +414,23 @@ export function mayWrite(name: string, input: Record<string, unknown>): boolean 
   return keys.length === 0 || told;
 }
 
+/** What an MCP tool's name opens with when all it does is read. */
+const MCP_READ_VERBS = new Set([
+  "read", "get", "list", "search", "find", "fetch", "query", "show", "view", "describe", "resolve", "validate", "wait",
+]);
+
+/**
+ * Whether an MCP tool's name says it leaves everything as it found it.
+ *
+ * ponytail: judged by names, as `mayWrite` is. A tool that opens with none of these
+ * reads as one nobody can answer for, a browser's `navigate` included, and its
+ * session keeps a commit on another branch. Add the word if one such proves to move
+ * sessions to the wrong pull request.
+ */
+export function mcpOnlyReads(name: string): boolean {
+  return MCP_READ_VERBS.has(nameWords(name.slice(name.lastIndexOf("__") + 2))[0]!);
+}
+
 /** A redirect into a file: `> a.ts`, `>> log`, `2> out`. Not `2>&1`, not `/dev/null`. */
 const REDIRECT_WRITE = /(?:^|[^<>&\d])\d*>>?(?!&)\s*(?!\/dev\/|\/tmp\/)[^\s&|;<>]/;
 const TEE_WRITE = /\btee\s+(?:-a\s+)?(?!\/dev\/|\/tmp\/)[^\s&|;-]/;
@@ -522,9 +539,9 @@ const SHELL_EXPANDS = /[*?$`{]/;
 /** The one `git checkout` that stands on a branch and takes no file from anywhere. */
 const CHECKOUT_BRANCH = /\bcheckout(?:\s+(?:-[bB]\s+\S+|-[qft]|--(?:quiet|force|track|detach)))*(?:\s+\S+)?\s*$/;
 
-/** Readers that write when a flag or a second name says so. */
+/** Readers that write when a flag or a second name says so, and the `gh` that moves the tree. */
 const WRITES_BY_ARGUMENT =
-  /^(?:sort\s(?:.*\s)?(?:-[a-zA-Z]*o|--output)|yq\s(?:.*\s)?(?:-[a-zA-Z]*i|--inplace)|uniq(?:\s+-\S+)*\s+[^\s-]\S*\s+[^\s-])/;
+  /^(?:gh\s+(?:pr\s+checkout|co)\s|sort\s(?:.*\s)?(?:-[a-zA-Z]*o|--output)|yq\s(?:.*\s)?(?:-[a-zA-Z]*i|--inplace)|uniq(?:\s+-\S+)*\s+[^\s-]\S*\s+[^\s-])/;
 
 /**
  * Whether a shell command leaves nothing behind for a commit to hold, apart from

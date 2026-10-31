@@ -886,6 +886,7 @@ test("a command only looks when every part of it is known to, and anything else 
     "sort -u --output=a.txt a.txt",
     "uniq in.txt out.txt",
     "uniq -c in.txt out.txt",
+    "gh pr checkout 12",
   ]) {
     assert.equal(shellOnlyLooks(command), false, command);
   }

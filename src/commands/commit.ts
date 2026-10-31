@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { basename, relative, resolve } from "node:path";
 import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
@@ -5,7 +6,7 @@ import { readConfig } from "../config.js";
 import { blobsOf, branchExists, currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
 import { errorMessage, logError } from "../log.js";
 import { maskPath } from "../mask-paths.js";
-import { gitCommands, mayWrite, parseLines, shellOnlyLooks, shellWrites } from "../parser.js";
+import { gitCommands, mayWrite, mcpOnlyReads, parseLines, shellOnlyLooks, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
 import { candidateKey, namedBranch, readState, unseen, updateSession, withCommit } from "../state.js";
@@ -71,8 +72,9 @@ export function wordsOf(input: unknown): string[] {
  *
  * ponytail: by file, not by line, and for the unnamed writes by base name, so a
  * commit that happens to touch such a file counts, and a script that writes files
- * it never mentions or a name with a space in it does not. Compare with
- * `FileEdit.newString` and read the redirect targets if either shows up.
+ * it never mentions, a name with a space in it or a file renamed before the commit
+ * does not. Compare with `FileEdit.newString` and read the redirect targets if any
+ * of them shows up.
  */
 async function carriesItsWork(
   session: ParsedSession,
@@ -84,9 +86,13 @@ async function carriesItsWork(
 ): Promise<boolean> {
   // A transcript read as it is holds paths as the agent wrote them, from where it
   // stood or in full, and git names a file from the top of the tree.
+  const real = (path: string) => realpath(path).catch(() => path);
   for (const [path, edits] of session.fileEdits) {
     if (!edits.some((edit) => edit.recordIndex >= since)) continue;
-    if (committed.has(maskPath(resolve(directory, path), await rootsIn(directory)))) return true;
+    const roots = await rootsIn(directory);
+    if (committed.has(maskPath(resolve(directory, path), roots))) return true;
+    // Through a link, git names the file where it really is.
+    if (roots.cwd && committed.has(relative(await real(roots.cwd), await real(resolve(directory, path))))) return true;
   }
 
   return session.toolUses.some(
@@ -133,7 +139,7 @@ function movesBranch(use: ToolUse): boolean {
 function leavesUnknown(use: ToolUse): boolean {
   const { command } = use.input;
   if (use.name === "Bash" && typeof command === "string") return !shellOnlyLooks(command);
-  return mayWrite(use.name, use.input);
+  return mayWrite(use.name, use.input) || (use.name.startsWith("mcp__") && !mcpOnlyReads(use.name));
 }
 
 /**

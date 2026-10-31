@@ -159,7 +159,8 @@ database or to a model.
   commit does not hold, gives the commit up (`commit.ts:isItsCommit`,
   `parser.ts:shellOnlyLooks`): a mark moves a session to that branch's pull
   request, so every other commit made there afterwards must not leave one. A
-  command nobody can read keeps it, because what it wrote may be the commit, and
+  command nobody can read, or an MCP tool whose name does not say it only reads
+  (`parser.ts:mcpOnlyReads`), keeps it, because what it wrote may be the commit, and
   so does a file as one of its marks left it, or that it edited and no mark took:
   work amended, picked or rebased elsewhere (`commit.ts:holdsMovedWork`).
 - **Stage 0 is calibrated with the server.** The induced corpus and the
