@@ -552,9 +552,26 @@ const SHELL_EXPANDS = /[*?$`{]/;
 /** The one `git checkout` that stands on a branch and takes no file from anywhere. */
 const CHECKOUT_BRANCH = /\bcheckout(?:\s+(?:-[bB]\s+\S+|-[qft]|--(?:quiet|force|track|detach)))*(?:\s+\S+)?\s*$/;
 
-/** Readers that write when a flag or a second name says so, and the `gh` that moves the tree. */
+/** Readers that write when a flag or a second name says so, and the `gh` that moves the tree or fills it. */
 const WRITES_BY_ARGUMENT =
-  /^(?:gh\s+(?:pr\s+checkout|co)\s|sort\s(?:.*\s)?(?:-[a-zA-Z]*o|--output)|yq\s(?:.*\s)?(?:-[a-zA-Z]*i|--inplace)|uniq(?:\s+-\S+)*\s+[^\s-]\S*\s+[^\s-])/;
+  /^(?:gh\s+(?:pr\s+checkout|co|release\s+download|run\s+download|repo\s+clone|gist\s+clone)\s|sort\s(?:.*\s)?(?:-[a-zA-Z]*o|--output)|yq\s(?:.*\s)?(?:-[a-zA-Z]*i|--inplace)|(?:uniq|xxd)(?:\s+-\S+)*\s+[^\s-]\S*\s+[^\s-])/;
+
+/** `sed`'s write, as a command or as the flag of an `s`: `w out`, `1,5w out`, `s/a/b/gw out`. */
+const SED_WRITE = /(?:^|[^A-Za-z])[gpiImMe]*[wW]\s+\S/;
+
+/**
+ * Whether an `awk` or `sed` writes from inside its program, which `withoutQuoted`
+ * empties: `awk '{print > "x"}'`, `sed -n 'w x'`. Behind a `print`, as `$1 > 5` is a
+ * comparison; a `>` in a printed string reads as a write, and the session keeps the commit.
+ */
+function programWrites(called: string, segment: string): boolean {
+  const [reader] = /^(?:awk|sed)\b/.exec(called) ?? [];
+  if (reader === undefined) return false;
+  const program = (segment.match(/\\.|'[^']*'|"(?:[^"\\]|\\.)*"/g) ?? []).join("");
+  if (reader === "sed") return SED_WRITE.test(program);
+  const print = program.search(/\bprintf?\b/);
+  return /\bsystem\s*\(/.test(program) || (print !== -1 && /[>|]/.test(program.slice(print)));
+}
 
 /**
  * Whether a shell command leaves nothing behind for a commit to hold, apart from
@@ -570,9 +587,9 @@ export function shellOnlyLooks(command: string): boolean {
     const bare = withoutQuoted(segment);
     const subcommand = GIT_CALL.exec(bare)?.[1];
     if (subcommand === "checkout") return CHECKOUT_BRANCH.test(bare);
-    if (subcommand !== undefined) return GIT_LOOKS.has(subcommand);
+    if (subcommand !== undefined) return GIT_LOOKS.has(subcommand) && !/\s--output\b/.test(bare);
     const called = bare.replace(LEADING_WORDS, "");
-    if (WRITES_BY_ARGUMENT.test(called)) return false;
+    if (WRITES_BY_ARGUMENT.test(called) || programWrites(called, segment)) return false;
     return called.trim() === "" || SHELL_READERS.test(called) || SHELL_LOOKS.test(called);
   });
 }
