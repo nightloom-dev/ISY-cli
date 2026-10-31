@@ -384,8 +384,8 @@ function learnValues(value: unknown, context: RedactContext): void {
   if (Array.isArray(value)) return value.forEach((item) => learnValues(item, context));
   if (isObject(value)) return Object.values(value).forEach((item) => learnValues(item, context));
   if (typeof value !== "string") return;
-  // `printf 'A=1\nB=2\n' > .env` holds its lines as written.
-  const text = value.replace(/\\n/g, "\n");
+  // `printf 'A=1\nB=2\n' > .env` holds its lines as written, and `echo K=\"v\" > .env` a quoted value.
+  const text = value.replace(/\\n/g, "\n").replace(/\\(["'])/g, "$1");
   const learn = (name: string | undefined, found: string): void => {
     if (context.learned.size < MAX_LEARNED_VALUES && worthLearning(name, found)) context.learned.add(found);
   };
@@ -522,8 +522,11 @@ const unquoted = (word: string): string => word.replace(/\\( )|["'`]/g, "$1");
 /** A quoted or escaped word keeps its spaces: `> "My Projects/.env"`. */
 const REDIRECT = String.raw`>\s*((?:"[^"]*"|'[^']*'|\\.|[^\s;&|<>"'\\])+)`;
 const ANY_REDIRECT = new RegExp(REDIRECT, "g");
-/** Quotes go first and run to the end if they never close, so nothing is scanned twice. */
-const REDIRECT_PAST_QUOTES = new RegExp(String.raw`'[^']*(?:'|$)|"(?:[^"\\]|\\[\s\S]?)*(?:"|$)|${REDIRECT}`, "g");
+/**
+ * Quotes go first and run to the end if they never close, so nothing is scanned twice;
+ * ahead of them what a backslash escapes, which opens nothing: `echo don\'t > .env`.
+ */
+const REDIRECT_PAST_QUOTES = new RegExp(String.raw`\\.|'[^']*(?:'|$)|"(?:[^"\\]|\\[\s\S]?)*(?:"|$)|${REDIRECT}`, "g");
 /**
  * Commands whose quoted arguments are only text: `git commit -m "x > .env"` writes
  * nothing. What runs its argument is not here, as `sh -c`, `ssh` and `sudo` hold a
@@ -583,8 +586,10 @@ function statements(line: string): { parts: string[]; open: boolean } {
   let quote: string | undefined;
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i]!;
-    if (quote !== undefined) {
-      if (char === quote && (quote === "'" || line[i - 1] !== "\\")) quote = undefined;
+    if (char === "\\" && quote !== "'") {
+      i += 1;
+    } else if (quote !== undefined) {
+      if (char === quote) quote = undefined;
     } else if (char === '"' || char === "'" || char === "`") {
       quote = char;
     } else if (char === ";" || ((char === "&" || char === "|") && line[i + 1] === char)) {

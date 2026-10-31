@@ -496,6 +496,14 @@ test("a command splits the way a shell would, not the way a regex does", () => {
     "node run.js  ",
     'grep -rl "DROP TABLE" .',
   ]);
+  // What a backslash escapes neither opens nor closes a quote nor ends a command.
+  assert.deepEqual(commandSegments("echo don\\'t; rm a"), ["echo don\\'t", " rm a"]);
+  assert.deepEqual(commandSegments('echo \\"a; rm b'), ['echo \\"a', " rm b"]);
+  assert.deepEqual(commandSegments('echo "c:\\\\"; rm c'), ['echo "c:\\\\"', " rm c"]);
+  assert.deepEqual(commandSegments('echo "a\\"; b"; rm d'), ['echo "a\\"; b"', " rm d"]);
+  assert.deepEqual(commandSegments("find . -exec rm {} \\; && ls"), ["find . -exec rm {} \\; ", " ls"]);
+  // At the end of a line it joins that line to the next, and here it is still where a segment ends.
+  assert.deepEqual(commandSegments("a \\\nb"), ["a \\", "b"]);
 });
 
 test("tells a shell command that writes a file from one that only looks", () => {

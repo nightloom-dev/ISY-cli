@@ -246,9 +246,8 @@ export function withoutHeredocs(command: string): string {
  * inside a search pattern is the commonest way a `|` shows up in a command that
  * runs nothing at all.
  *
- * ponytail: quotes nest as a single state, and a backslash escape only counts
- * inside double quotes, which is what a shell does anyway. Real parsing is a
- * dependency, and this is here to stop three regexes from lying.
+ * ponytail: quotes nest as a single state. Real parsing is a dependency, and this
+ * is here to stop three regexes from lying.
  */
 export function commandSegments(command: string): string[] {
   const segments: string[] = [];
@@ -267,9 +266,16 @@ export function commandSegments(command: string): string[] {
   for (let i = 0; i < flat.length; i += 1) {
     const char = flat[i]!;
 
+    // What a backslash escapes is no quote and no operator, except in single quotes;
+    // at the end of a line it only joins that line to the next.
+    if (char === "\\" && quote !== "'" && flat[i + 1] !== "\n") {
+      current += char + (flat[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
     if (quote !== undefined) {
       current += char;
-      if (char === quote && (quote === "'" || flat[i - 1] !== "\\")) quote = undefined;
+      if (char === quote) quote = undefined;
       continue;
     }
     if (char === '"' || char === "'" || char === "`") {

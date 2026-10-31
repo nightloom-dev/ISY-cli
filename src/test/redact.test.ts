@@ -1941,3 +1941,28 @@ test("an email or a URL password is still caught where the run it sits in starts
   assert.ok(!out.includes("alice@example.com"));
   assert.ok(!out.includes("hunter22"));
 });
+
+test("a backslash outside quotes opens no quote, so a dotenv write behind one is still cut", () => {
+  const value = "Zq8vR2mK9xLp4T";
+  const m = marker("dotenv");
+  const cases: [string, string][] = [
+    [`echo APP_KEY=\\"${value}\\" > .env`, `${m} > .env`],
+    [`echo APP_KEY=\\"${value}\\" >> .env.local`, `${m} > .env.local`],
+    [`echo APP_KEY=\\"${value}\\" | tee .env`, `${m} > .env`],
+    [`echo don\\'t; echo "APP_KEY=${value}" > .env`, `echo don\\'t; ${m} > .env`],
+    [`echo "C:\\\\"; echo "APP_KEY=${value}" > .env`, `echo "C:\\\\"; ${m} > .env`],
+  ];
+  for (const [command, expected] of cases) {
+    const { lines } = summaryFor([
+      { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } },
+      { type: "user", message: { role: "user", content: `the key is ${value}` } },
+    ]);
+    const [call, later] = lines.map((line) => JSON.parse(line) as { message: { content: { input: { command: string } }[] & string } });
+    assert.equal(call!.message.content[0]!.input.command, expected);
+    assert.equal(later!.message.content, `the key is ${m}`);
+  }
+  // Escaped, it is no redirect at all; in quotes, it is what a message says.
+  for (const command of [`echo \\> .env`, `git commit -m "x > .env"`, `git commit -m "don't > .env"`]) {
+    assert.equal(throughCall("Bash", { command }, "plain output").input.command, command);
+  }
+});
