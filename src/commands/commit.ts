@@ -1,14 +1,15 @@
 import { basename, relative } from "node:path";
 import { latestSessions } from "../agents/index.js";
-import type { AgentId } from "../agents/index.js";
+import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
-import { currentBranch, filesInHead, headSha } from "../git.js";
+import { currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
+import { maskPath } from "../mask-paths.js";
 import { gitCommands, mayWrite, parseLines, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
 import { candidateKey, namedBranch, readState, unseen, updateSession, withCommit } from "../state.js";
 import type { ClientState, SessionState } from "../state.js";
-import type { Candidate, ParsedSession, ToolUse } from "../types.js";
+import type { Candidate, DiscoveredSession, ParsedSession, ToolUse } from "../types.js";
 
 export interface CommitReport {
   agent?: AgentId;
@@ -29,8 +30,13 @@ const MAX_LINES = 6;
 const MAX_PER_CATEGORY = 2;
 /** The longest Claude Code lets a shell call run, so how long one can read as running. */
 const SHELL_CALL_MS = 10 * 60_000;
-/** What telling sessions apart may add to a hook someone is waiting on, checked between them. */
-const TELLING_APART_MS = 5_000;
+/**
+ * What telling sessions apart may add to a hook someone is waiting on, at every
+ * pick of a rebase. Time is checked between reads and only size before one, so
+ * both: 16 MB of transcript takes about half a second to read as it is.
+ */
+const TELLING_APART_MS = 1_000;
+const TELLING_APART_BYTES = 16 * 1024 * 1024;
 
 /** The transcript holds a shell call before the command starts, and its answer only after. */
 function isRunning(use: ToolUse): boolean {
@@ -69,14 +75,18 @@ export function wordsOf(input: unknown): string[] {
 async function carriesItsWork(
   session: ParsedSession,
   state: SessionState,
+  sessionCwd: string,
   cwd: string,
 ): Promise<boolean> {
   const since = state.commits?.at(-1)?.records ?? 0;
   const files = await filesInHead(cwd);
-  const edited = files.some((file) =>
-    session.fileEdits.get(file)?.some((edit) => edit.recordIndex >= since),
-  );
-  if (edited) return true;
+  const committed = new Set(files);
+  // A transcript read as it is holds paths as the agent wrote them, and git names
+  // a file from the top of the tree: the rule the upload rewrites them by.
+  const roots = await maskRootsFor(sessionCwd);
+  for (const [path, edits] of session.fileEdits) {
+    if (edits.some((edit) => edit.recordIndex >= since) && committed.has(maskPath(path, roots))) return true;
+  }
 
   const names = new Set(files.map((file) => basename(file)));
   return session.toolUses.some(
@@ -104,16 +114,10 @@ async function carriesItsWork(
  * a session quiet for longer than `SHELL_CALL_MS` relies on the branch fallback on
  * the server. Walk on through `sessionsInTree` if one of them ever needs the mark.
  */
-async function isItsCommit(
-  session: ParsedSession,
-  state: SessionState,
-  branch: string | undefined,
-  cwd: string,
-): Promise<boolean> {
+function isItsCommit(session: ParsedSession, state: SessionState, branch: string | undefined): boolean {
   if (session.toolUses.some(isRunning)) return true;
   const own = state.branch ?? session.meta.gitBranch;
-  if (!branch || !own || own === "HEAD" || own === branch) return true;
-  return carriesItsWork(session, state, cwd);
+  return !branch || !own || own === "HEAD" || own === branch;
 }
 
 /** The git commands that fire the post-commit hook, each pick of a rebase included. */
@@ -133,25 +137,37 @@ function isCommitting(use: ToolUse): boolean {
  * writing. So one making a commit this moment comes first, then one whose work the
  * commit holds, as when a human commits what an agent left, and only then the newest.
  *
- * ponytail: the newest session's read, which runCommit needs anyway, is the only
- * one sure to happen. A long transcript takes seconds to read, so past
- * `TELLING_APART_MS` the rest are not asked and the newest of those read so far can
- * take a commit that was not its own. Two sessions running git at once go the same
- * way, and so does a commit one of them is making in another repository.
+ * Read as they are, because a transcript's redaction costs five times its read and
+ * only the session this ends on goes up. Past the first, one the budget does not
+ * reach is left out rather than waited for.
+ *
+ * ponytail: left out by size, so a long session running `git commit` beside a
+ * shorter one that goes on writing loses the commit to it, as it always did. Two
+ * sessions running git at once go the same way, and so does a commit one of them is
+ * making in another repository. Read the tail of a long one if that shows up.
  */
 async function sessionOfCommit(
   latest: Awaited<ReturnType<typeof latestSessions>>,
+  branch: string | undefined,
   cwd: string,
   states: ClientState,
-  extraPatterns: readonly string[] | undefined,
-) {
+): Promise<{ agent: Agent; file: DiscoveredSession } | { skipped: string }> {
+  // Alone and on its own branch there is nothing to tell apart.
+  const alone = latest.length === 1 && latest[0]!;
+  if (alone && branch && states[alone.file.path]?.branch === branch) return alone;
+
   const deadline = Date.now() + TELLING_APART_MS;
+  let bytes = 0;
   const read = [];
   for (const { agent, file } of latest) {
-    if (read.length > 0 && Date.now() >= deadline) break;
+    if (read.length > 0) {
+      if (Date.now() >= deadline) break;
+      if (bytes + file.sizeBytes > TELLING_APART_BYTES) continue;
+      bytes += file.sizeBytes;
+    }
     let session: ParsedSession;
     try {
-      session = parseLines(await agent.redactedLines(file.path, { extraPatterns, cwd: file.cwd ?? cwd }));
+      session = await agent.parsedSession(file.path, file.cwd ?? cwd);
     } catch {
       // Listed a moment ago: gone since, or never this user's to read. One such
       // file says nothing about the commit, and the others are still there to ask.
@@ -161,13 +177,15 @@ async function sessionOfCommit(
     if (session.toolUses.some(isCommitting)) return entry;
     read.push(entry);
   }
+  if (read.length === 0) return { skipped: "no session here could be read" };
 
-  if (read.length > 1) {
-    for (const entry of read) {
-      if (await carriesItsWork(entry.session, states[entry.file.path] ?? {}, cwd)) return entry;
-    }
+  for (const entry of read) {
+    if (await carriesItsWork(entry.session, states[entry.file.path] ?? {}, entry.file.cwd ?? cwd, cwd)) return entry;
   }
-  return read[0];
+  const first = read[0]!;
+  return isItsCommit(first.session, states[first.file.path] ?? {}, branch)
+    ? first
+    : { skipped: "the newest session here is on another branch and this commit holds none of its work" };
 }
 
 export async function runCommit(
@@ -186,22 +204,29 @@ export async function runCommit(
 
   const config = await readConfig();
   const states = await readState();
-  const chosen = await sessionOfCommit(latest, cwd, states, config.extraRedactPatterns);
-  if (!chosen) {
-    report.skipped = "no session here could be read";
+  const branch = await currentBranch(cwd);
+  const chosen = await sessionOfCommit(latest, branch, cwd, states);
+  if ("skipped" in chosen) {
+    report.skipped = chosen.skipped;
     return report;
   }
-  const { agent, file, session } = chosen;
+  const { agent, file } = chosen;
   report.agent = agent.id;
   report.sessionId = file.sessionId;
-  report.records = session.records.length;
 
-  const state = states[file.path] ?? {};
-  const branch = await currentBranch(cwd);
-  if (!(await isItsCommit(session, state, branch, cwd))) {
-    report.skipped = "the newest session here is on another branch and this commit holds none of its work";
+  let session: ParsedSession;
+  try {
+    const lines = await agent.redactedLines(file.path, {
+      extraPatterns: config.extraRedactPatterns,
+      cwd: file.cwd ?? cwd,
+    });
+    session = parseLines(lines);
+  } catch {
+    report.skipped = "the session this commit goes to could not be read";
     return report;
   }
+  report.records = session.records.length;
+  const state = states[file.path] ?? {};
 
   // Stage 0 always sees the whole transcript: the detectors reason across the
   // session — an abandoned branch forks early, a revert compares a late edit

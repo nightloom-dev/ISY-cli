@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
+import { claudeAgent } from "../agents/index.js";
 import { writeConfig } from "../config.js";
 import { formatCommit, runCommit, wordsOf } from "../commands/commit.js";
 import { currentBranch } from "../git.js";
@@ -1030,6 +1031,46 @@ test("a transcript that cannot be read costs the commit no one else's mark", { s
   assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /could be read/);
 
   for (const path of [below, older, newest]) await chmod(path, 0o600);
+});
+
+test("telling sessions apart reads no further than its budget, at every pick of a rebase", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-budget-"));
+  const megabytes = (size: number) =>
+    `${record({ type: "user", message: { role: "user", content: "x".repeat(size * 1024 * 1024) } })}\n`;
+
+  const huge = await writeSession(cwd, "sess-huge", "ms");
+  await appendFile(huge, `\n${megabytes(17)}`);
+  const second = await writeSession(cwd, "sess-second", "ms");
+  await appendFile(second, `\n${megabytes(9)}`);
+  const third = await writeSession(cwd, "sess-third", "ms");
+  await appendFile(third, `\n${megabytes(9)}`);
+  await writeSession(cwd, "sess-newest", "ms");
+  await age(huge, 1 / 1440);
+  await age(second, 2 / 1440);
+  await age(third, 3 / 1440);
+  await commitFile(cwd, "README.md");
+
+  const reads: string[] = [];
+  const { parsedSession, redactedLines } = claudeAgent;
+  claudeAgent.parsedSession = async (path, sessionCwd) => {
+    reads.push(basename(path, ".jsonl"));
+    return parsedSession(path, sessionCwd);
+  };
+  claudeAgent.redactedLines = async (path, options) => {
+    reads.push(basename(path, ".jsonl"));
+    return redactedLines(path, options);
+  };
+  try {
+    assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-newest");
+  } finally {
+    Object.assign(claudeAgent, { parsedSession, redactedLines });
+  }
+
+  // One over the budget is passed over for the next one under it, and what is
+  // left of the budget, not each session's own size, decides the one after that.
+  assert.ok(!reads.includes("sess-huge"), reads.join());
+  assert.ok(reads.includes("sess-second"), reads.join());
+  assert.ok(!reads.includes("sess-third"), reads.join());
 });
 
 test("a CLI that records no branch is judged by the one its upload found", async () => {
