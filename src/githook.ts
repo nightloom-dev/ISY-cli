@@ -301,14 +301,16 @@ function holds(directory: string, path: string): boolean {
 }
 
 /**
- * Whether a hook is a link to a file in the work tree, which for the same reason as
- * `isShared` waits for `isy init` to have what it holds rewritten.
+ * Whether a hook is a link to a file in a work tree, which for the same reason as
+ * `isShared` waits for `isy init` to have what it holds rewritten. Asked of the file,
+ * since the tree it sits in need not be the one this runs from: all of a repository's
+ * worktrees share its hooks.
  */
-async function linkedIntoTree(cwd: string, path: string, gitDir: string): Promise<boolean> {
+async function linkedIntoTree(path: string, gitDir: string): Promise<boolean> {
   try {
     if (!(await lstat(path)).isSymbolicLink()) return false;
-    const [target, top, git] = await Promise.all([realpath(path), workTreeTop(cwd), realpath(gitDir)]);
-    return top !== undefined && holds(top, target) && !holds(git, target);
+    const [target, git] = await Promise.all([realpath(path), realpath(gitDir)]);
+    return !holds(git, target) && (await workTreeTop(dirname(target))) !== undefined;
   } catch {
     return false;
   }
@@ -332,7 +334,7 @@ export async function repairGitHook(cwd: string): Promise<void> {
     const existing = existingBlock(contents);
     if (existing === undefined) continue;
     const old =
-      existing !== block(hook.command) && !isShared(location) && !(await linkedIntoTree(cwd, path, location.gitDir));
+      existing !== block(hook.command) && !isShared(location) && !(await linkedIntoTree(path, location.gitDir));
     if (old || !takesBlock(contents)) await installOne(cwd, hook);
   }
 }
@@ -350,7 +352,7 @@ export async function autoInstallGitHook(cwd: string): Promise<GitHookOutcome | 
   for (const hook of GIT_HOOKS) {
     const path = resolve(location.hooks, hook.name);
     if (existingBlock((await readHook(path)) ?? "") === undefined) continue;
-    if (await linkedIntoTree(cwd, path, location.gitDir)) return "shared-hooks";
+    if (await linkedIntoTree(path, location.gitDir)) return "shared-hooks";
   }
 
   // A repository created without templates has no hooks directory at all.

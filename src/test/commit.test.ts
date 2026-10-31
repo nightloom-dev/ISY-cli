@@ -403,6 +403,34 @@ test("a hook linked to a file in the work tree keeps its older block until asked
   assert.ok((await readFile(script, "utf8")).includes(COMMIT_COMMAND));
 });
 
+test("a hook linked to a file of a work tree waits, from whichever tree of the repository it is reached", async () => {
+  const fresh = await newRepo("isy-hook-tracked-linked-");
+  await mkdir(join(fresh, "tools"));
+  const script = join(fresh, "tools/post-commit");
+  const wired = `#!/bin/sh\n${OLD_COMMIT_BLOCK}`;
+  await writeFile(script, wired, { mode: 0o755 });
+  await run("git", ["add", "."], { cwd: fresh });
+  await run("git", ["commit", "-q", "-m", "tools"], { cwd: fresh });
+  await symlink("../../tools/post-commit", (await postCommitPath(fresh))!);
+  const linked = join(await mkdtemp(join(tmpdir(), "isy-hook-tree-")), "linked");
+  await run("git", ["worktree", "add", "-q", "-b", "linked", linked], { cwd: fresh });
+
+  await cli(linked, ["commit", "--hook"]);
+  assert.equal((await run("git", ["status", "--porcelain"], { cwd: fresh })).stdout, "");
+  assert.equal(await readFile(script, "utf8"), wired);
+  assert.equal(await autoInstallGitHook(linked), "shared-hooks");
+});
+
+test("a hook linked to a file in no work tree is nobody else's, and its older block is brought up to date", async () => {
+  const fresh = await newRepo("isy-hook-dotfile-");
+  const script = join(await mkdtemp(join(tmpdir(), "isy-hook-dot-")), "post-commit");
+  await writeFile(script, `#!/bin/sh\n${OLD_COMMIT_BLOCK}`, { mode: 0o755 });
+  await symlink(script, (await postCommitPath(fresh))!);
+
+  await cli(fresh, ["commit", "--hook"]);
+  assert.ok((await readFile(script, "utf8")).includes(COMMIT_COMMAND));
+});
+
 test("a link into the git directory is no shared file, and its older block is brought up to date", async () => {
   const fresh = await newRepo("isy-hook-private-link-");
   const path = (await postCommitPath(fresh))!;
