@@ -105,6 +105,20 @@ async function carriesItsWork(
   );
 }
 
+/** What a commit holds, asked once however many sessions it is held up against. */
+interface HeadWork {
+  cwd: string;
+  files: string[];
+  blobs: () => Promise<Map<string, Set<string>>>;
+  lines: () => Promise<Set<string> | undefined>;
+  rootsIn: (directory: string) => Promise<MaskRoots>;
+}
+
+function once<T>(ask: () => Promise<T>): () => Promise<T> {
+  let answer: Promise<T> | undefined;
+  return () => (answer ??= ask());
+}
+
 /** Lines by what they say: indentation and line endings change without changing that, and `}` says nothing. */
 function linesSaying(lines: string[]): Set<string> {
   return new Set(lines.map((line) => line.replace(/\s+/g, "")).filter((line) => /[\p{L}\p{N}]/u.test(line)));
@@ -121,14 +135,13 @@ function linesSaying(lines: string[]): Set<string> {
  * commits that happen to share `return nil` are, moving the session to that branch as
  * it always did. Weigh lines by how rare they are if that shows up.
  */
-async function sharesItsLines(session: ParsedSession, marks: string[], cwd: string): Promise<boolean> {
-  const [inHead, inMarks] = await Promise.all([addedLines(cwd, ["HEAD"]), marks.length > 0 ? addedLines(cwd, marks) : []]);
+async function sharesItsLines(session: ParsedSession, marks: string[], head: HeadWork): Promise<boolean> {
+  const [inHead, inMarks] = await Promise.all([head.lines(), marks.length > 0 ? addedLines(head.cwd, marks) : []]);
   if (!inHead || !inMarks) return true;
   const written = [...session.fileEdits.values()].flat().flatMap((edit) => (edit.newString ?? edit.content ?? "").split("\n"));
-  const head = linesSaying(inHead);
   const work = linesSaying([...inMarks, ...written]);
-  const shared = [...head].filter((line) => work.has(line)).length;
-  return shared > 0 && shared >= SAME_WORK_SHARE * Math.min(head.size, work.size);
+  const shared = [...inHead].filter((line) => work.has(line)).length;
+  return shared > 0 && shared >= SAME_WORK_SHARE * Math.min(inHead.size, work.size);
 }
 
 /**
@@ -142,28 +155,26 @@ async function sharesItsLines(session: ParsedSession, marks: string[], cwd: stri
 async function holdsMovedWork(
   session: ParsedSession,
   state: SessionState,
-  files: string[],
   directory: string,
-  cwd: string,
-  rootsIn: (directory: string) => Promise<MaskRoots>,
+  head: HeadWork,
 ): Promise<boolean> {
   const marks = state.commits?.map((mark) => mark.sha) ?? [];
   if (marks.length > 0) {
-    const marked = await blobsOf(cwd, marks);
+    const marked = await blobsOf(head.cwd, marks);
     // A deleted file's blob is all zeros, and says something only of that file.
     const left = new Set([...marked.values()].flatMap((blobs) => [...blobs]).filter((blob) => !/^0+$/.test(blob)));
-    for (const [file, blobs] of await blobsOf(cwd, ["HEAD"])) {
+    for (const [file, blobs] of await head.blobs()) {
       if ([...blobs].some((blob) => left.has(blob) || marked.get(file)?.has(blob))) return true;
     }
-    const settled = files.filter((file) => marked.has(file));
+    const settled = head.files.filter((file) => marked.has(file));
     if (settled.length > 0) {
-      const merged = new Set(await filesMergedIntoHead(cwd));
+      const merged = new Set(await filesMergedIntoHead(head.cwd));
       if (settled.some((file) => merged.has(file))) return true;
     }
-    const unmarked = files.filter((file) => !marked.has(file));
-    if (await carriesItsWork(session, 0, new Set(unmarked), new Set(unmarked.map((file) => basename(file))), directory, rootsIn)) return true;
+    const unmarked = head.files.filter((file) => !marked.has(file));
+    if (await carriesItsWork(session, 0, new Set(unmarked), new Set(unmarked.map((file) => basename(file))), directory, head.rootsIn)) return true;
   }
-  return sharesItsLines(session, marks, cwd);
+  return sharesItsLines(session, marks, head);
 }
 
 /** How an agent leaves for another branch itself. A rename is told by the old name being gone. */
@@ -241,6 +252,12 @@ function isCommitting(use: ToolUse): boolean {
  * shorter one that goes on writing loses the commit to it, as it always did. Two
  * sessions running git at once go the same way, and so does a commit one of them is
  * making in another repository. Read the tail of a long one if that shows up.
+ *
+ * ponytail: the budget is per commit, so each pick of a rebase pays it afresh, and tens
+ * of sessions active in one tree add about half a second a pick: a rebase of 12 with
+ * 100 such sessions holds 9 s against 2.6 s for no telling apart. A budget per rebase
+ * would leave the later picks of any long one untold, so keep it there only if that
+ * many sessions in one tree turn out to be common.
  */
 async function sessionOfCommit(
   latest: Awaited<ReturnType<typeof latestSessions>>,
@@ -283,6 +300,16 @@ async function sessionOfCommit(
     if (!roots.has(directory)) roots.set(directory, maskRootsFor(directory));
     return roots.get(directory)!;
   };
+  const head: HeadWork = {
+    cwd,
+    files,
+    blobs: once(() => blobsOf(cwd, ["HEAD"])),
+    lines: once(async () => {
+      const lines = await addedLines(cwd, ["HEAD"]);
+      return lines && linesSaying(lines);
+    }),
+    rootsIn,
+  };
   // Asking takes the git calls above and what a directory or a branch adds, so
   // however many were read, it gets the same again and stops there.
   const askUntil = deadline + TELLING_APART_MS;
@@ -294,7 +321,7 @@ async function sessionOfCommit(
   for (const entry of read) {
     const state = states[entry.file.path] ?? {};
     if (await isItsCommit(entry.session, state, branch, cwd)) return entry;
-    if (await holdsMovedWork(entry.session, state, files, entry.file.cwd ?? cwd, cwd, rootsIn)) return entry;
+    if (await holdsMovedWork(entry.session, state, entry.file.cwd ?? cwd, head)) return entry;
     if (Date.now() >= askUntil) break;
   }
   return { skipped: "the sessions here are on another branch and this commit holds none of their work" };
