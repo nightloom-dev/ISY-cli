@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
+import { workTreeTop } from "./git.js";
 import { NPX_ISY, NPX_ISY_CACHED } from "./hook.js";
 import { logLine } from "./log.js";
 
@@ -291,15 +292,33 @@ async function hookLocation(cwd: string): Promise<{ hooks: string; gitDir: strin
  * enough for `git rebase` to refuse. Those are left to `isy init`, run on purpose.
  */
 function isShared(location: { hooks: string; gitDir: string }): boolean {
-  const inside = relative(location.gitDir, location.hooks);
-  return inside.startsWith("..") || isAbsolute(inside);
+  return !holds(location.gitDir, location.hooks);
+}
+
+function holds(directory: string, path: string): boolean {
+  const inside = relative(directory, path);
+  return !inside.startsWith("..") && !isAbsolute(inside);
+}
+
+/**
+ * Whether a hook is a link to a file in the work tree, which for the same reason as
+ * `isShared` waits for `isy init` to have what it holds rewritten.
+ */
+async function linkedIntoTree(cwd: string, path: string, gitDir: string): Promise<boolean> {
+  try {
+    if (!(await lstat(path)).isSymbolicLink()) return false;
+    const [target, top, git] = await Promise.all([realpath(path), workTreeTop(cwd), realpath(gitDir)]);
+    return top !== undefined && holds(top, target) && !holds(git, target);
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Bring the blocks an older isy wrote up to date where they stand, adding none:
  * what every run from a hook does first, so that an upgrade reaches a repository
  * the next time anything happens in it, with no `isy init` to go through. A block
- * that is only old waits in a shared directory. One that breaks its hook comes out
+ * that is only old waits in a shared file. One that breaks its hook comes out
  * wherever it is: the file goes back to what the user had, and a push stops failing.
  */
 export async function repairGitHook(cwd: string): Promise<void> {
@@ -307,11 +326,13 @@ export async function repairGitHook(cwd: string): Promise<void> {
   if (!location) return;
 
   for (const hook of GIT_HOOKS) {
-    const contents = await readHook(resolve(location.hooks, hook.name));
+    const path = resolve(location.hooks, hook.name);
+    const contents = await readHook(path);
     if (contents === undefined) continue;
     const existing = existingBlock(contents);
     if (existing === undefined) continue;
-    const old = existing !== block(hook.command) && !isShared(location);
+    const old =
+      existing !== block(hook.command) && !isShared(location) && !(await linkedIntoTree(cwd, path, location.gitDir));
     if (old || !takesBlock(contents)) await installOne(cwd, hook);
   }
 }
@@ -326,6 +347,11 @@ export async function autoInstallGitHook(cwd: string): Promise<GitHookOutcome | 
   if (!location) return "not-a-repository";
   if (await gitHookInstalled(cwd)) return "already-present";
   if (isShared(location)) return "shared-hooks";
+  for (const hook of GIT_HOOKS) {
+    const path = resolve(location.hooks, hook.name);
+    if (existingBlock((await readHook(path)) ?? "") === undefined) continue;
+    if (await linkedIntoTree(cwd, path, location.gitDir)) return "shared-hooks";
+  }
 
   // A repository created without templates has no hooks directory at all.
   await mkdir(location.hooks, { recursive: true });

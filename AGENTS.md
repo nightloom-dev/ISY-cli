@@ -126,7 +126,8 @@ database or to a model.
   for the git hooks of the repository it stands in (`githook.ts:repairGitHook`),
   swapping the file whole, because a shell reads a script as it runs it. A
   directory core.hooksPath points out of the git directory waits for `isy init`,
-  and so does Codex, which asks again for a hook it has not seen. The block is
+  so does a hook linked to a file in the work tree, and so does Codex, which asks
+  again for a hook it has not seen. The block is
   shell, so a git hook in another language takes none (`githook.ts:takesBlock`):
   `isy init` says what to add by hand, and a block an older isy left in one comes
   out byte for byte. In a Kimi config a hook is isy's by

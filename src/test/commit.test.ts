@@ -381,6 +381,39 @@ test("a hook linked in from elsewhere stays linked when its block is rewritten",
   assert.ok((await readFile(script, "utf8")).includes(COMMIT_COMMAND));
 });
 
+test("a hook linked to a file in the work tree keeps its older block until asked, so the tree stays clean", async () => {
+  const fresh = await newRepo("isy-hook-tracked-");
+  await mkdir(join(fresh, "tools"));
+  const script = join(fresh, "tools/post-commit");
+  const wired = `#!/bin/sh\n${OLD_COMMIT_BLOCK}`;
+  await writeFile(script, wired, { mode: 0o755 });
+  await run("git", ["add", "."], { cwd: fresh });
+  await run("git", ["commit", "-q", "-m", "tools"], { cwd: fresh });
+  await symlink("../../tools/post-commit", (await postCommitPath(fresh))!);
+  const clean = async () => assert.equal((await run("git", ["status", "--porcelain"], { cwd: fresh })).stdout, "");
+
+  await cli(fresh, ["commit", "--hook"]);
+  await clean();
+  assert.equal(await readFile(script, "utf8"), wired);
+
+  assert.equal(await autoInstallGitHook(fresh), "shared-hooks");
+  await clean();
+
+  assert.equal(await installGitHook(fresh), "installed");
+  assert.ok((await readFile(script, "utf8")).includes(COMMIT_COMMAND));
+});
+
+test("a link into the git directory is no shared file, and its older block is brought up to date", async () => {
+  const fresh = await newRepo("isy-hook-private-link-");
+  const path = (await postCommitPath(fresh))!;
+  const script = join(dirname(dirname(path)), "my-post-commit");
+  await writeFile(script, `#!/bin/sh\n${OLD_COMMIT_BLOCK}`, { mode: 0o755 });
+  await symlink("../my-post-commit", path);
+
+  await cli(fresh, ["commit", "--hook"]);
+  assert.ok((await readFile(script, "utf8")).includes(COMMIT_COMMAND));
+});
+
 test("takes the block out of a hook in another language, byte for byte, and never adds it again", async () => {
   const hooks: Record<string, Buffer> = {
     python: Buffer.from("#!/usr/bin/env python3\nimport sys\n\n\n\nsys.exit(0)\n"),
