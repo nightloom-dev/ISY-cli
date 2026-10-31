@@ -3,6 +3,7 @@ import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
 import { branchExists, currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
+import { errorMessage, logError } from "../log.js";
 import { maskPath } from "../mask-paths.js";
 import { gitCommands, mayWrite, parseLines, shellOnlyLooks, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
@@ -262,8 +263,9 @@ export async function runCommit(
       cwd: file.cwd ?? cwd,
     });
     session = parseLines(lines);
-  } catch {
+  } catch (error) {
     report.skipped = "the session this commit goes to could not be read";
+    logError(`commit: ${file.sessionId} could not be read: ${errorMessage(error)}`);
     return report;
   }
   report.records = session.records.length;

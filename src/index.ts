@@ -135,8 +135,8 @@ async function run(
       if (values.hook) {
         try {
           await runCommitCommand({ json: values.json, hook: true }, process.cwd());
-        } catch {
-          return;
+        } catch (error) {
+          logError(`commit: ${errorMessage(error)}`);
         }
         return;
       }
@@ -153,8 +153,8 @@ async function run(
           const alert = formatUploadAlert(report);
           // Each CLI displays a line its own way; the wording is the same.
           if (alert) await agentById(report.agent).deliver(alert, "SessionEnd");
-        } catch {
-          return;
+        } catch (error) {
+          logError(`upload: ${errorMessage(error)}`);
         }
         return;
       }

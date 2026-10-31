@@ -12,6 +12,7 @@ import { claudeAgent } from "../agents/index.js";
 import { writeConfig } from "../config.js";
 import { formatCommit, runCommit, wordsOf } from "../commands/commit.js";
 import { collectGitMetadata, currentBranch } from "../git.js";
+import { readJournal } from "../log.js";
 import { formatUploadAlert, runUpload } from "../commands/upload.js";
 import {
   COMMIT_COMMAND,
@@ -1249,6 +1250,18 @@ test("a transcript that cannot be read costs the commit no one else's mark", { s
   assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /could be read/);
 
   for (const path of [below, older, newest]) await chmod(path, 0o600);
+});
+
+test("a session redaction throws on leaves a commit with no mark, and the journal says which", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-deep-"));
+  const session = await writeSession(cwd, "sess-deep", "ms");
+  const nested = `${"[".repeat(200_000)}${"]".repeat(200_000)}`;
+  await appendFile(session, `\n{"type":"assistant","sessionId":"sess-deep","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"mcp__x__y","input":{"a":${nested}}}]}}\n`);
+  await commitFile(cwd, "whatever.txt");
+
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /could not be read/);
+  const said = readJournal().filter((entry) => entry.level === "error").at(-1)?.message ?? "";
+  assert.match(said, /^commit: sess-deep could not be read: Maximum call stack/);
 });
 
 test("telling sessions apart reads no further than its budget, at every pick of a rebase", async () => {

@@ -293,30 +293,19 @@ async function sendOne(
   fallbackSessionId: string,
   report: UploadReport,
 ): Promise<void> {
-  let built: Awaited<ReturnType<typeof buildPayload>>;
-  try {
-    built = await buildPayload(
-      target.agent,
-      target.path,
-      git,
-      {
-        extraPatterns: config.extraRedactPatterns,
-        // A swept session ran where the transcript says it ran, not where this
-        // process happens to stand: masking starts from it.
-        cwd: target.cwd ?? workingDir,
-        commits: state[target.path]?.commits,
-      },
-      fallbackSessionId,
-    );
-  } catch (error) {
-    // A `sudo` session's, owned by root, or one deleted since the listing. That
-    // says nothing about the sessions behind it or the queue, which still go out.
-    // It fails again at every run, so the journal gets one reason a run, not a
-    // line a file.
-    if (!report.unreadable) logLine(`upload: a session could not be read: ${errorMessage(error)}`);
-    report.unreadable = (report.unreadable ?? 0) + 1;
-    return;
-  }
+  const built = await buildPayload(
+    target.agent,
+    target.path,
+    git,
+    {
+      extraPatterns: config.extraRedactPatterns,
+      // A swept session ran where the transcript says it ran, not where this
+      // process happens to stand: masking starts from it.
+      cwd: target.cwd ?? workingDir,
+      commits: state[target.path]?.commits,
+    },
+    fallbackSessionId,
+  );
   if (!built) return;
   const { payload, gitBranch } = built;
 
@@ -505,19 +494,20 @@ export async function runUpload(
       continue;
     }
 
-    await sendOne(
-      target,
-      git.metadata,
-      state,
-      config,
-      api,
-      workingDir,
-      // Per target, not per run: a run covers many sessions, and one fallback
-      // shared between them would file them all under the same id — which the
-      // server keys on, so each would replace the last.
-      target.file?.sessionId ?? hook?.session_id ?? "unknown",
-      report,
-    );
+    // Per target, not per run: a run covers many sessions, and one fallback
+    // shared between them would file them all under the same id — which the
+    // server keys on, so each would replace the last.
+    const sessionId = target.file?.sessionId ?? hook?.session_id ?? "unknown";
+    try {
+      await sendOne(target, git.metadata, state, config, api, workingDir, sessionId, report);
+    } catch (error) {
+      // A `sudo` session's, owned by root, one deleted since the listing, or one
+      // redaction throws on. That says nothing about the sessions behind it or the
+      // queue, which still go out. It fails again at every run, so the journal gets
+      // one reason a run, not a line a file.
+      if (!report.unreadable) logError(`upload: ${sessionId} could not be read or sent: ${errorMessage(error)}`);
+      report.unreadable = (report.unreadable ?? 0) + 1;
+    }
   }
 
   if (outside > 0) logLine(`upload: ${outside} changed session(s) ran outside a repository`);

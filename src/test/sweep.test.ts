@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -14,6 +14,7 @@ import { writeConfig } from "../config.js";
 import { formatUploadReport, runUpload } from "../commands/upload.js";
 import { collectScan } from "../commands/scan.js";
 import { allClaudeSessions, firstCwd, projectSlug, sessionStatePath } from "../paths.js";
+import { readJournal } from "../log.js";
 import { listPending } from "../queue.js";
 import { claimSweep, releaseSweep } from "../state.js";
 
@@ -446,6 +447,39 @@ test("a transcript that cannot be read holds nothing else up, even when it is th
     assert.doesNotMatch(formatUploadReport(report), /nothing to upload/);
   } finally {
     await rm(blocked);
+  }
+});
+
+test("a session redaction throws on costs only itself, and the journal says which", async () => {
+  const nested = `${"[".repeat(200_000)}${"]".repeat(200_000)}`;
+  const poison = await writeSession("-a-poison", "poison", repo);
+  await appendFile(poison, `\n{"type":"assistant","sessionId":"poison","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"mcp__x__y","input":{"a":${nested}}}]}}`);
+  const next = await writeSession("-z-next", "next", repo);
+
+  try {
+    const report = await runUpload({ silent: true, sweep: true }, elsewhere);
+    assert.deepEqual(uploads.map((upload) => upload.sessionId).sort(), ["next", "swept"]);
+    assert.equal(report.unreadable, 1);
+    const said = readJournal().filter((entry) => entry.level === "error").at(-1)?.message ?? "";
+    assert.match(said, /^upload: poison could not be read or sent: Maximum call stack/);
+  } finally {
+    await rm(poison);
+    await rm(next);
+  }
+});
+
+test("a session that fails after it is sent holds up none behind it", NEEDS_DENIED_READS, async () => {
+  const next = await writeSession("-z-next", "next", repo);
+  // Writing down the last upload's time is what throws once the session is sent.
+  const config = join(home, "config.json");
+  await chmod(config, 0o400);
+
+  try {
+    await runUpload({ silent: true, sweep: true }, elsewhere);
+    assert.deepEqual(uploads.map((upload) => upload.sessionId).sort(), ["next", "swept"]);
+  } finally {
+    await chmod(config, 0o600);
+    await rm(next);
   }
 });
 
