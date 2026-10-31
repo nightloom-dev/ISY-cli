@@ -116,12 +116,48 @@ const KEY_FIELD = new RegExp(`^${KEY_NAME}$`);
 const CURL_USER_FLAG = String.raw`curl\b[^\n;|]{0,200}?\s(?:-[a-zA-Z]{0,16}[uU]\s*|--(?:proxy-)?user[=\s]\s*)`;
 /** A name may be a marker already: an address is one by now. */
 const CURL_USER = String.raw`(?:\[ISY_REDACTED:\w+\]|(?!\[ISY_REDACTED)[^\s:"']+):`;
+/** A client, whatever comes between, and its flag. Capped as above. */
+const onClient = (client: string, flag: string): string => String.raw`(?:${client})\b[^\n;|]{0,200}?\s${flag}`;
+/** The next word looks generated, for where what stands in front of it says too little. */
+const GENERATED_WORD = String.raw`(?=["']?[^\s"'/]{0,256}?${GENERATED_RUN})`;
 /**
- * Tools that take the password on a flag of one letter, which says nothing
- * anywhere else: `-p` is a port to `ssh`, a directory's parents to `mkdir`, and to
- * `mysql` with a space after it only a prompt. Capped as above.
+ * Where a client takes a password, which says nothing anywhere else: `-p` is a port to
+ * `ssh`, a directory's parents to `mkdir`, and to `mysql` with a space after it only a
+ * prompt. A name after `.` or `-` is a file's or another tool's (`wget a.zip -P out`),
+ * and `--name mongo -p 27017:27017` is a container, so to that family `-p` counts
+ * behind `-u`. What a here-string feeds is anyone's, so that word has to look generated.
+ *
+ * ponytail: the clients people use. Another tool's own flag stays, as it does anywhere,
+ * unless a project's own script (`./x`) gets something generated on one of these flags.
  */
-const PASSWORD_FLAG = String.raw`(?:sshpass\b[^\n;|]{0,200}?\s-p\s*|(?:docker|podman)\s+login\b[^\n;|]{0,200}?\s-p\s+|redis-cli\b[^\n;|]{0,200}?\s-a\s+|(?:mysql|mariadb|mysqldump|mysqladmin)\b[^\n;|]{0,200}?\s-p(?=[^\s=]))`;
+const PASSWORD_FLAG = String.raw`(?:\b(?<![.-])(?:${[
+  onClient("sshpass", String.raw`-p\s*`),
+  onClient(String.raw`(?:docker|podman)\s+login|helm\s+registry\s+login|az\s+login|twine\s+upload`, String.raw`-p\s+`),
+  onClient("mongosh|mongo|mongodump|mongorestore|mongoexport|mongoimport|cqlsh", String.raw`(?:-u|--username)[=\s]\s*\S+[^\n;|]{0,200}?\s-p\s+(?!\d+:\d)`),
+  onClient("redis-cli", String.raw`-a\s+`),
+  onClient("mysql|mariadb|mysqldump|mysqladmin|7z|7za|7zz", String.raw`-p(?=[^\s=])`),
+  onClient("sqlcmd|bcp|zip|unzip", String.raw`-P\s*`),
+  onClient("plink|pscp|psftp", String.raw`-pw\s+`),
+  onClient("ssh-keygen", String.raw`-N\s+`),
+  onClient("lftp", String.raw`-u\s+["']?[^\s,"']+,`),
+  onClient("smbclient", String.raw`-U\s+["']?[^\s%"']+%`),
+  onClient(String.raw`(?:https?|xh)(?=\s)`, String.raw`(?:-a|--auth)[=\s]\s*["']?[^\s:"']+:`),
+  onClient("curl", String.raw`(?:-[a-zA-Z]{0,16}b|--cookie)[=\s]\s*(?=["']?[^\s"'=]{1,256}=)`),
+  onClient("rabbitmqctl", String.raw`(?:add_user|change_password)\s+\S+\s+`),
+  onClient(String.raw`gh\s+secret\s+set`, String.raw`(?:-b|--body)[=\s]\s*`),
+  onClient(String.raw`doctl\s+auth\s+init`, String.raw`(?:-t|--access-token)[=\s]\s*`),
+  onClient(String.raw`security\s+add-\w+-password`, String.raw`-w\s+`),
+  String.raw`htpasswd\s+(?=-[a-zA-Z]*b)(?:-[a-zA-Z]*n[a-zA-Z]*\s+\S+\s+|-[a-zA-Z]+\s+\S+\s+\S+\s+)`,
+  String.raw`sqlplus\s+(?:-\S+\s+)*[^\s/@"'-][^\s/@"']*\/`,
+  String.raw`smbclient\s+[^\s-]\S*\s+`,
+  String.raw`net\s+use\s+(?:\S+\s+){1,2}\/user:\S+\s+`,
+  String.raw`vault\s+login\s+${GENERATED_WORD}`,
+  String.raw`ngrok\s+(?:config\s+add-)?authtoken\s+`,
+  String.raw`(?:poetry|composer)\s+config\s+(?:--\S+\s+)*(?:http-basic\.\S+\s+\S+|pypi-token\.\S+)\s+`,
+  String.raw`(?:aws\s+configure\s+set|(?:npm|yarn|wp)\s+config\s+set|setx|setenv|set\s+-[a-z]*x[a-z]*)\s+(?:\S*[/:])?${secretName()}\s+`,
+  String.raw`SetEnvironmentVariable\(\s*["']${secretName()}["']\s*,\s*`,
+  String.raw`echo\s+(?:-n\s+)?(?=["']?[^\s"']{1,400}["']?\s*\|[^\n;|]{0,200}?--(?:password-stdin|with-token)\b)`,
+].join("|")})|-(?<=\s-)(?:(?:src|dest)?(?:store|key)pass\s+|Dsonar\.login=)|<<<\s*${GENERATED_WORD}|\.\/[\w.-]{1,64}[^\n;|]{0,200}?\s(?:-p|--key|--pwd)\s+${GENERATED_WORD})`;
 /** To a closing quote named by the backreference `quote`, spaces and the other quote included. */
 const quotedTo = (quote: string): string => String.raw`(?!\[ISY_REDACTED|\$)(?:(?!${quote})[^\n]){1,400}(?=${quote})`;
 
@@ -265,7 +301,7 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // close, since `bot<token>/getUpdates` is a placeholder.
     type: "assignment",
     pattern: new RegExp(
-      String.raw`(\b${anyCase("password")}\s+'|\b${anyCase("identified")}\s+${anyCase("by")}\s+["']|\bmachine\s+\S{1,256}\s+login\s+\S{1,256}\s+password\s+["']?)${SECRET_VALUE}` +
+      String.raw`(\b${anyCase("password")}\s+(?:${anyCase("for")}\s+\S{1,256}\s*=\s*)?'|\b${anyCase("identified")}\s+(?:${anyCase("with")}\s+\S{1,64}\s+)?${anyCase("by")}\s+["']|\bmachine\s+\S{1,256}\s+login\s+\S{1,256}\s+password\s+["']?)${SECRET_VALUE}` +
         String.raw`|(<${secretName()}>)${SECRET_VALUE}(?=<\/)`,
       "g",
     ),
@@ -304,14 +340,10 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: `$1${marker("assignment")}`,
   },
   {
+    // One pass for both spellings, as each is a scan of every word for every client.
     type: "assignment",
-    pattern: new RegExp(String.raw`\b(${PASSWORD_FLAG}(["']))${quotedTo(String.raw`\2`)}`, "g"),
-    replacement: `$1${marker("assignment")}`,
-  },
-  {
-    type: "assignment",
-    pattern: new RegExp(String.raw`\b(${PASSWORD_FLAG}["']?)(?!\[ISY_REDACTED)[^\s"'$][^\s"']*`, "g"),
-    replacement: `$1${marker("assignment")}`,
+    pattern: new RegExp(String.raw`(${PASSWORD_FLAG})(?:(["'])${quotedTo(String.raw`\2`)}|(["']?)(?!\[ISY_REDACTED|(?<=\s)-)[^\s"'$][^\s"']*)`, "g"),
+    replacement: `$1$2$3${marker("assignment")}`,
   },
 ];
 
