@@ -381,6 +381,45 @@ test("one of these words alone, spaced from a plain word, names nothing: test ou
   }
 });
 
+test("a NAME_KEY goes when what it holds looks generated, and stays when it holds a name", () => {
+  const m = marker("assignment");
+  const value = "hG7xQ2pLm9Wz4Rt8";
+  for (const name of ["STRIPE_KEY", "APP_KEY", "ENCRYPTION_KEY", "SIGNING_KEY", "MASTER_KEY", "OPENAI_KEY", "ANTHROPIC_KEY", "SENDGRID_KEY", "HMAC_KEY", "SUPABASE_SERVICE_ROLE_KEY", "KEY"]) {
+    const cut: [string, string][] = [
+      [`${name}=${value}`, `${name}=${m}`],
+      [`export ${name}=${value}`, `export ${name}=${m}`],
+      [`${name}: ${value}`, `${name}: ${m}`],
+      [`"${name}": "${value}"`, `"${name}": "${m}"`],
+      [`kubectl create secret generic s --from-literal=${name}=${value}`, `kubectl create secret generic s --from-literal=${name}=${m}`],
+      [`process.env.${name} = "${value}"`, `process.env.${name} = "${m}"`],
+    ];
+    for (const [text, expected] of cut) {
+      assert.equal(redactOne(text), expected);
+      assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+    }
+  }
+  assert.equal(redactOne("APP_KEY=base64:Zq8vR2mK9xLpWq7="), `APP_KEY=${m}`);
+
+  for (const text of [
+    "SORT_KEY=name",
+    "SORT_KEY=created_at",
+    "PRIMARY_KEY=customer_identifier",
+    "CACHE_KEY=organizationSettings",
+    "SSH_KEY=~/.ssh/id_ed25519",
+    "PARTITION_KEY: $TENANT_ID",
+    "APP_KEY=${APP_KEY}",
+    `FOREIGN_KEY = "organization_identifier"`,
+    "MONKEY=hG7xQ2pLm9Wz4Rt8",
+    "sort_key=hG7xQ2pLm9Wz4Rt8",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+
+  // A field holds it the same as a line of text does.
+  const { input } = throughCall("mcp__x__deploy", { env: { STRIPE_KEY: value, SORT_KEY: "created_at_desc" } }, "ok");
+  assert.deepEqual(input.env, { STRIPE_KEY: m, SORT_KEY: "created_at_desc" });
+});
+
 test("masks what an Authorization or Cookie header carries, whatever its scheme or length", () => {
   const auth = marker("authorization");
   const bearer = marker("bearer_token");

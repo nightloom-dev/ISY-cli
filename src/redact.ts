@@ -95,6 +95,13 @@ const INNER_DOLLAR_OR_PAREN = String.raw`[$()](?=[^\s"'{}[\]<>])`;
 const LITERAL_DOLLAR = String.raw`\$(?=[^\s"]{0,256}\d)(?![{(])(?![A-Z_][A-Z0-9_]*\b)`;
 const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?<=")(?:${VALUE_CHAR}|${LITERAL_DOLLAR})(?:[^\s"$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=')(?:${VALUE_CHAR}|\$)(?:[^\s'$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=[\w.-]=)(?!=|${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}|[{}[\]<>](?=[^\s"'])){7,}|(?!${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}){7,}|${VALUE_CHAR}{8,})`;
 
+/** What nobody types by hand: twelve letters and digits in a row, both among them, as `documentation` and `202410201230` are not. */
+const GENERATED_RUN = String.raw`(?=[A-Za-z]{0,11}\d)(?=\d{0,11}[A-Za-z])[A-Za-z0-9]{12}`;
+const GENERATED = new RegExp(GENERATED_RUN);
+/** `STRIPE_KEY`, `HMAC_KEY`: as often a sort order as a secret (`SORT_KEY=created_at`), so what it holds has to look generated too. */
+const KEY_NAME = String.raw`(?:[A-Z][A-Z0-9_]{0,64}_)?KEY`;
+const KEY_FIELD = new RegExp(`^${KEY_NAME}$`);
+
 /**
  * `curl -u admin:…`, its flag alone or last among others (`-fsSLu`). What precedes
  * the flag is capped, as every `curl` starts a new scan of the rest of its line.
@@ -234,6 +241,11 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // and what starts with a dash is the next flag.
     type: "assignment",
     pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.-])(-${secretName()})([ \t]+)(["']?)(?!-)${SECRET_VALUE}`, "g"),
+    replacement: `$1$2$3${marker("assignment")}`,
+  },
+  {
+    type: "assignment",
+    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_])(${KEY_NAME})(["']?\s*[=:]\s*)(["']?)(?=[^\s"']{0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
     replacement: `$1$2$3${marker("assignment")}`,
   },
   {
@@ -906,7 +918,7 @@ function scrubbed(text: string, context: RedactContext, key?: string): string {
 
 function redactValue(value: unknown, context: RedactContext, key?: string): unknown {
   if (typeof value === "string") {
-    if (key && SENSITIVE_KEY.test(key) && value.length >= MIN_SENSITIVE_VALUE) {
+    if (key && value.length >= MIN_SENSITIVE_VALUE && (SENSITIVE_KEY.test(key) || (KEY_FIELD.test(key) && GENERATED.test(value)))) {
       if (value.startsWith(`[${REDACTION_MARKER}`)) return value;
       count(context, "assignment", 1);
       return marker("assignment");
