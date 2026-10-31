@@ -1077,6 +1077,20 @@ test("a commit on a branch the session never worked on leaves it alone", async (
   assert.equal((await readState())[path]!.commits?.length, 2);
 });
 
+test("a shell call with no command to read keeps a commit on another branch", async () => {
+  const cwd = await newRepo("isy-commit-unread-");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  const path = await writeSession(cwd, "sess-unread", "left-pad");
+  await onBranch(path, "feat");
+  await commitFile(cwd, "own.txt");
+  await runCommit({ noUpload: true }, cwd);
+
+  await run("git", ["switch", "-q", "-c", "elsewhere", "main"], { cwd });
+  await appendTurn(path, "sess-unread", { type: "tool_use", id: "t-unread", name: "Bash", input: {} }, new Date().toISOString());
+  await commitFile(cwd, "README.md");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+});
+
 test("an upload from another checkout leaves a session on the branch its transcript names", async () => {
   const cwd = await newRepo("isy-commit-stamp-");
   await run("git", ["switch", "-q", "-c", "feat"], { cwd });

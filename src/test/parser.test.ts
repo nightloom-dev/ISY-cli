@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
+import { promisify } from "node:util";
 import { claudeAgent } from "../agents/claude.js";
 import { detectUnverifiedAssumption } from "../detectors.js";
 import {
@@ -20,6 +22,8 @@ import {
   withoutHeredocs,
 } from "../parser.js";
 import { subagentsOf } from "../subagents.js";
+
+const execFileAsync = promisify(execFile);
 
 function jsonl(records: unknown[]): string[] {
   return records.map((record) => JSON.stringify(record));
@@ -458,6 +462,142 @@ test("resolves a sed -i path against the directory the command ran in", () => {
   assert.deepEqual(shellEditPaths("cd pkg && sed -i 's/a/b/' a.ts", "/repo"), ["/repo/pkg/a.ts"]);
   assert.deepEqual(shellEditPaths("cd /elsewhere && sed -i 's/a/b/' a.ts", "/repo"), ["/elsewhere/a.ts"]);
   assert.deepEqual(shellEditPaths("cd $DIR && sed -i 's/a/b/' a.ts", "/repo"), ["a.ts"], "a cd it cannot follow");
+});
+
+test("a directory no filesystem could hold is no directory, so what is edited in it stays as typed", () => {
+  const long = "b".repeat(3000);
+  assert.deepEqual(shellEditPaths("sed -i x a.ts", `/${"a".repeat(4096)}`), ["a.ts"]);
+  assert.deepEqual(shellEditPaths(`cd /${"a".repeat(4096)} && sed -i x a.ts`, "/repo"), ["a.ts"]);
+  assert.deepEqual(shellEditPaths(`cd ${long} && cd ${long} && sed -i x a.ts`, "/repo"), ["a.ts"], "a chain of cd past it");
+  assert.deepEqual(shellEditPaths(`cd ${long} && cd ${long} && cd /back && sed -i x a.ts`, "/repo"), ["/back/a.ts"], "a cd that names a real one");
+  assert.deepEqual(shellEditPaths(`cd ${long} && sed -i x a.ts`, "/repo"), [`/repo/${long}/a.ts`], "under it");
+  const word = `${"../".repeat(2000)}a.ts`;
+  assert.deepEqual(shellEditPaths(`sed -i x ${word}`, "/repo"), [word], "a word past it");
+  assert.deepEqual(shellEditPaths(`cd ${"a/".repeat(1000)} && sed -i x ${long}/a.ts`, "/repo"), [`${long}/a.ts`], "a word that goes past it from there");
+});
+
+test("what one session's shell commands spell out is bounded over the whole transcript", () => {
+  const words = (record: number) => Array.from({ length: 100 }, (_, word) => `f${record}_${word}`).join(" ");
+  const records = Array.from({ length: 500 }, (_, index) => ({
+    ...assistant(`u${index}`, index === 0 ? null : `u${index - 1}`, [
+      { type: "tool_use", id: `t${index}`, name: "Bash", input: { command: `sed -i x ${words(index)}` } },
+    ]),
+    cwd: `/${"a".repeat(4090)}`,
+  }));
+  const session = parseLines(jsonl(records));
+  const chars = [...session.fileEdits.keys()].reduce((sum, path) => sum + path.length, 0);
+  assert.ok(session.fileEdits.size > 1000, `kept ${session.fileEdits.size}`);
+  assert.ok(chars <= 16 * 1024 * 1024, `spelled out ${chars} characters`);
+  assert.equal(session.meta.hasFileEdits, true);
+});
+
+test("a shell edit past what a session may spell out still counts as one, and only adds no path", () => {
+  // Words past what they may cost, for few bytes of command.
+  const spent = Array.from({ length: 300 }, (_, index) =>
+    assistant(`u${index}`, index === 0 ? null : `u${index - 1}`, [
+      { type: "tool_use", id: `t${index}`, name: "Bash", input: { command: `cat ${"a.ts ".repeat(1_000)}` } },
+    ]),
+  );
+  const session = parseLines(jsonl([
+    ...spent,
+    assistant("u300", "u299", [{ type: "tool_use", id: "t300", name: "Bash", input: { command: "sed -i x z.ts" } }]),
+  ]));
+  assert.equal(session.meta.hasFileEdits, true);
+  assert.equal(session.fileEdits.size, 0);
+  assert.equal(parseLines(jsonl([spent[0]])).meta.hasFileEdits, false, "the same look, under it");
+
+  assert.deepEqual(shellEditPaths("sed -i x z.ts", "/repo", { left: 8 }), []);
+  assert.deepEqual(shellReadPaths("cat z.ts", { left: 8 }), []);
+  assert.deepEqual(shellEditPaths("sed -i x z.ts", "/repo", { left: 1000 }), ["/repo/z.ts"]);
+});
+
+test("a command too long to read counts as a write nobody can name, and nothing reads it after", () => {
+  for (const command of [`cat ${"a".repeat(10 * 1024 * 1024)}`, `cat "${"a".repeat(10 * 1024 * 1024)}"`]) {
+    const session = parseLines(jsonl([
+      assistant("u0", null, [{ type: "tool_use", id: "t0", name: "Bash", input: { command } }]),
+    ]));
+    assert.equal(session.meta.hasFileEdits, true);
+    assert.deepEqual(session.toolUses[0]!.input, {});
+    assert.equal(session.filesRead.size, 0);
+  }
+});
+
+test("a long list of edits to a file already edited goes in whole", () => {
+  const edit = { old_string: "a", new_string: "b" };
+  const session = parseLines(jsonl([
+    assistant("u0", null, [
+      { type: "tool_use", id: "t0", name: "Edit", input: { file_path: "a.ts", ...edit } },
+      { type: "tool_use", id: "t1", name: "MultiEdit", input: { file_path: "a.ts", edits: Array.from({ length: 200_000 }, () => edit) } },
+    ]),
+  ]));
+  assert.equal(session.fileEdits.get("a.ts")?.length, 200_001);
+});
+
+test("a transcript of 50 MB built to cost the most goes through a gigabyte of heap in seconds", async () => {
+  const source = `
+    import { parseLines } from "./src/parser.ts";
+    const MB = 1024 * 1024;
+    const size = 50 * MB;
+    const lineWith = (index, cwd, content) => JSON.stringify({
+      type: "assistant", uuid: "u" + index, cwd, message: { role: "assistant", content },
+    });
+    const record = (index, cwd, command) =>
+      lineWith(index, cwd, [{ type: "tool_use", id: "t" + index, name: "Bash", input: { command } }]);
+    const filled = (line) => Array.from({ length: Math.ceil(size / line(0).length) }, (_, index) => line(index));
+    const dir = "/" + "a".repeat(4000);
+    const words = (name) => Array.from({ length: 100 }, (_, word) => name + word).join(" ");
+    const longest = (unit) => unit.repeat(Math.floor((MB - 32) / unit.length));
+    const shapes = {
+      "a long directory and words of its own on every record": () => filled((index) => record(index, dir, "sed -i x " + words("r" + index + "_"))),
+      "a long directory on every word of the longest commands": () => filled((index) => record(index, dir, "sed -i x " + longest("a "))),
+      "a long directory followed back and forth": () => filled((index) => record(index, dir, longest("cd a;cd ..;") + "sed -i x a")),
+      "a path of nothing but parents": () => filled((index) => record(index, "/r", "sed -i x " + longest("../") + "a")),
+      "no directory, and a word for every two bytes": () => filled((index) => record(index, undefined, "sed -i x " + longest("a "))),
+      "a heredoc of short lines": () => filled((index) => record(index, "/r", "sed -i x a\\ncat <<E\\n" + longest("ab\\n"))),
+      "one word as long as the transcript": () => [record(0, "/r", "sed -i x " + "a".repeat(size))],
+      "records of nothing but empty blocks": () => filled((index) => lineWith(index, "/r", Array(MB / 8).fill({}))),
+      "one line of nothing but empty blocks": () => [lineWith(0, "/r", Array(Math.floor(size / 3)).fill({}))],
+      "one array of nothing but numbers": () => ['{"type":"user","x":[' + "1,".repeat(40 * MB) + "1]}"],
+    };
+    for (const [name, build] of Object.entries(shapes)) {
+      const lines = build();
+      const started = performance.now();
+      const session = parseLines(lines);
+      if (!session.meta.hasFileEdits) throw new Error(name + ": no edit seen");
+      console.log(name, Math.round(performance.now() - started));
+    }
+  `;
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    ["--max-old-space-size=1024", "--import", "tsx", "--input-type=module", "-e", source],
+    { cwd: join(import.meta.dirname, "..", ".."), timeout: 300_000 },
+  );
+  const rows = stdout.trim().split("\n");
+  assert.equal(rows.length, 10, stdout);
+  for (const line of rows) {
+    const took = Number(line.slice(line.lastIndexOf(" ")));
+    assert.ok(took < 20_000, line);
+  }
+});
+
+test("repeated interpreter words cost a read of the line, not one for each word", () => {
+  for (const command of [
+    "node ".repeat(200_000),
+    `<< ${"node ".repeat(200_000)}`,
+    `${"node ".repeat(200_000)}<<`,
+    `${"node <\n".repeat(200_000)}`,
+    `python3 ${"python3.1.1 ".repeat(100_000)}`,
+  ]) {
+    const started = performance.now();
+    shellWrites(command);
+    const took = performance.now() - started;
+    assert.ok(took < 2000, `took ${took}ms on ${JSON.stringify(command.slice(0, 24))}`);
+  }
+  assert.equal(shellWrites(`python3 - <<'PY'\nopen('a','w')\nPY`), true);
+  assert.equal(shellWrites(`cd x && node <<'JS'\nx\nJS`), true);
+  assert.equal(shellWrites(`echo <<E\nx\nE\nnode a.js`), false, "the interpreter on another line");
+  assert.equal(shellWrites("node a.js <<< word"), true, "as a here-string has always read");
+  assert.equal(shellWrites("cat <<E node\nx\nE"), false, "behind the opener");
 });
 
 test("stops at a redirection so a heredoc write is not read as a lookup", () => {

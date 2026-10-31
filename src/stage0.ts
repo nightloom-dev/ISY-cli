@@ -61,15 +61,32 @@ function inTree(candidate: Candidate, cwd: string | undefined): boolean {
   return !looksAbsolute(maskPath(candidate.filePath, looksAbsolute(cwd) ? { cwd } : {}));
 }
 
+/**
+ * Calls, edits and files read past which stage 0 finds nothing. Its detectors hold
+ * each edit up to each read and each call, which is seconds here and hours at what
+ * 50 MB can hold, on the thread that serves requests. The largest of 1215 real
+ * sessions has 7600.
+ *
+ * ponytail: the session goes on with no findings. Make the detectors linear if real
+ * sessions come near this.
+ */
+const MOST_ITEMS = 20_000;
+
+function tooManyItems(session: ParsedSession): boolean {
+  let items = session.toolUses.length + session.filesRead.size;
+  for (const edits of session.fileEdits.values()) items += edits.length;
+  return items > MOST_ITEMS;
+}
+
 export function runStage0(session: ParsedSession): Stage0Result {
   const thinkingBlocks = session.meta.thinkingBlocks;
   const reason = eligibility(session);
 
-  if (reason) {
+  if (reason || tooManyItems(session)) {
     return {
       sessionId: session.sessionId,
-      eligible: false,
-      reason,
+      eligible: reason === undefined,
+      ...(reason && { reason }),
       thinkingBlocks,
       knownGapReachable: thinkingBlocks > 0,
       candidates: [],

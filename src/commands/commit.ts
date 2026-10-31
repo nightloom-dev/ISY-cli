@@ -188,7 +188,7 @@ function movesBranch(use: ToolUse): boolean {
 /** A call after which nobody can say what it left in the tree. */
 function leavesUnknown(use: ToolUse): boolean {
   const { command } = use.input;
-  if (use.name === "Bash" && typeof command === "string") return !shellOnlyLooks(command);
+  if (use.name === "Bash") return typeof command !== "string" || !shellOnlyLooks(command);
   return mayWrite(use.name, use.input) || (use.name.startsWith("mcp__") && !mcpOnlyReads(use.name));
 }
 

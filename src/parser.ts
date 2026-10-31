@@ -86,6 +86,8 @@ interface ParseState {
   delegated: Set<string>;
   /** Calls whose result counted the subagent's edits, whatever the count. */
   counted: Set<string>;
+  shell: Budget;
+  structures: Budget;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -118,6 +120,8 @@ function createState(): ParseState {
     delegatedEdits: false,
     delegated: new Set(),
     counted: new Set(),
+    shell: { left: SHELL_CHARS },
+    structures: { left: STRUCTURES },
   };
 }
 
@@ -196,7 +200,8 @@ function pushFileEdits(state: ParseState, use: ToolUse): void {
   }
 
   const existing = state.fileEdits.get(filePath);
-  if (existing) existing.push(...entries);
+  // One at a time, as spreading a long `edits` overflows the call's arguments.
+  if (existing) for (const entry of entries) existing.push(entry);
   else state.fileEdits.set(filePath, entries);
 }
 
@@ -469,9 +474,17 @@ function editsInPlace(bare: string): boolean {
   return (editor.endsWith("awk") ? AWK_IN_PLACE : IN_PLACE).test(called);
 }
 
-/** An interpreter fed a script on stdin: whatever the script writes, the command line cannot say. */
-const INTERPRETER_HEREDOC =
-  /(?:^|[\s;&|(])(?:python[0-9.]*|node|deno|bun|tsx|ruby|perl|php|bash|sh|zsh)\b[^\n]*<</;
+const INTERPRETER = /(?:^|[\s;&|(])(?:python[0-9.]*|node|deno|bun|tsx|ruby|perl|php|bash|sh|zsh)\b/;
+
+/**
+ * An interpreter fed a script on stdin: whatever the script writes, the command line
+ * cannot say. Looked for ahead of a line's last `<<`, because scanning on from every
+ * interpreter word to find one took 20 s over 200 KB of them.
+ */
+function feedsInterpreter(ran: string): boolean {
+  if (!ran.includes("<<")) return false;
+  return ran.split("\n").some((line) => INTERPRETER.test(line.slice(0, Math.max(line.lastIndexOf("<<"), 0))));
+}
 
 /**
  * Whether a shell command could have changed a file in the repository.
@@ -490,7 +503,7 @@ const INTERPRETER_HEREDOC =
  */
 export function shellWrites(command: string): boolean {
   const ran = withoutHeredocs(command);
-  if (INTERPRETER_HEREDOC.test(ran)) return true;
+  if (feedsInterpreter(ran)) return true;
 
   for (const segment of commandSegments(ran)) {
     const bare = withoutQuoted(segment);
@@ -581,7 +594,46 @@ function afterRevision(token: string): string {
   return token.slice(colon + 1);
 }
 
-export function shellReadPaths(command: string): string[] {
+/** The longest path a filesystem takes: a directory past it is none, however a record or a chain of `cd` spells it. */
+const PATH_MAX = 4096;
+
+/**
+ * What reading one session's shell may spend, in characters: its commands, and the
+ * paths they spell out. Every word of a command is joined to its directory, so two
+ * bytes of command cost a directory's length, and records repeat that as often as a
+ * transcript has room: no cap per command bounds it. Past this a command already seen
+ * to write still counts, and the rest count as writes nobody can name. The largest of
+ * 1215 real sessions spends 2.7 MB.
+ */
+const SHELL_CHARS = 16 * 1024 * 1024;
+/** What keeping a path costs besides its characters, so that short ones spend `SHELL_CHARS` too. */
+const PATH_COST = 64;
+/** The longest command read, against 39 KB in real sessions, and short of the 8 MB word that overflows the stack of the patterns reading it. */
+const COMMAND_CHARS = 1024 * 1024;
+
+/** What is left of a limit that holds over a whole session. */
+export interface Budget {
+  left: number;
+}
+
+/** Whether this much still fits the budget, which pays for it if so. */
+function spend(budget: Budget, amount: number): boolean {
+  if (budget.left < amount) return false;
+  budget.left -= amount;
+  return true;
+}
+
+/**
+ * `to` as seen from a directory. Nothing past `PATH_MAX`, where normalising is what
+ * costs, as it copies the path so far at each `..`, or past the budget.
+ */
+function pathFrom(dir: string | undefined, to: string, budget: Budget): string | undefined {
+  if (to.startsWith("/")) return to.length <= PATH_MAX && spend(budget, to.length) ? posix.normalize(to) : undefined;
+  if (dir === undefined || dir.length + to.length >= PATH_MAX || !spend(budget, dir.length + to.length)) return undefined;
+  return posix.join(dir, to);
+}
+
+export function shellReadPaths(command: string, budget: Budget = { left: SHELL_CHARS }): string[] {
   const paths: string[] = [];
 
   for (const segment of commandSegments(withoutHeredocs(command))) {
@@ -610,6 +662,7 @@ export function shellReadPaths(command: string): string[] {
       if (/^[./]+$/.test(path)) continue;
       if (!/\.[A-Za-z0-9]+$/.test(path) && !path.includes("/")) continue;
 
+      if (!spend(budget, path.length + PATH_COST)) return paths;
       paths.push(path.replace(/^\.\//, ""));
     }
   }
@@ -646,20 +699,19 @@ const AWK_VALUE_FLAG = /^(?:-[ivF]|--(?:include|assign|field-separator))$/;
  * still names no file to the detectors (`shellWrites` knows only that one was
  * written); a glob names files this cannot list.
  */
-export function shellEditPaths(command: string, cwd?: string): string[] {
-  return shellEditWords(command, cwd).filter((word) => !/[*?]/.test(word));
+export function shellEditPaths(command: string, cwd?: string, budget?: Budget): string[] {
+  return shellEditWords(command, cwd, budget).filter((word) => !/[*?]/.test(word));
 }
 
 /** As `shellEditPaths`, with a glob left in: to say what a command edits, `.env*` is as good as a file. */
-export function shellEditWords(command: string, cwd?: string): string[] {
+export function shellEditWords(command: string, cwd?: string, budget: Budget = { left: SHELL_CHARS }): string[] {
   const paths: string[] = [];
-  let dir = cwd;
+  let dir = cwd !== undefined && cwd.length <= PATH_MAX ? cwd : undefined;
 
   for (const segment of commandSegments(withoutHeredocs(command))) {
     if (/^\s*cd(?:\s|$)/.test(segment)) {
       const to = /^\s*cd\s+(\S+)\s*$/.exec(segment)?.[1]?.replace(/["']/g, "");
-      if (to?.startsWith("/")) dir = posix.normalize(to);
-      else dir = dir === undefined || to === undefined || /^[~$-]/.test(to) ? undefined : posix.join(dir, to);
+      dir = to === undefined || /^[~$-]/.test(to) ? undefined : pathFrom(dir, to, budget);
       continue;
     }
     const called = segment.replace(LEADING_WORDS, "");
@@ -698,8 +750,9 @@ export function shellEditWords(command: string, cwd?: string): string[] {
         continue;
       }
       if (token.startsWith("$") || /^[./]+$/.test(token)) continue;
-      if (dir === undefined || token.startsWith("~")) paths.push(token.replace(/^\.\//, ""));
-      else paths.push(token.startsWith("/") ? posix.normalize(token) : posix.join(dir, token));
+      const path = dir === undefined || token.startsWith("~") ? undefined : pathFrom(dir, token, budget);
+      if (!spend(budget, path === undefined ? token.length + PATH_COST : PATH_COST)) return paths;
+      paths.push(path ?? token.replace(/^\.\//, ""));
     }
   }
 
@@ -707,7 +760,7 @@ export function shellEditWords(command: string, cwd?: string): string[] {
 }
 
 function pushShellEdits(state: ParseState, use: ToolUse, command: string, cwd: unknown): void {
-  for (const filePath of shellEditPaths(command, asString(cwd))) {
+  for (const filePath of shellEditPaths(command, asString(cwd), state.shell)) {
     const edit: FileEdit = {
       toolUseId: use.id,
       tool: use.name,
@@ -751,9 +804,17 @@ function pushToolUse(
   }
   if (LOOKUP_TOOLS.has(name)) pushLookup(state, use);
   if (name === "Bash" && typeof use.input.command === "string") {
-    for (const path of shellReadPaths(use.input.command)) state.filesRead.add(path);
-    if (shellWrites(use.input.command)) state.shellWrote = true;
-    pushShellEdits(state, use, use.input.command, record.cwd);
+    const { command } = use.input;
+    if (command.length <= COMMAND_CHARS && spend(state.shell, command.length)) {
+      for (const path of shellReadPaths(command, state.shell)) state.filesRead.add(path);
+      if (shellWrites(command)) state.shellWrote = true;
+      pushShellEdits(state, use, command, record.cwd);
+    } else {
+      // Not read, which does not say nothing was written. The call keeps no command,
+      // so that nothing after this reads it either.
+      state.opaqueWrite = true;
+      use.input = {};
+    }
   }
 
   if (mayWrite(name, use.input)) state.opaqueWrite = true;
@@ -864,12 +925,43 @@ function committedFromShell(state: ParseState): boolean {
  */
 const REQUEST_RECORD_TYPES = new Set(["api-request", "api-request-shape", "api-request-blob"]);
 
+/**
+ * The longest line parsed, against 4.5 MB in 1215 real sessions. Past some 200 MB of
+ * `1,1,1,` in one array, parsing it ends the process, which nothing can catch.
+ */
+const LINE_CHARS = 64 * 1024 * 1024;
+
+/**
+ * How many objects and arrays one session may hold. Parsed, the three bytes of `{},`
+ * are 56 and with what is kept of the block 200, so a small upload that inflates to
+ * nothing else outgrows any heap, and it has to be counted before it is parsed.
+ *
+ * ponytail: one flat count, 2.3 million in the largest of 1215 real sessions (276 MB).
+ * What comes past it, or past `LINE_CHARS`, reads as a write nobody can name, and is
+ * not read. Raise it if sessions of 500 MB turn up.
+ */
+const STRUCTURES = 4_000_000;
+
+function structuresIn(line: string): number {
+  let count = 0;
+  for (const opening of ["{", "["]) {
+    for (let at = line.indexOf(opening); at !== -1; at = line.indexOf(opening, at + 1)) count += 1;
+  }
+  return count;
+}
+
 function pushLine(state: ParseState, line: string): void {
   state.skipped.lines += 1;
 
   const trimmed = line.trim();
   if (trimmed.length === 0) {
     state.skipped.blank += 1;
+    return;
+  }
+
+  if (trimmed.length > LINE_CHARS || !spend(state.structures, structuresIn(trimmed))) {
+    state.skipped.malformedJson += 1;
+    state.opaqueWrite = true;
     return;
   }
 

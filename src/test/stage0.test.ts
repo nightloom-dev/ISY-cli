@@ -110,6 +110,19 @@ test("accepts a long session that edited a file", () => {
   assert.equal(runStage0(session).eligible, true);
 });
 
+test("a session too long to hold its edits up to each other finds nothing, and is not rejected for it", () => {
+  const session = (calls: number) => parseLines([JSON.stringify(assistant("u0", null, [
+    ...Array.from({ length: calls }, (_, index) => ({ type: "tool_use", id: `r${index}`, name: "Read", input: { file_path: "a.ts" } })),
+    { type: "tool_use", id: "t0", name: "Bash", input: { command: "git reset --hard" } },
+    { type: "tool_use", id: "t1", name: "Bash", input: { command: "sed -i x a.ts" } },
+  ]))]);
+  assert.ok(runStage0(session(1000)).candidates.length > 0);
+  const result = runStage0(session(20_000));
+  assert.equal(result.eligible, true);
+  assert.equal(result.reason, undefined);
+  assert.deepEqual(result.candidates, []);
+});
+
 test("recognises test files by path and by name", () => {
   for (const path of [
     "/r/tests/thing.py",
