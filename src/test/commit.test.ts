@@ -1206,6 +1206,50 @@ test("a tag named like the branch does not change the branch's name", async () =
   assert.equal(metadata.metadata.branch, "release");
 });
 
+test("a redaction pattern that matches a name does not hide the session from the commit", async () => {
+  await writeConfig({ token: "t", apiBaseUrl: baseUrl, extraRedactPatterns: ["acme"] });
+
+  // Standing on a branch the pattern matches, with nothing else to go on.
+  const idle = await newRepo("isy-commit-pattern-idle-");
+  await run("git", ["switch", "-q", "-c", "fix/acme-login"], { cwd: idle });
+  const idlePath = await writeSession(idle, "sess-idle", "left-pad");
+  await onBranch(idlePath, "fix/acme-login");
+  await commitFile(idle, "human.txt");
+  assert.equal((await runCommit({ noUpload: true }, idle)).skipped, undefined);
+  assert.equal((await readState())[idlePath]!.branch, "fix/acme-login");
+
+  // A row an upload stamped holds the name as it went up.
+  await writeFile(sessionStatePath(), `${JSON.stringify({ [idlePath]: { branch: "fix/[ISY_REDACTED:custom]-login" } })}\n`);
+  await commitFile(idle, "human-again.txt");
+  assert.equal((await runCommit({ noUpload: true }, idle)).skipped, undefined);
+
+  // An edit to a file the pattern matches, committed on a new branch by a human.
+  const edited = await newRepo("isy-commit-pattern-edit-");
+  const editedPath = await writeSession(edited, "sess-edited", "left-pad");
+  await appendTurn(editedPath, "sess-edited", {
+    type: "tool_use", id: "t-edit", name: "Edit",
+    input: { file_path: join(edited, "src/acme/x.ts"), old_string: "a", new_string: "b" },
+  }, OLD);
+  await onBranch(editedPath, "main");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd: edited });
+  await commitFile(edited, "src/acme/x.ts");
+  assert.equal((await runCommit({ noUpload: true }, edited)).skipped, undefined);
+
+  // And one made through the shell.
+  const shelled = await newRepo("isy-commit-pattern-shell-");
+  const shelledPath = await writeSession(shelled, "sess-shelled", "acme-lib");
+  await appendTurn(shelledPath, "sess-shelled", shell("t-sed", "sed -i 's/a/b/' acme.txt"), OLD);
+  await onBranch(shelledPath, "main");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd: shelled });
+  await commitFile(shelled, "acme.txt");
+  const report = await runCommit({ noUpload: true }, shelled);
+  assert.equal(report.skipped, undefined);
+
+  // Telling sessions apart saw the names, and what it reports went through the pattern.
+  assert.ok(report.candidates.length > 0);
+  assert.ok(!JSON.stringify(report.candidates).includes("acme"));
+});
+
 test("a rebase counts as the branch it rebases, not as no branch at all", async () => {
   const cwd = await newRepo("isy-commit-rebase-");
   await run("git", ["switch", "-q", "-c", "topic"], { cwd });
