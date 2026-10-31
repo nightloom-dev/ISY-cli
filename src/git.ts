@@ -123,7 +123,7 @@ export async function branchExists(cwd: string, name: string): Promise<boolean> 
 
 /** The files HEAD changed, from the top of the repository wherever `cwd` is. */
 export async function filesInHead(cwd: string): Promise<string[]> {
-  const files = await git(cwd, ["show", "-z", "--format=", "--name-only", "--no-renames", "HEAD"]);
+  const files = await git(cwd, ["show", "-z", "--format=", "--name-only", "--no-renames", "HEAD", "--"]);
   return files ? files.split("\0").filter(Boolean) : [];
 }
 

@@ -1186,6 +1186,18 @@ test("a mark says nothing of another commit to its files, or of a merge that bri
   assert.equal((await readState())[path]!.branch, "feat");
 });
 
+test("a file named HEAD does not cost a commit the list of what it holds", async () => {
+  const cwd = await newRepo("isy-commit-named-head-");
+  await commitFile(cwd, "HEAD");
+  const path = await writeSession(cwd, "sess-named-head", "left-pad");
+  await onBranch(path, "main");
+
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  await commitFile(cwd, "src/f0.ts");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  assert.equal((await readState())[path]!.branch, "feat");
+});
+
 test("a session in a subdirectory is matched against the commit from the top of the repository", async () => {
   const top = await realpath(await newRepo("isy-commit-carried-sub-"));
   await mkdir(join(top, "pkg"));
