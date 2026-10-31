@@ -908,6 +908,7 @@ test("a secret's name stays one through its value, its environment and its versi
     "secretOld",
     "tokenValue",
     "accessToken2",
+    "apiKey2",
   ]) {
     assert.equal(redactOne(`${name}=${value}`), `${name}=${masked}`, name);
     assert.equal(redactOne(`${name}: "${value}"`), `${name}: "${masked}"`, name);
@@ -950,6 +951,7 @@ test("what is said about a secret still ends in a word of its own", () => {
     "klend-repay-token2022",
     "token0",
     "token1",
+    "uniswapV2_token0",
     "oauth2",
     "password2",
   ]) {
@@ -2510,6 +2512,15 @@ test("every rule gets through text shaped almost like what it matches", () => {
     fill(`${"s".repeat(1_000)}Token=(`),
     fill(`token${" ".repeat(1_000)}=(`),
     fill(`token=${" ".repeat(1_000)}(`),
+    fill("token1"),
+    `-${fill("token1")}`,
+    `-${fill("aToken1")} value`,
+    fill("aToken1="),
+    `${fill("token1")}=`,
+    `${fill("aA")}=`,
+    `${"A".repeat(200_000)}=`,
+    `${"a".repeat(200_000)}A=`,
+    fill(`${"a".repeat(1_000)}=`),
   ];
   for (const text of shapes) {
     for (const rule of BUILTIN_RULES) {
@@ -2519,6 +2530,14 @@ test("every rule gets through text shaped almost like what it matches", () => {
       assert.ok(took < 1000, `${rule.pattern.source.slice(0, 30)} took ${Math.round(took)}ms on ${text.slice(0, 12)}…`);
     }
   }
+  const started = performance.now();
+  redactLines([JSON.stringify({ [fill("token1")]: "aB3dE6gH9jK2mN5p" })]);
+  assert.ok(performance.now() - started < 1000);
+});
+
+test("the rules stay small enough for a commit to compile them", () => {
+  const size = BUILTIN_RULES.reduce((sum, rule) => sum + rule.pattern.source.length, 0);
+  assert.ok(size < 18_000, `${size} characters of pattern`);
 });
 
 test("a credential's name is looked for from its separator, so a word with none costs one scan", () => {

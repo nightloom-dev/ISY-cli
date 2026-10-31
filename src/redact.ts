@@ -35,24 +35,21 @@ function anyCase(source: string): string {
  * `DB_PWD`, `jdbc.pwd`, `Uid=sa;Pwd=…`, and `Pwd=…` as only a connection string spells it.
  */
 const SECRET_WORD = [
-  anyCase("password|passwd|passphrase|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|account[-_]?key|credentials?|authorization|auth|cookie"),
+  anyCase("pass(?:word|wd|phrase)|secret|token|(?:api|private|access|account)[-_]?key|credentials?|auth(?:orization)?|cookie"),
   `(?:(?<![A-Za-z0-9])|(?<=[a-z0-9])(?<![bB][yY])(?=[A-Z]))${anyCase("pass")}`,
   `(?:(?<=[;_]|[A-Za-z0-9][.-])|(?<=[a-z0-9])(?=[A-Z]))${anyCase("pwd")}`,
   "(?<![A-Za-z0-9])Pwd",
 ].join("|");
 
 /** What is still the secret itself: its value, and the environment it is for. */
-const SAME_SECRET = ["value", "prod", "production", "dev", "staging", "stage", "test", "live", "old", "new", "local"];
-const AFTER_SEPARATOR = String.raw`[-_](?:${anyCase(SAME_SECRET.join("|"))})`;
-const AS_HUMP = SAME_SECRET.map((word) => word[0]!.toUpperCase() + anyCase(word.slice(1))).join("|");
-const KEY_OR_BASE = anyCase("(?:[-_]?key)?(?:[-_]?base)?");
+const SAME_SECRET = "value|prod(?:uction)?|dev|stag(?:e|ing)|test|live|old|new|local";
+const KEY_OR_BASE = "(?:[-_]?key)?(?:[-_]?base)?";
 /** Its version too, short of a year: `token_2022` names a chain's program and holds nothing. */
 const VERSION = "[0-9]{1,3}";
 /** `TOKEN_PROD`, `secret-old`, `API_KEY_2`. */
-const PLAIN_TAIL = String.raw`${KEY_OR_BASE}(?:${AFTER_SEPARATOR}){0,2}(?:[-_]${VERSION})?`;
-/** `tokenValue`, `apiKeyProd`, `secretOld2`. */
-const HUMP_TAIL = String.raw`${KEY_OR_BASE}(?:${AFTER_SEPARATOR})?(?:${AS_HUMP})(?:[-_]?${VERSION})?`;
-const ANY_TAIL = `${PLAIN_TAIL}|${HUMP_TAIL}`;
+const PLAIN_TAIL = anyCase(`${KEY_OR_BASE}(?:[-_](?:${SAME_SECRET}))?(?:[-_]${VERSION})?`);
+/** `tokenValue`, `apiKeyProd`, and `accessToken2`, as `token0` and `oauth2` are no secrets. The cap keeps a run of `token1` linear. */
+const HUMP_TAIL = anyCase(`${KEY_OR_BASE}(?:[-_]?(?:${SAME_SECRET}))?`) + `(?:(?:[-_]|(?<=[a-z0-9][A-Z][A-Za-z0-9]{0,64}))${VERSION})?`;
 
 /**
  * A name that holds a secret: one of the words, wherever it sits in an
@@ -63,19 +60,13 @@ const ANY_TAIL = `${PLAIN_TAIL}|${HUMP_TAIL}`;
  * `PASSWORD_FILE` turn up in a real corpus as often as the secrets do, and none of
  * them is one.
  */
-function secretName(atWord = "", tail = ANY_TAIL): string {
+function secretName(atWord = "", tail = HUMP_TAIL): string {
   // From the front this runs at every character of a word, so the letters the words start with go first.
-  return String.raw`[A-Za-z0-9_.-]*?(?=[aAcCpPsStT])${atWord}(?:${SECRET_WORD})(?:${tail})(?![A-Za-z0-9_.-])`;
+  return String.raw`[A-Za-z0-9_.-]*?(?=[aAcCpPsStT])${atWord}(?:${SECRET_WORD})${tail}(?![A-Za-z0-9_.-])`;
 }
 
-/** The word glued to what came before, but not as a camelCase hump. */
-const NOT_AT_HUMP = "(?!(?<=[a-z0-9])[A-Z])";
-/**
- * `adminPassword`, `_authToken`, `tokenValue`: as often a variable in code as a key in
- * a file. A version may follow only such a word with no separator (`accessToken2`),
- * as `token0` and `oauth2` are no secrets.
- */
-const CAMEL_NAME = `(?:${secretName("(?<=[a-z0-9])(?=[A-Z])", `${ANY_TAIL}|${KEY_OR_BASE}${VERSION}`)}|${secretName(NOT_AT_HUMP, HUMP_TAIL)})`;
+/** `adminPassword`, `_authToken`, `tokenValue`: as often a variable in code as a key in a file, and told by a hump. */
+const CAMEL_NAME = secretName() + "(?<=[a-z0-9][A-Z][A-Za-z0-9_.-]*)";
 /** `accessToken: …`, which a value in no quotes leaves to be a type as often as data. */
 const CAMEL_ENDING = String.raw`[A-Za-z0-9_.-]*?(?<=[a-z0-9])(?:Token|Secret|Password)`;
 
@@ -87,7 +78,8 @@ const CAMEL_ENDING = String.raw`[A-Za-z0-9_.-]*?(?<=[a-z0-9])(?:Token|Secret|Pas
  * takes its `=` with no space.
  */
 const NOT_SAID_IN_PASSING = String.raw`(?!PASS:[ \t]|(?:${anyCase("pass|auth|credentials?|cookie")})["']?\s*[=:]\s+(?!["'])[^\d\s]*(?:\s|$))`;
-const PLAIN_NAME = NOT_SAID_IN_PASSING + secretName(NOT_AT_HUMP, PLAIN_TAIL);
+/** The word glued to what came before, but not as a camelCase hump. */
+const PLAIN_NAME = NOT_SAID_IN_PASSING + secretName("(?!(?<=[a-z0-9])[A-Z])", PLAIN_TAIL);
 
 const VALUE_CHAR = String.raw`[^\s"'{}()[\]<>$]`;
 /**
@@ -323,9 +315,10 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // A camelCase name counts where it is plainly data — with a quoted value
     // (`accessToken: "…"`), as `name=value` with no space, as `.npmrc` writes
     // `_authToken=`, or as a log prints one when what it holds looks generated
-    // (`accessToken: aB3…`) — and not in `adminPassword = someVariable`.
+    // (`accessToken: aB3…`) — and not in `adminPassword = someVariable`. One look for
+    // `=` and `:`, as a commit compiles every copy of a name in here again.
     type: "assignment",
-    pattern: new RegExp(String.raw`(${afterName(CAMEL_NAME, "", "=")}|${afterName(CAMEL_NAME, CLOSED, ":")}\s*["']|${beforeQuoted(CAMEL_NAME)}|${afterName(CAMEL_ENDING, "", ":")}[ \t]+(?=[^\s"']{0,256}?${GENERATED_RUN}))${SECRET_VALUE}`, "g"),
+    pattern: new RegExp(String.raw`(${afterName(CAMEL_NAME, String.raw`(?:(?=[=])|${CLOSED}(?=:))`, "[=:]")}(?:(?<==)|\s*["'])|${beforeQuoted(CAMEL_NAME)}|${afterName(CAMEL_ENDING, "", ":")}[ \t]+(?=[^\s"']{0,256}?${GENERATED_RUN}))${SECRET_VALUE}`, "g"),
     replacement: `$1${marker("assignment")}`,
   },
   {
@@ -381,7 +374,7 @@ export const BUILTIN_RULES: RedactionRule[] = [
 ];
 
 /** A JSON key is data, never code, so any spelling of a secret's name counts. */
-const SENSITIVE_KEY = new RegExp(`^(?:${secretName()}|${CAMEL_NAME})$`);
+const SENSITIVE_KEY = new RegExp(`^${secretName()}$`);
 const MIN_SENSITIVE_VALUE = 8;
 const EDIT_INPUT_FIELDS = ["content", "old_string", "new_string", "new_source"];
 
