@@ -538,6 +538,31 @@ test("a session counts as editing files however the files were edited", () => {
   assert.equal(hasEdits(assistant("a", null, [{ type: "text", text: "nothing to do" }])), false);
 });
 
+test("a session that committed counts as editing files, however the files changed", () => {
+  const call = (id: string, command: string) =>
+    assistant(id, null, [{ type: "tool_use", id: `toolu_${id}`, name: "Bash", input: { command } }]);
+  const hasEdits = (...records: unknown[]) => parseLines(jsonl(records)).meta.hasFileEdits;
+
+  for (const command of ["gofmt -w . && git add . && git commit -m x", "git -C app commit -am x", "npm run format; git commit"]) {
+    assert.equal(hasEdits(call("a", command)), true, command);
+  }
+
+  for (const command of [
+    "git status",
+    "git log --grep commit",
+    "grep -rn 'git commit' .",
+    "echo \"git commit\"",
+    "cat <<'EOF'\ngit commit -m x\nEOF",
+    "npm --prefix tools/commit test",
+  ]) {
+    assert.equal(hasEdits(call("a", command)), false, command);
+  }
+
+  // Nothing to commit, or a hook that said no: it put nothing anywhere.
+  const failed = { ...toolResult("b", "a", "toolu_a"), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_a", is_error: true, content: "nothing to commit" }] } };
+  assert.equal(hasEdits(call("a", "git commit -m x"), failed), false);
+});
+
 test("counts reasoning only when there is text in it", () => {
   const session = parseLines(jsonl([
     assistant("a", null, [{ type: "thinking", thinking: "", signature: "EqMock==" }]),

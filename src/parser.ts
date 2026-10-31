@@ -785,6 +785,23 @@ function delegatedUnseen(state: ParseState): boolean {
 }
 
 /**
+ * Whether the agent ran a commit: what it put on a branch is its work however the
+ * files got there, and a formatter, a generator or a script writes nothing
+ * `shellWrites` can read. A call that failed committed nothing.
+ */
+function committedFromShell(state: ParseState): boolean {
+  return state.toolUses.some((use) => {
+    const { command } = use.input;
+    return (
+      use.name === "Bash" &&
+      typeof command === "string" &&
+      use.result?.isError !== true &&
+      gitCommands(command).includes("commit")
+    );
+  });
+}
+
+/**
  * Records of what Claude Code sent to the API, not of what happened: a blob
  * repeats messages already in the session — tool calls and results included —
  * so reading its blocks counted every call it carried a second time.
@@ -924,13 +941,15 @@ function finish(state: ParseState): ParsedSession {
       // Not the same question as editToolUses > 0: a file written from the
       // shell counts, a call the parser cannot see into is "cannot tell", which
       // must not read as "edited nothing", and so is a subagent that says it
-      // edited, or whose work never came back to say.
+      // edited, or whose work never came back to say. So does a commit the agent
+      // ran, whatever changed the files in it.
       hasFileEdits:
         state.editToolUses > 0 ||
         state.shellWrote ||
         state.opaqueWrite ||
         state.delegatedEdits ||
-        delegatedUnseen(state),
+        delegatedUnseen(state) ||
+        committedFromShell(state),
       sidechainRecords,
     },
     skipped: state.skipped,
