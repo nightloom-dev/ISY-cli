@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
 import { claudeAgent } from "../agents/claude.js";
+import { detectUnverifiedAssumption } from "../detectors.js";
 import {
   commandSegments,
   mayWrite,
@@ -504,6 +505,23 @@ test("a command splits the way a shell would, not the way a regex does", () => {
   assert.deepEqual(commandSegments("find . -exec rm {} \\; && ls"), ["find . -exec rm {} \\; ", " ls"]);
   // At the end of a line it joins that line to the next, and here it is still where a segment ends.
   assert.deepEqual(commandSegments("a \\\nb"), ["a \\", "b"]);
+});
+
+test("a marker's colon is no revision's, so a masked path the shell read stays whole", () => {
+  const masked = "~/.claude/projects/[ISY_REDACTED:project]/memory/notes.md";
+  assert.deepEqual(shellReadPaths(`cat ${masked}`), [masked]);
+  assert.deepEqual(shellReadPaths(`git show main:${masked}`), [masked]);
+  assert.deepEqual(shellReadPaths("cat [ISY_REDACTED:a]/[ISY_REDACTED:b]/c.md"), ["[ISY_REDACTED:a]/[ISY_REDACTED:b]/c.md"]);
+  assert.deepEqual(shellReadPaths("git show main:src/a.ts"), ["src/a.ts"]);
+
+  const session = parseLines([
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: `cat ${masked}` } }] } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "x" }] } }),
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "Edit", input: { file_path: masked, old_string: "x", new_string: "y" } }] } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t2", content: "ok" }] } }),
+  ]);
+  assert.ok(session.filesRead.has(masked));
+  assert.deepEqual(detectUnverifiedAssumption(session), []);
 });
 
 test("a load path, a required library or a program named like an editor edits nothing", () => {

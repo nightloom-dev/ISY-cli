@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import { fileLines } from "./lines.js";
+import { REDACTION_MARKER } from "./mask-paths.js";
 import type {
   ContentBlock,
   FileEdit,
@@ -540,6 +541,13 @@ const IN_PLACE = /(?:^|\s)(?:-[a-zA-Z]*[iI]\S*|--in-place\S*)(?:\s|$)/;
 /** Tools whose first non-flag argument is a program, not a path. */
 const SCRIPTED = /^\s*(?:sudo\s+)?(?:sed|awk)\b/;
 
+/** `main:src/a.ts` names `src/a.ts`; the colon in a path's own marker names no revision. */
+function afterRevision(token: string): string {
+  let colon = token.lastIndexOf(":");
+  while (colon > 0 && token.endsWith(REDACTION_MARKER, colon)) colon = token.lastIndexOf(":", colon - 1);
+  return token.slice(colon + 1);
+}
+
 export function shellReadPaths(command: string): string[] {
   const paths: string[] = [];
 
@@ -564,7 +572,7 @@ export function shellReadPaths(command: string): string[] {
 
       // A glob stays one: `cat src/*.js` read every file it expanded to, and
       // `detectors.ts:samePath` matches it against the file edited.
-      const path = token.includes(":") ? token.slice(token.lastIndexOf(":") + 1) : token;
+      const path = afterRevision(token);
       // "/" and "." name no file, and "/" matches every path there is.
       if (/^[./]+$/.test(path)) continue;
       if (!/\.[A-Za-z0-9]+$/.test(path) && !path.includes("/")) continue;
