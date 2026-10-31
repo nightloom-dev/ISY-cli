@@ -74,6 +74,78 @@ test("masks Stripe secret keys, Slack and npm tokens, and an opaque bearer token
   assert.equal(redactOne("Bearer tokens travel in the Authorization header"), "Bearer tokens travel in the Authorization header");
 });
 
+test("masks a token by the prefix its service issues it under", () => {
+  const body = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4y5Z6a7B8c9D0e1F2";
+  const hex = "0123456789abcdef".repeat(4);
+  const m = marker("service_token");
+  const tokens = [
+    `glpat-${body.slice(0, 20)}`,
+    `gldt-${body.slice(0, 20)}`,
+    `xapp-1-A0123456789-1234567890123-${hex}`,
+    `hooks.slack.com/services/T00000000/B00000000/${body.slice(0, 24)}`,
+    `discord.com/api/webhooks/123456789012345678/${body}`,
+    `discordapp.com/api/webhooks/123456789012345678/${body}`,
+    `gsk_${body.slice(0, 52)}`,
+    `xai-${body}`,
+    `ya29.${body}`,
+    `1//0${body}`,
+    `whsec_${body.slice(0, 32)}`,
+    `SG.${body.slice(0, 22)}.${body.slice(0, 43)}`,
+    `key-${hex.slice(0, 32)}`,
+    `SK${hex.slice(0, 32)}`,
+    `shpat_${hex.slice(0, 32)}`,
+    `shpss_${hex.slice(0, 32)}`,
+    `dop_v1_${hex}`,
+    `hf_${body.slice(0, 34)}`,
+    `pypi-${body}`,
+    `rubygems_${hex.slice(0, 48)}`,
+    `dckr_pat_${body.slice(0, 27)}`,
+    `sbp_${hex.slice(0, 40)}`,
+    `vercel_${body.slice(0, 24)}`,
+    `ATATT3xFfGF0${body}`,
+    `lin_api_${body.slice(0, 40)}`,
+    `ntn_${body.slice(0, 46)}`,
+    `secret_${body.slice(0, 43)}`,
+    `figd_${body.slice(0, 40)}`,
+    `r8_${body.slice(0, 37)}`,
+    `sk_${hex.slice(0, 48)}`,
+    `AGE-SECRET-KEY-1${body.slice(0, 58).toUpperCase()}`,
+  ];
+  for (const token of tokens) {
+    const said = `your new key is ${token} (save it)`;
+    assert.equal(redactOne(said), `your new key is ${m} (save it)`);
+    assert.equal(redactOne(`your new key is ${m} (save it)`), `your new key is ${m} (save it)`, "a second pass changes nothing");
+  }
+  assert.equal(redactOne(`ghr_${body.slice(0, 36)}`), marker("github_token"));
+  // What is left is an id, which is public: a fal.ai key's, a Telegram bot's, a Discord bot's in base64.
+  for (const [id, rest] of [
+    ["12345678-1234-4123-8123-123456789abc", `:${hex.slice(0, 32)}`],
+    ["1234567890", `:AA${body.slice(0, 33)}`],
+    [body.slice(0, 24), `.${body.slice(0, 6)}.${body.slice(0, 38)}`],
+  ] as const) {
+    assert.equal(redactOne(`token ${id}${rest} here`), `token ${id}${m} here`);
+  }
+
+  for (const text of [
+    "hf_model_name",
+    "gsk_short",
+    "glob-pattern-with-a-very-long-name-here",
+    "key-value",
+    "key-0123456789",
+    "monkey-0123456789abcdef0123456789abcdef",
+    "secret_santa",
+    "vercel_deployment_configuration_file",
+    "r8_format",
+    "SG.example.com",
+    "see 1//comment here",
+    "ATATT",
+    "the-settings-page-component-a.module.the-settings-page-component-styles",
+    "123e4567-e89b-12d3-a456-426614174000",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+});
+
 test("masks a whole PEM private key block", () => {
   const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nabc\n-----END RSA PRIVATE KEY-----";
   assert.equal(redactOne(`before ${pem} after`), `before ${marker("private_key")} after`);

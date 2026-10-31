@@ -142,7 +142,7 @@ export const BUILTIN_RULES: RedactionRule[] = [
   },
   {
     type: "github_token",
-    pattern: /\b(?:ghp|gho|ghs|ghu)_[A-Za-z0-9]{36}\b/g,
+    pattern: /\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b/g,
     replacement: marker("github_token"),
   },
   {
@@ -175,6 +175,26 @@ export const BUILTIN_RULES: RedactionRule[] = [
     type: "npm_token",
     pattern: /\bnpm_[A-Za-z0-9]{36}\b/g,
     replacement: marker("npm_token"),
+  },
+  {
+    // One pass for all of them, as a rule each is one more scan of every string: GitLab, Slack,
+    // Discord, Groq, xAI, Google's OAuth, Stripe's webhooks, SendGrid, Mailgun, Twilio, Shopify,
+    // DigitalOcean, Hugging Face, PyPI, RubyGems, Docker, Supabase, Vercel, Atlassian, Linear,
+    // Notion, Figma, Replicate, ElevenLabs, age. A fal.ai key, and a Telegram or a Discord bot
+    // token, open with an id that is public and whose shape would be read at every word of
+    // every string, so they are found from what comes after it and the id stays.
+    type: "service_token",
+    pattern: new RegExp(
+      String.raw`\b(?:gl(?:pat|dt)-[\w-]{20,}|xapp-\d-[A-Za-z0-9-]{20,}|hooks\.slack\.com\/\w+\/[\w/]{20,}|discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]{40,}` +
+        String.raw`|gsk_[A-Za-z0-9]{40,}|xai-[A-Za-z0-9]{40,}|ya29\.[\w-]{40,}|1\/\/0[\w-]{40,}|whsec_[A-Za-z0-9+/]{24,}|SG\.[\w-]{16,}\.[\w-]{16,}` +
+        String.raw`|key-[0-9a-f]{32}\b|SK[0-9a-f]{32}\b|shp(?:at|ss|ca|pa)_[0-9a-fA-F]{32}\b|do[pors]_v1_[0-9a-f]{64}\b|hf_[A-Za-z0-9]{30,}|pypi-[\w-]{50,}` +
+        String.raw`|rubygems_[0-9a-f]{48}\b|dckr_pat_[\w-]{20,}|sbp_[0-9a-f]{40}\b|vercel_[A-Za-z0-9]{20,}|ATATT[\w-]{50,}|lin_api_[A-Za-z0-9]{30,}` +
+        String.raw`|ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{40,}|figd_[\w-]{30,}|r8_[A-Za-z0-9]{30,}|sk_[0-9a-f]{48}\b|AGE-SECRET-KEY-1[A-Z0-9]{50,})` +
+        String.raw`|:(?<=\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:)[0-9a-f]{32}\b|:(?<=\b\d{8,12}:)AA[\w-]{30,}` +
+        String.raw`|\.(?<=[\w-]{24}\.)[\w-]{6}\.(?=[\w-]{0,26}?${GENERATED_RUN})[\w-]{27,}`,
+      "g",
+    ),
+    replacement: marker("service_token"),
   },
   {
     // After every shape a bearer token can have, so a JWT or a GitHub token
