@@ -2235,12 +2235,18 @@ test("a command of many statements and a sweep of many values cost what their te
     assert.equal(timed([bash(command)]).length, 1);
   }
 
+  const sweep = (values: string[], text: string, times: number): string => {
+    const read = callAndResult("Read", { file_path: "/repo/.env" }, values.map((value, i) => `K${i}=${value}`).join("\n")).map((record) => JSON.stringify(record));
+    const said = Array.from({ length: times }, () => JSON.stringify({ type: "user", message: { role: "user", content: text } }));
+    return timed([...read, ...said]).join("\n");
+  };
   const values = Array.from({ length: 500 }, (_, i) => `a${i}b${String(i).padStart(12, "0")}xyz`);
-  const read = callAndResult("Read", { file_path: "/repo/.env" }, values.map((value, i) => `K${i}=${value}`).join("\n")).map((record) => JSON.stringify(record));
-  const text = values.join(" ").repeat(Math.ceil(200_000 / values.join(" ").length));
-  const said = Array.from({ length: 100 }, () => JSON.stringify({ type: "user", message: { role: "user", content: text } }));
-  const out = timed([...read, ...said]).join("\n");
+  const out = sweep(values, values.join(" ").repeat(Math.ceil(200_000 / values.join(" ").length)), 100);
   for (const value of values) assert.ok(!out.includes(value), value);
+  // Values that start alike, in a text that goes on as they do.
+  const alike = Array.from({ length: 500 }, (_, i) => `AAAAAAAA${i}${"A".repeat(i % 50)}xyz`);
+  sweep(alike, "A".repeat(200_000), 5);
+  sweep(alike, "AAAAAAAA1".repeat(22_000), 5);
 });
 
 test("a sweep cuts every learned value wherever it sits, the longest of those that start together", () => {

@@ -430,7 +430,7 @@ const BARE_VALUE = /^[^\s"'{}[\]<>=]+=*$/;
 /** A word or a number: `password`, `changeme`, `production` and `12345678` are all through normal text. */
 const PLAIN_WORD = /^(?:[A-Z]?[a-z]+|[A-Z]+|\d+)$/;
 const MIN_LEARNED_VALUE = 12;
-/** ponytail: a session names far fewer, and each costs a look wherever text starts as it does. The first ones win. */
+/** ponytail: a session names far fewer. The first ones win. */
 const MAX_LEARNED_VALUES = 500;
 
 /**
@@ -527,29 +527,52 @@ type FindValue = (text: string, from: number) => [at: number, value: string] | u
 /** Two bits up per character, so that one falls off the top after `MIN_SENSITIVE_VALUE`, which no value is shorter than. */
 const hashedOn = (hash: number, code: number): number => ((hash << 2) ^ code) & 0xffff;
 
+/** What some values still have in common, and how they part after it. */
+type Branch = { common: string; value: string | undefined; parts: Map<number, Branch> };
+
+/** Of values in sorted order, so that what the first and the last share, all do. */
+function branchOf(values: readonly string[], depth: number): Branch {
+  const first = values[0]!;
+  const last = values.at(-1)!;
+  let end = depth;
+  while (end < first.length && first[end] === last[end]) end += 1;
+  const groups = new Map<number, string[]>();
+  for (const value of values) {
+    if (value.length > end) groups.set(value.charCodeAt(end), [...(groups.get(value.charCodeAt(end)) ?? []), value]);
+  }
+  const parts = new Map<number, Branch>();
+  for (const [code, group] of groups) parts.set(code, branchOf(group, end + 1));
+  return { common: first.slice(depth, end), value: first.length === end ? first : undefined, parts };
+}
+
 /**
- * Finds the next of some values, longest first among those that start together, in one
- * pass over the text whatever their number. A loop over them costs that number times the
+ * Finds the next of some values, the longest of those that start together, in one pass
+ * over the text whatever their number. A loop over them costs that number times the
  * session's size; one alternation of them is slower than that below a few hundred, and
  * does not compile when they are long.
  */
 function valueFinder(values: readonly string[]): FindValue {
-  const starting = new Map<number, string[]>();
   const seen = new Uint8Array(1 << 16);
   for (const value of values) {
     let hash = 0;
     for (let i = 0; i < MIN_SENSITIVE_VALUE; i += 1) hash = hashedOn(hash, value.charCodeAt(i));
     seen[hash] = 1;
-    starting.set(hash, [...(starting.get(hash) ?? []), value]);
   }
+  const root = branchOf([...values].sort(), 0);
   return (text, from) => {
     let hash = 0;
     for (let end = from; end < text.length; end += 1) {
       hash = hashedOn(hash, text.charCodeAt(end));
       if (seen[hash] === 0 || end - from < MIN_SENSITIVE_VALUE - 1) continue;
       const at = end - MIN_SENSITIVE_VALUE + 1;
-      const value = starting.get(hash)!.find((candidate) => text.startsWith(candidate, at));
-      if (value !== undefined) return [at, value];
+      let found: string | undefined;
+      let next = at;
+      for (let branch: Branch | undefined = root; branch !== undefined && text.startsWith(branch.common, next); next += 1) {
+        next += branch.common.length;
+        found = branch.value ?? found;
+        branch = branch.parts.get(text.charCodeAt(next));
+      }
+      if (found !== undefined) return [at, found];
     }
     return undefined;
   };
