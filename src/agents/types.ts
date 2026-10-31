@@ -66,7 +66,8 @@ export interface Agent {
   /**
    * Where one session ran, for the adapters whose listing does not know. Separate
    * from `allSessions` on purpose: it costs a read, and a sweep only needs it for
-   * the sessions that grew since last time.
+   * the sessions that grew since last time. Undefined for a file that cannot be
+   * read, too: its callers walk every session there is, and one must not end that.
    */
   cwdOf(path: string): Promise<string | undefined>;
   /** Parse one transcript without redacting it — for local inspection only. */

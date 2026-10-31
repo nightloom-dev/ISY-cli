@@ -53,7 +53,7 @@ export const claudeAgent: Agent = {
   allSessions: allClaudeSessions,
 
   cwdOf(path: string) {
-    return firstCwd(path);
+    return firstCwd(path).catch(() => undefined);
   },
 
   // A session is its own file and its subagents' files, read as one transcript.

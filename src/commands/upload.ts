@@ -7,7 +7,7 @@ import { collectGitMetadata } from "../git.js";
 import { autoInstallGitHook } from "../githook.js";
 import type { GitMetadata, GitResult } from "../git.js";
 import type { DiscoveredSession, IsyConfig } from "../types.js";
-import { logError, logLine } from "../log.js";
+import { errorMessage, logError, logLine } from "../log.js";
 import { parseLines } from "../parser.js";
 import { SWEEP_WINDOW_MS, packageVersion } from "../paths.js";
 import {
@@ -52,6 +52,8 @@ export interface UploadReport {
   planNotice?: string;
   /** Sessions a sweep looked at, across every CLI and every directory. */
   scanned?: number;
+  /** Sessions left out because their transcript could not be read. */
+  unreadable?: number;
   /** The server's hourly upload allowance ran out; nothing was lost by it. */
   throttled?: boolean;
   /** Why the server refused the key. Nothing was lost by that either. */
@@ -259,7 +261,7 @@ async function sweptSessions(state: ClientState, report: UploadReport): Promise<
   // Counted, not listed. A sweep runs at every session start and the same
   // sessions are skipped every time; one line each would push everything worth
   // reading out of the journal `isy health` shows.
-  if (rootless > 0) logLine(`upload: ${rootless} swept session(s) record no working directory`);
+  if (rootless > 0) logLine(`upload: ${rootless} swept session(s) record no working directory, or cannot be read`);
 
   // Smallest first. The run budget is checked between sessions, and the session
   // still open in the CLI that started this sweep is the biggest and always reads
@@ -291,19 +293,30 @@ async function sendOne(
   fallbackSessionId: string,
   report: UploadReport,
 ): Promise<void> {
-  const built = await buildPayload(
-    target.agent,
-    target.path,
-    git,
-    {
-      extraPatterns: config.extraRedactPatterns,
-      // A swept session ran where the transcript says it ran, not where this
-      // process happens to stand: masking starts from it.
-      cwd: target.cwd ?? workingDir,
-      commits: state[target.path]?.commits,
-    },
-    fallbackSessionId,
-  );
+  let built: Awaited<ReturnType<typeof buildPayload>>;
+  try {
+    built = await buildPayload(
+      target.agent,
+      target.path,
+      git,
+      {
+        extraPatterns: config.extraRedactPatterns,
+        // A swept session ran where the transcript says it ran, not where this
+        // process happens to stand: masking starts from it.
+        cwd: target.cwd ?? workingDir,
+        commits: state[target.path]?.commits,
+      },
+      fallbackSessionId,
+    );
+  } catch (error) {
+    // A `sudo` session's, owned by root, or one deleted since the listing. That
+    // says nothing about the sessions behind it or the queue, which still go out.
+    // It fails again at every run, so the journal gets one reason a run, not a
+    // line a file.
+    if (!report.unreadable) logLine(`upload: a session could not be read: ${errorMessage(error)}`);
+    report.unreadable = (report.unreadable ?? 0) + 1;
+    return;
+  }
   if (!built) return;
   const { payload, gitBranch } = built;
 
@@ -529,6 +542,7 @@ export function formatUploadReport(report: UploadReport): string {
   if (report.queued > 0) parts.push("session queued for retry");
   if (report.drained > 0) parts.push(`${report.drained} queued session(s) sent`);
   if (report.abandoned > 0) parts.push(`${report.abandoned} session(s) given up on`);
+  if (report.unreadable) parts.push(`${report.unreadable} session(s) could not be read, see isy health`);
 
   const line = parts.length > 0 ? `isy: ${parts.join(", ")}` : "isy: nothing to upload";
   // Its own line rather than another clause: this one is about the account, and

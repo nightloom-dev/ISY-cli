@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -11,9 +11,9 @@ import { gunzipSync } from "node:zlib";
 import { claudeAgent } from "../agents/claude.js";
 import { drainAlerts, parkAlert } from "../alert.js";
 import { writeConfig } from "../config.js";
-import { runUpload } from "../commands/upload.js";
+import { formatUploadReport, runUpload } from "../commands/upload.js";
 import { collectScan } from "../commands/scan.js";
-import { allClaudeSessions, firstCwd, sessionStatePath } from "../paths.js";
+import { allClaudeSessions, firstCwd, projectSlug, sessionStatePath } from "../paths.js";
 import { listPending } from "../queue.js";
 import { claimSweep, releaseSweep } from "../state.js";
 
@@ -379,6 +379,73 @@ test("a sweep sends small sessions before the big one still growing", async () =
   } finally {
     await rm(big);
     await rm(small);
+  }
+});
+
+// Root reads a file whatever its mode says.
+const NEEDS_DENIED_READS = { skip: process.getuid?.() === 0 };
+
+test("a sweep goes on past a transcript it cannot read", NEEDS_DENIED_READS, async () => {
+  const blocked = await writeSession("-a-blocked", "blocked", repo);
+  const next = await writeSession("-z-next", "next", repo);
+  await chmod(blocked, 0o000);
+
+  try {
+    await runUpload({ silent: true, sweep: true }, elsewhere);
+    assert.deepEqual(uploads.map((upload) => upload.sessionId).sort(), ["next", "swept"]);
+    assert.equal(await claudeAgent.cwdOf(blocked), undefined);
+  } finally {
+    await rm(blocked);
+    await rm(next);
+  }
+});
+
+test("upload --all goes on past a transcript it cannot read, and says so", NEEDS_DENIED_READS, async () => {
+  // One this directory's, read only when it is built, and one from further down
+  // the tree, read to find out it belongs here.
+  const here = projectSlug(repo);
+  const blocked = [
+    await writeSession(here, "blocked-here", repo),
+    await writeSession(`${here}-sub`, "blocked-below", join(repo, "sub")),
+  ];
+  const others = [await writeSession(here, "here-a", repo), await writeSession(here, "here-b", repo)];
+  for (const path of blocked) await chmod(path, 0o000);
+
+  try {
+    const report = await runUpload({ silent: true, all: true }, repo);
+    assert.deepEqual(uploads.map((upload) => upload.sessionId).sort(), ["here-a", "here-b"]);
+    assert.equal(report.sent, 2);
+    assert.equal(report.unreadable, 1);
+    assert.match(formatUploadReport(report), /session uploaded, 1 session\(s\) could not be read, see isy health/);
+  } finally {
+    for (const path of [...blocked, ...others]) await rm(path);
+  }
+});
+
+test("a transcript that cannot be read holds nothing else up, even when it is the only one named", NEEDS_DENIED_READS, async () => {
+  const here = projectSlug(repo);
+  const queued = await writeSession("-a-queued", "queued", repo);
+  nextStatus = 400;
+  await runUpload({ silent: true, sweep: true }, elsewhere);
+  nextStatus = 200;
+  await rm(queued);
+  for (const item of await listPending()) {
+    await writeFile(item.path, JSON.stringify({ ...item.entry, lastAttemptAt: "2026-01-01T00:00:00Z" }));
+  }
+  const queuedCount = (await listPending()).length;
+  assert.ok(queuedCount > 0);
+
+  const blocked = await writeSession(here, "blocked", repo);
+  await chmod(blocked, 0o000);
+
+  try {
+    const report = await runUpload({ silent: true }, repo);
+    assert.equal(report.unreadable, 1);
+    assert.equal(report.drained, queuedCount);
+    assert.equal((await listPending()).length, 0);
+    assert.doesNotMatch(formatUploadReport(report), /nothing to upload/);
+  } finally {
+    await rm(blocked);
   }
 });
 
