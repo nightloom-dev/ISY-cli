@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { basename, relative, resolve } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
 import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
@@ -71,14 +71,24 @@ export function wordsOf(input: unknown): string[] {
 /** What `wordsOf` takes a name apart at, so a name holding one has to be looked for whole. */
 const NAME_BREAK = /[\s"'`$=:;,|&<>(){}[\]*?!#]/;
 
+/** By the file's own name, or the name of the submodule it lies in, whose pointer is all a commit shows of it. */
+function holdsFile(committed: Set<string>, file: string): boolean {
+  for (let path = file; path !== dirname(path); path = dirname(path)) {
+    if (committed.has(path)) return true;
+  }
+  return false;
+}
+
 /**
  * Whether HEAD holds what the session left: an edit past `since` to a file HEAD
  * changed, or a write it could not name that mentions one.
  *
  * ponytail: by file, not by line, and for the unnamed writes by base name, so a
  * commit that happens to touch such a file counts, and a script that writes files
- * it never mentions or a file renamed before the commit does not. Compare with
- * `FileEdit.newString` and read the redirect targets if any of them shows up.
+ * it never mentions does not, nor a shell-written file a human renames before
+ * committing, nor what a script left behind that a human commits on a new branch
+ * after the session's last mark. Compare with `FileEdit.newString` and read the
+ * redirect targets if any of them shows up.
  */
 async function carriesItsWork(
   session: ParsedSession,
@@ -94,9 +104,9 @@ async function carriesItsWork(
   for (const [path, edits] of session.fileEdits) {
     if (!edits.some((edit) => edit.recordIndex >= since)) continue;
     const roots = await rootsIn(directory);
-    if (committed.has(maskPath(resolve(directory, path), roots))) return true;
+    if (holdsFile(committed, maskPath(resolve(directory, path), roots))) return true;
     // Through a link, git names the file where it really is.
-    if (roots.cwd && committed.has(relative(await real(roots.cwd), await real(resolve(directory, path))))) return true;
+    if (roots.cwd && holdsFile(committed, relative(await real(roots.cwd), await real(resolve(directory, path))))) return true;
   }
 
   const broken = [...names].filter((name) => NAME_BREAK.test(name));

@@ -1636,6 +1636,44 @@ test("what a session wrote through the shell counts when the commit holds a file
   assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
 });
 
+test("a commit moving a submodule's pointer holds what the session edited under it", async () => {
+  const cwd = await newRepo("isy-commit-pointer-");
+  const lib = await newRepo("isy-commit-pointer-lib-");
+  await run("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib, "sub"], { cwd });
+  await run("git", ["commit", "-q", "-m", "sub"], { cwd });
+  const path = await writeSession(cwd, "sess-pointer", "left-pad");
+  const edit = (id: string, file: string) => ({ type: "tool_use", id, name: "Edit", input: { file_path: join(cwd, file), old_string: "a", new_string: "b" } });
+  await appendTurn(path, "sess-pointer", edit("t-under", "sub/under.txt"), OLD);
+  await onBranch(path, "main");
+
+  const sub = join(cwd, "sub");
+  await run("git", ["config", "user.email", "t@e.com"], { cwd: sub });
+  await run("git", ["config", "user.name", "T"], { cwd: sub });
+  await commitFile(sub, "under.txt");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  await run("git", ["add", "sub"], { cwd });
+  await run("git", ["commit", "-q", "-m", "bump"], { cwd });
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+
+  // A pointer it edited nothing under is no work of its own.
+  const other = await newRepo("isy-commit-pointer-other-");
+  await run("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib, "vendored"], { cwd: other });
+  await run("git", ["commit", "-q", "-m", "sub"], { cwd: other });
+  const away = await writeSession(other, "sess-away", "left-pad");
+  await onBranch(away, "main");
+  await run("git", ["commit", "-q", "--allow-empty", "-m", "own"], { cwd: other });
+  await writeFile(sessionStatePath(), "{}\n");
+  await runCommit({ noUpload: true }, other);
+  const vendored = join(other, "vendored");
+  await run("git", ["config", "user.email", "t@e.com"], { cwd: vendored });
+  await run("git", ["config", "user.name", "T"], { cwd: vendored });
+  await commitFile(vendored, "z.txt");
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd: other });
+  await run("git", ["add", "vendored"], { cwd: other });
+  await run("git", ["commit", "-q", "-m", "bump"], { cwd: other });
+  assert.match((await runCommit({ noUpload: true }, other)).skipped ?? "", /another branch/);
+});
+
 test("a name a command holds whole counts as mentioned, whatever is in it", async () => {
   for (const [command, file, kept] of [
     [`echo x > "my notes.txt"`, "my notes.txt", true],
