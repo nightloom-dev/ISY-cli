@@ -1104,6 +1104,53 @@ test("a resume that only read from a branch does not make that branch its own", 
   assert.equal(state.branch, "main");
 });
 
+test("a branch the agent left for itself, or a rename, leaves its row behind and the session on it", async () => {
+  const cwd = await newRepo("isy-commit-moved-");
+  await run("git", ["switch", "-q", "-c", "feat1"], { cwd });
+  const path = await writeSession(cwd, "sess-moved", "left-pad");
+  await onBranch(path, "feat1");
+  await commitFile(cwd, "own.txt");
+  await runCommit({ noUpload: true }, cwd);
+  assert.equal((await readState())[path]!.branch, "feat1");
+
+  // The agent made a branch and went on there; a human commits on it.
+  await appendTurn(path, "sess-moved", shell("t-move", "git switch -c feat2"), OLD);
+  await onBranch(path, "feat2");
+  await run("git", ["switch", "-q", "-c", "feat2"], { cwd });
+  await commitFile(cwd, "human.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  assert.equal((await readState())[path]!.branch, "feat2");
+
+  // Renamed under it: the name in its row is on nothing any more.
+  await run("git", ["branch", "-m", "feat3"], { cwd });
+  await appendTurn(path, "sess-moved", { type: "text", text: "still here" }, OLD);
+  await onBranch(path, "feat3");
+  await commitFile(cwd, "renamed.txt");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  assert.equal((await readState())[path]!.branch, "feat3");
+
+  // A move the transcript does not end on says nothing of the branch it did end on.
+  await appendTurn(path, "sess-moved", shell("t-away", "git switch -c feat4 && git switch feat3"), OLD);
+  await run("git", ["switch", "-q", "-c", "feat4"], { cwd });
+  await commitFile(cwd, "someone-else.txt");
+  assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
+});
+
+test("a commit passes over a newer session on another branch for the one standing on this one", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-standing-"));
+  await mkdir(join(cwd, "docs"));
+  await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+  const standing = await writeSession(cwd, "sess-standing", "left-pad");
+  await onBranch(standing, "feat");
+  await age(standing, 1 / 1440);
+  const elsewhere = await writeSession(join(cwd, "docs"), "sess-elsewhere", "ms");
+  await onBranch(elsewhere, "main");
+
+  await commitFile(cwd, "README.md");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-standing");
+  assert.equal((await readState())[elsewhere]?.commits, undefined);
+});
+
 test("a rebase counts as the branch it rebases, not as no branch at all", async () => {
   const cwd = await newRepo("isy-commit-rebase-");
   await run("git", ["switch", "-q", "-c", "topic"], { cwd });

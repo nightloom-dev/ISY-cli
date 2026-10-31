@@ -109,6 +109,10 @@ export async function currentBranch(cwd: string): Promise<string | undefined> {
   }
 }
 
+export async function branchExists(cwd: string, name: string): Promise<boolean> {
+  return (await git(cwd, ["rev-parse", "--verify", "-q", `refs/heads/${name}`])) !== undefined;
+}
+
 /** The files HEAD changed, from the top of the repository wherever `cwd` is. */
 export async function filesInHead(cwd: string): Promise<string[]> {
   const files = await git(cwd, ["show", "-z", "--format=", "--name-only", "--no-renames", "HEAD"]);

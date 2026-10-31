@@ -2,7 +2,7 @@ import { basename, relative } from "node:path";
 import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
-import { currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
+import { branchExists, currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
 import { maskPath } from "../mask-paths.js";
 import { gitCommands, mayWrite, parseLines, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
@@ -97,27 +97,41 @@ async function carriesItsWork(
   );
 }
 
+/** How an agent leaves for another branch itself. A rename is told by the old name being gone. */
+const BRANCH_MOVERS = new Set(["switch", "checkout"]);
+
+function movesBranch(use: ToolUse): boolean {
+  const { command } = use.input;
+  return typeof command === "string" && gitCommands(command).some((subcommand) => BRANCH_MOVERS.has(subcommand));
+}
+
 /**
- * Whether the commit just made belongs to this session. The hook only knows who
- * looks likeliest (`sessionOfCommit`), and a commit is what moves a session to
- * another pull request, so one that ended on another branch must not take every
- * commit made here afterwards. It belongs if the agent is making it this moment,
- * if it lands on the session's own branch, or, on any other, if it carries the
- * session's work: an agent that edited on main and a human who branched and
- * committed that.
+ * Whether the commit just made belongs to this session. A commit is what moves a
+ * session to another pull request, so one that ended on another branch must not
+ * take every commit made here afterwards. It belongs if the agent is making it this
+ * moment or if it lands on the session's own branch.
  *
  * Its own branch is the one its row stands on (`SessionState.branch`) before the
- * one its transcript last named, which a resume that only read has moved. No
- * branch known, as with a session on a detached HEAD, is no reason to refuse.
- *
- * ponytail: only one session is asked, so a commit it refuses goes to no one, and
- * a session quiet for longer than `SHELL_CALL_MS` relies on the branch fallback on
- * the server. Walk on through `sessionsInTree` if one of them ever needs the mark.
+ * one its transcript last named, which a resume that only read has moved. The
+ * transcript wins when the row has fallen behind it: the agent left for that branch
+ * itself, or the name in the row is on no branch any more. No branch known, as with
+ * a session on a detached HEAD, is no reason to refuse.
  */
-function isItsCommit(session: ParsedSession, state: SessionState, branch: string | undefined): boolean {
+async function isItsCommit(
+  session: ParsedSession,
+  state: SessionState,
+  branch: string | undefined,
+  cwd: string,
+): Promise<boolean> {
   if (session.toolUses.some(isRunning)) return true;
   const own = state.branch ?? session.meta.gitBranch;
-  return !branch || !own || own === "HEAD" || own === branch;
+  if (!branch || !own || own === "HEAD" || own === branch) return true;
+  if (session.meta.gitBranch !== branch) return false;
+  const since = state.commits?.at(-1)?.records ?? 0;
+  return (
+    session.toolUses.some((use) => use.recordIndex >= since && movesBranch(use)) ||
+    !(await branchExists(cwd, own))
+  );
 }
 
 /** The git commands that fire the post-commit hook, each pick of a rebase included. */
@@ -135,7 +149,8 @@ function isCommitting(use: ToolUse): boolean {
  * The hook is not told who made it, and the newest is not always that one: an
  * agent waiting on its `git commit` writes nothing while another session goes on
  * writing. So one making a commit this moment comes first, then one whose work the
- * commit holds, as when a human commits what an agent left, and only then the newest.
+ * commit holds, as when a human commits what an agent left, and only then the newest
+ * that can take it (`isItsCommit`).
  *
  * Read as they are, because a transcript's redaction costs five times its read and
  * only the session this ends on goes up. Past the first, one the budget does not
@@ -182,10 +197,10 @@ async function sessionOfCommit(
   for (const entry of read) {
     if (await carriesItsWork(entry.session, states[entry.file.path] ?? {}, entry.file.cwd ?? cwd, cwd)) return entry;
   }
-  const first = read[0]!;
-  return isItsCommit(first.session, states[first.file.path] ?? {}, branch)
-    ? first
-    : { skipped: "the newest session here is on another branch and this commit holds none of its work" };
+  for (const entry of read) {
+    if (await isItsCommit(entry.session, states[entry.file.path] ?? {}, branch, cwd)) return entry;
+  }
+  return { skipped: "the sessions here are on another branch and this commit holds none of their work" };
 }
 
 export async function runCommit(
