@@ -1,6 +1,6 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { fileLines } from "./lines.js";
 import { sessionFingerprint } from "./subagents.js";
 import type { SessionFile } from "./types.js";
@@ -129,6 +129,11 @@ export async function latestSession(cwd: string): Promise<SessionFile | undefine
  * config if that ever happens to anyone.
  */
 export const SWEEP_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+export function isWithin(top: string, directory: string): boolean {
+  const path = relative(top, directory);
+  return path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
 
 /**
  * Every Claude session on this machine, newest first, without opening a single

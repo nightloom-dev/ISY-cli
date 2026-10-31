@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { appendFile, chmod, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import fsPromises, { appendFile, chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { after, test } from "node:test";
+import { after, mock, test } from "node:test";
+import { sessionsInTree } from "../agents/index.js";
 import { kimiAgent } from "../agents/kimi.js";
 import { firstLines } from "../paths.js";
 
@@ -35,6 +38,42 @@ async function homeFrom(fixture: string, name: ".kimi" | ".kimi-code"): Promise<
   process.env.KIMI_HOME = home;
   return home;
 }
+
+test("a commit lists Kimi's sessions once, and those that ran elsewhere go no further", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "isy-kimi-listing-")));
+  process.env.KIMI_HOME = join(root, ".kimi-code");
+  const top = join(root, "repo");
+  await mkdir(join(top, "app"), { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: top });
+  const directories = [top, join(top, "app"), `${top}-sibling`, "/elsewhere/one", "/elsewhere/two"];
+  for (const [index, cwd] of directories.entries()) {
+    const dir = join(process.env.KIMI_HOME, "sessions", `wd_${index}`, `session_${index}`);
+    await mkdir(join(dir, "agents", "main"), { recursive: true });
+    await writeFile(join(dir, "state.json"), JSON.stringify({ id: `session_${index}`, cwd }));
+    await writeFile(join(dir, "agents", "main", "wire.jsonl"), '{"type":"metadata","protocol_version":"1"}\n');
+  }
+
+  const near = async (under?: string) => (await kimiAgent.allSessions(under)).map((file) => file.cwd).sort();
+  assert.deepEqual(await near(top), [top, join(top, "app")].sort());
+  assert.equal((await near()).length, directories.length);
+
+  const original = fsPromises.readFile;
+  let reads = 0;
+  const counting = mock.method(fsPromises, "readFile", ((...args: Parameters<typeof original>) => {
+    if (String(args[0]).endsWith("state.json")) reads += 1;
+    return original(...args);
+  }) as typeof original);
+  syncBuiltinESMExports();
+  const found: (string | undefined)[] = [];
+  try {
+    for await (const file of sessionsInTree(kimiAgent, top, 32)) found.push(file.cwd);
+  } finally {
+    counting.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.deepEqual(found.sort(), [top, join(top, "app")].sort());
+  assert.equal(reads, directories.length);
+});
 
 test("a Kimi CLI session that never wrote state.json is listed all the same, under its folder's name", async () => {
   const home = await homeFrom(KIMI_CLI, ".kimi");

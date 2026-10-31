@@ -7,7 +7,7 @@ import { parkAlert } from "../alert.js";
 import { maskRootsFor } from "../git.js";
 import { NPX_ISY, NPX_ISY_CACHED } from "../hook.js";
 import { parseLines } from "../parser.js";
-import { firstLine, firstLines, lastActive, pendingAlertPath } from "../paths.js";
+import { firstLine, firstLines, isWithin, lastActive, pendingAlertPath } from "../paths.js";
 import { redactLines } from "../redact.js";
 import type { DiscoveredSession, ParsedSession, SessionFile } from "../types.js";
 import { isKimiCliWire, kimiCliWireToClaudeRecords } from "./kimi-cli-wire.js";
@@ -361,8 +361,18 @@ async function subagentLogPaths(dir: string): Promise<string[]> {
   return logs;
 }
 
+/** A listing under way. Asked for twice at once, as a commit does, it is read once. */
+let listing: Promise<KimiSession[]> | undefined;
+
 /** Every session on this machine, in every Kimi home, in no particular order. */
-async function allSessions(): Promise<KimiSession[]> {
+function allSessions(): Promise<KimiSession[]> {
+  listing ??= readAllSessions().finally(() => {
+    listing = undefined;
+  });
+  return listing;
+}
+
+async function readAllSessions(): Promise<KimiSession[]> {
   const found: KimiSession[] = [];
 
   for (const home of kimiHomes()) {
@@ -827,8 +837,9 @@ export const kimiAgent: Agent = {
   // Kimi reads `state.json` to list anything at all, so unlike the other two
   // adapters the working directory comes for free with the listing — which is
   // why `DiscoveredSession` carries it and a sweep never asks `cwdOf` again.
-  async allSessions(): Promise<DiscoveredSession[]> {
-    return discovered(await allSessions());
+  async allSessions(under?: string): Promise<DiscoveredSession[]> {
+    const sessions = await allSessions();
+    return discovered(under === undefined ? sessions : sessions.filter(({ cwd }) => cwd === undefined || isWithin(under, cwd)));
   },
 
   async cwdOf(path: string): Promise<string | undefined> {

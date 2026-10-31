@@ -1,9 +1,8 @@
 import { claudeAgent } from "./claude.js";
 import { codexAgent } from "./codex.js";
 import { kimiAgent } from "./kimi.js";
-import { isAbsolute, relative, sep } from "node:path";
 import { workTreeTop } from "../git.js";
-import { SWEEP_WINDOW_MS, lastActive } from "../paths.js";
+import { SWEEP_WINDOW_MS, isWithin, lastActive } from "../paths.js";
 import type { DiscoveredSession } from "../types.js";
 import type { Agent, AgentId, HookInput } from "./types.js";
 
@@ -49,11 +48,6 @@ export async function presentAgents(): Promise<Agent[]> {
   return present;
 }
 
-function isWithin(top: string, directory: string): boolean {
-  const path = relative(top, directory);
-  return path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
-}
-
 /**
  * One CLI's sessions from the work tree `cwd` stands in, newest first: the ones
  * recorded for `cwd` itself, however old, and those from any other directory of
@@ -71,8 +65,9 @@ export async function* sessionsInTree(
   cwd: string,
   readsElsewhere = Infinity,
 ): AsyncGenerator<DiscoveredSession> {
-  const recorded = await agent.sessionsIn(cwd);
   const top = await workTreeTop(cwd);
+  // At once, as a listing that has to read every session for either answer then reads them once.
+  const [recorded, around] = await Promise.all([agent.sessionsIn(cwd), top ? agent.allSessions(top) : []]);
   if (!top) {
     yield* recorded;
     return;
@@ -80,9 +75,7 @@ export async function* sessionsInTree(
 
   const here = new Set(recorded.map((file) => file.path));
   const oldest = Date.now() - SWEEP_WINDOW_MS;
-  const elsewhere = (await agent.allSessions(top)).filter(
-    (file) => !here.has(file.path) && file.modifiedAt.getTime() >= oldest,
-  );
+  const elsewhere = around.filter((file) => !here.has(file.path) && file.modifiedAt.getTime() >= oldest);
 
   const listed: DiscoveredSession[] = [...recorded, ...elsewhere];
   const tops = new Map<string, string | undefined>();
