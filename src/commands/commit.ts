@@ -68,15 +68,17 @@ export function wordsOf(input: unknown): string[] {
   return JSON.stringify(input).split(/\\.|[\s/"'`$=:;,|&<>(){}[\]*?!#]+/);
 }
 
+/** What `wordsOf` takes a name apart at, so a name holding one has to be looked for whole. */
+const NAME_BREAK = /[\s"'`$=:;,|&<>(){}[\]*?!#]/;
+
 /**
  * Whether HEAD holds what the session left: an edit past `since` to a file HEAD
  * changed, or a write it could not name that mentions one.
  *
  * ponytail: by file, not by line, and for the unnamed writes by base name, so a
  * commit that happens to touch such a file counts, and a script that writes files
- * it never mentions, a name with a space in it or a file renamed before the commit
- * does not. Compare with `FileEdit.newString` and read the redirect targets if any
- * of them shows up.
+ * it never mentions or a file renamed before the commit does not. Compare with
+ * `FileEdit.newString` and read the redirect targets if any of them shows up.
  */
 async function carriesItsWork(
   session: ParsedSession,
@@ -97,12 +99,15 @@ async function carriesItsWork(
     if (roots.cwd && committed.has(relative(await real(roots.cwd), await real(resolve(directory, path))))) return true;
   }
 
-  return session.toolUses.some(
-    (use) =>
-      use.recordIndex >= since &&
-      writesUnnamed(use) &&
-      wordsOf(use.input).some((word) => names.has(word)),
-  );
+  const broken = [...names].filter((name) => NAME_BREAK.test(name));
+  return session.toolUses.some((use) => {
+    if (use.recordIndex < since || !writesUnnamed(use)) return false;
+    if (wordsOf(use.input).some((word) => names.has(word))) return true;
+    if (broken.length === 0) return false;
+    // Whether quoted or with a backslash in front of what breaks it, the whole name is there.
+    const text = JSON.stringify(use.input).replace(/\\+/g, "");
+    return broken.some((name) => text.includes(name));
+  });
 }
 
 /** What a commit holds, asked once however many sessions it is held up against. */

@@ -1636,6 +1636,34 @@ test("what a session wrote through the shell counts when the commit holds a file
   assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
 });
 
+test("a name a command holds whole counts as mentioned, whatever is in it", async () => {
+  for (const [command, file, kept] of [
+    [`echo x > "my notes.txt"`, "my notes.txt", true],
+    [`cat > "docs/my notes.md" <<'EOF'\nhello\nEOF`, "docs/my notes.md", true],
+    [`cat > 'pages/[slug].tsx' <<'EOF'\nhello\nEOF`, "pages/[slug].tsx", true],
+    ["echo hi > 'routes/$id.tsx'", "routes/$id.tsx", true],
+    ["echo x > 'app/(group)/x(1).md'", "app/(group)/x(1).md", true],
+    ["echo x > a=b.txt", "a=b.txt", true],
+    ["echo x > '#notes.md'", "#notes.md", true],
+    ["echo x > a,b.txt", "a,b.txt", true],
+    ["echo x > my\\ notes.txt", "my notes.txt", true],
+    [`echo x > "my notes.txt"`, "your notes.txt", false],
+    ["cat 'pages/[slug].tsx'", "pages/[slug].tsx", false],
+  ] as const) {
+    const cwd = await newRepo("isy-commit-whole-name-");
+    const path = await writeSession(cwd, "sess-whole-name", "left-pad");
+    await appendTurn(path, "sess-whole-name", shell("t-call", command), OLD);
+    await onBranch(path, "main");
+    await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+    await commitFile(cwd, file);
+
+    const { skipped } = await runCommit({ noUpload: true }, cwd);
+    if (kept) assert.equal(skipped, undefined, command);
+    else assert.match(skipped ?? "", /another branch/, command);
+    await writeFile(sessionStatePath(), "{}\n");
+  }
+});
+
 test("a shell call that has not answered yet is the agent making this commit", async () => {
   const cwd = await newRepo("isy-commit-running-");
   const path = await writeSession(cwd, "sess-running", "left-pad");
