@@ -244,9 +244,10 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: `$1$2$3${marker("assignment")}`,
   },
   {
+    // From the word back to the name, as the name from its front is a scan at every capital.
     type: "assignment",
-    pattern: new RegExp(String.raw`(?<![A-Za-z0-9_])(${KEY_NAME})(["']?\s*[=:]\s*)(["']?)(?=[^\s"']{0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
-    replacement: `$1$2$3${marker("assignment")}`,
+    pattern: new RegExp(String.raw`KEY(?<=(?<![A-Za-z0-9_])${KEY_NAME})(["']?\s*[=:]\s*)(["']?)(?=[^\s"']{0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
+    replacement: `KEY$1$2${marker("assignment")}`,
   },
   {
     // The quote opens before the name or after its colon, and only one of the two
