@@ -855,6 +855,7 @@ test("the rules for a dropped exception get through 200 KB of text built to stal
     `catch{${" ".repeat(size)}`,
     fill(`catch${" ".repeat(400)}`),
     fill("catch(x"),
+    fill(`catch(${"x".repeat(1200)}`),
     fill("except:# "),
     `except:${"\n".repeat(size)}`,
     `except:${" ".repeat(size)}`,
@@ -885,6 +886,7 @@ test("the rules for a dropped exception read a long line as well as a short one"
     ["/repo/src/a.py", `try:\n    a()\nexcept (${tuple}):\n    pass\n`],
     ["/repo/src/a.py", `try:\n    a()\nexcept OSError:  # ${"x".repeat(500)}\n    pass\n`],
     ["/repo/src/a.ts", `try { a(); } catch (e: ${"T".repeat(300)}) {}`],
+    ["/repo/src/a.ts", `try { a(); } catch (e: ${"T".repeat(5000)}) {}`],
   ] as const) {
     const found = detectErrorSuppressed(writtenAfterCheck(content, false, filePath));
     assert.equal(found[0]?.detail, "an exception is caught and dropped", content.slice(0, 40));
