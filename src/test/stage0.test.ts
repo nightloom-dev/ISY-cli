@@ -670,10 +670,20 @@ test("a check whose failure is thrown away is a signal, a cleanup line is not", 
 });
 
 /** `content` written over a file, right after a command that failed or, with `failing` off, passed. */
+/** A command's result, with the exit status the transcript records as `is_error`. */
+function ranAndGot(command: string, stdout: string, isError: boolean): unknown[] {
+  return [
+    ran("b", "pad19", command),
+    result("br", "b", "bash-b", {
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash-b", content: stdout, is_error: isError }] },
+      toolUseResult: { stdout, stderr: "" },
+    }),
+  ];
+}
+
 function writtenAfterCheck(content: string, failing = true, filePath = "/repo/src/config.js"): ParsedSession {
   return padded([
-    ran("b", "pad19", "npm run check"),
-    result("br", "b", "bash-b", { toolUseResult: { stdout: failing ? "check FAILED" : "all good", stderr: "" } }),
+    ...ranAndGot("npm run check", failing ? "check FAILED" : "all good", failing),
     assistant("w", "br", [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: filePath, content } }]),
   ]);
 }
@@ -734,8 +744,7 @@ test("a catch that does something with the failure is no signal, even right afte
   // Already there before the edit: not what this edit did about the failure.
   const kept = "try { x(); } catch (e) { console.warn(e); return null; }";
   const session = padded([
-    ran("b", "pad19", "npm run check"),
-    result("br", "b", "bash-b", { toolUseResult: { stdout: "check FAILED", stderr: "" } }),
+    ...ranAndGot("npm run check", "check FAILED", true),
     assistant("e", "br", [
       { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/repo/src/a.js", old_string: `${kept}\nold();`, new_string: `${kept}\nnew();` } },
     ]),
@@ -744,6 +753,55 @@ test("a catch that does something with the failure is no signal, even right afte
 
   // A test file has its own category.
   assert.deepEqual(detectErrorSuppressed(writtenAfterCheck(kept, true, "/repo/src/config.test.js")), []);
+});
+
+test("a catch that only logs counts after a check failed, not after a word or a search that found nothing", () => {
+  const content = "try { x(); } catch (e) { console.warn(e); return null; }";
+  const written = (command: string, stdout: string, isError: boolean): ParsedSession =>
+    padded([
+      ...ranAndGot(command, stdout, isError),
+      assistant("w", "br", [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: "/repo/src/a.js", content } }]),
+    ]);
+
+  for (const [command, stdout, isError] of [
+    ["cargo test", "test result: ok. 12 passed; 0 failed; 0 ignored", false],
+    ["pytest -q", "12 passed, 0 failed in 0.3s", false],
+    ["sed -n 1,40p src/upload.ts", 'if (!ok) console.error("upload failed");', false],
+    ["git log --oneline -5", "abc123 fix failed retry in the queue", false],
+    ["grep -rq TODO src", "", true],
+    ["grep -rq 'npm test' .github", "", true],
+    ["ls missing", "ls: cannot access 'missing'", true],
+  ] as const) {
+    assert.deepEqual(detectErrorSuppressed(written(command, stdout, isError)), [], command);
+  }
+
+  assert.equal(detectErrorSuppressed(written("cargo test", "test result: FAILED. 1 failed", true)).length, 1);
+});
+
+test("a silent catch given a log line is no signal, even right after a failed check", () => {
+  for (const [file_path, old_string, new_string] of [
+    ["/repo/src/a.js", "catch (err) {}", "catch (err) { console.error(err); }"],
+    ["/repo/src/a.py", "except OSError:\n    pass\n", "except OSError as e:\n    logger.error(e)\n    return None\n"],
+  ]) {
+    const session = padded([
+      ...ranAndGot("npm run check", "check FAILED", true),
+      assistant("e", "br", [{ type: "tool_use", id: "t1", name: "Edit", input: { file_path, old_string, new_string } }]),
+    ]);
+    assert.deepEqual(detectErrorSuppressed(session), [], file_path);
+  }
+});
+
+test("a catch that only logs in a document or in a string is no signal, even right after a failed check", () => {
+  const fenced = "```js\ntry { x(); } catch (e) { console.warn(e); return null; }\n```\n";
+  assert.deepEqual(detectErrorSuppressed(writtenAfterCheck(fenced, true, "/repo/docs/guide.md")), []);
+
+  for (const content of [
+    `const help = "use try { x() } catch (e) { console.log(e) } here";`,
+    `const help = 'use try { x() } catch (e) { console.log(e) } here';`,
+    "const help = `use try { x() } catch (e) { console.log(e) } here`;",
+  ]) {
+    assert.deepEqual(detectErrorSuppressed(writtenAfterCheck(content)), [], content);
+  }
 });
 
 test("the rules for a catch that only logs get through 200 KB of text built to stall them", () => {

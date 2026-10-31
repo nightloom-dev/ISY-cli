@@ -866,15 +866,19 @@ export const SUPPRESSORS: { pattern: RegExp; detail: string }[] = [
 /**
  * A catch that only logs, and returns nothing much if it returns at all: the
  * failure is still there, and the check that reported it goes green. Everyday
- * code otherwise, so these count only right after a failing command. Python's
- * needs the return: read line by line, a log call alone could be the start of a
- * real handler. Whole files go through these, so every run is bounded or has one
- * way to match.
+ * code otherwise, so these count only right after a check failed. Python's needs
+ * the return: read line by line, a log call alone could be the start of a real
+ * handler. Whole files go through these, so every run is bounded or has one way
+ * to match.
+ *
+ * ponytail: a quote earlier on the line is what says `catch` sits in a string. A
+ * real catch after a string on its own line goes unread, and a sample spanning
+ * lines of a template literal reads as code. Tokenize the file if either shows up.
  */
 export const LOG_ONLY_CATCHES: { pattern: RegExp; detail: string }[] = [
   {
     pattern:
-      /\bcatch\s*(?:\([^)]{0,200}\)\s*)?\{(?:[ \t\r\n]{0,200}\/\/[^\n]{0,400}\n){0,20}\s*(?:this\.)?(?:console|logger|log)\.(?:warn|warning|error|info|debug|log)\((?:[^;\n]{0,400}|[ \t]*\n[^;]{0,400}\n[ \t]*)\)(?:\s*;)?\s*(?:return(?:\s+(?:null|undefined|false|\[\]|\{\}))?(?:\s*;)?\s*)?\}/g,
+      /\bcatch(?<!["'`][^\n]{0,200}catch)\s*(?:\([^)]{0,200}\)\s*)?\{(?:[ \t\r\n]{0,200}\/\/[^\n]{0,400}\n){0,20}\s*(?:this\.)?(?:console|logger|log)\.(?:warn|warning|error|info|debug|log)\((?:[^;\n]{0,400}|[ \t]*\n[^;]{0,400}\n[ \t]*)\)(?:\s*;)?\s*(?:return(?:\s+(?:null|undefined|false|\[\]|\{\}))?(?:\s*;)?\s*)?\}/g,
     detail: "an exception is caught and only logged",
   },
   {
@@ -896,6 +900,24 @@ function suppressionAdded(oldString: string, newString: string, rules = SUPPRESS
   return undefined;
 }
 
+/**
+ * A check that failed by its exit status, shortly before. Narrower than
+ * `failedBefore`, for a rule with nothing else to go on: that one's word reads
+ * `0 failed` and a `git log` as failures, and a grep that found nothing exits 1
+ * too, with the name of a check as its pattern as often as not. A failure piped
+ * through `tail` exits 0 and goes unread here.
+ */
+function checkFailedBefore(session: ParsedSession, recordIndex: number): boolean {
+  return session.toolUses.some(
+    (use) =>
+      use.recordIndex < recordIndex &&
+      use.recordIndex >= recordIndex - FAILURE_LOOKBACK_RECORDS &&
+      use.result?.isError === true &&
+      verifies(use) &&
+      !READER.test(use.input.command as string),
+  );
+}
+
 export function detectErrorSuppressed(session: ParsedSession): Candidate[] {
   const candidates: Candidate[] = [];
 
@@ -908,8 +930,14 @@ export function detectErrorSuppressed(session: ParsedSession): Candidate[] {
       const after = edit.newString ?? edit.content ?? "";
       if (after.length === 0) continue;
 
-      const logOnly = suppressionAdded(before, after, LOG_ONLY_CATCHES);
-      const reason = suppressionAdded(before, after) ?? (logOnly && failedBefore(session, edit.recordIndex) ? logOnly : undefined);
+      // Taken out of this same edit, a suppression makes a log line the better
+      // of the two: a silent catch given one hides less than it did. What a
+      // whole-file write replaced is not in the transcript, so that reads as new.
+      const logOnly =
+        CODE_EXTENSION.test(filePath) && checkFailedBefore(session, edit.recordIndex) && !suppressionAdded(after, before)
+          ? suppressionAdded(before, after, LOG_ONLY_CATCHES)
+          : undefined;
+      const reason = suppressionAdded(before, after) ?? logOnly;
       if (!reason) continue;
 
       const failure = failedBefore(session, edit.recordIndex);
