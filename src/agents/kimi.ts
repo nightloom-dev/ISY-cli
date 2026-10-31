@@ -361,18 +361,8 @@ async function subagentLogPaths(dir: string): Promise<string[]> {
   return logs;
 }
 
-/** A listing under way. Asked for twice at once, as a commit does, it is read once. */
-let listing: Promise<KimiSession[]> | undefined;
-
 /** Every session on this machine, in every Kimi home, in no particular order. */
-function allSessions(): Promise<KimiSession[]> {
-  listing ??= readAllSessions().finally(() => {
-    listing = undefined;
-  });
-  return listing;
-}
-
-async function readAllSessions(): Promise<KimiSession[]> {
+async function allSessions(): Promise<KimiSession[]> {
   const found: KimiSession[] = [];
 
   for (const home of kimiHomes()) {
@@ -837,9 +827,15 @@ export const kimiAgent: Agent = {
   // Kimi reads `state.json` to list anything at all, so unlike the other two
   // adapters the working directory comes for free with the listing — which is
   // why `DiscoveredSession` carries it and a sweep never asks `cwdOf` again.
-  async allSessions(under?: string): Promise<DiscoveredSession[]> {
-    const sessions = await allSessions();
-    return discovered(under === undefined ? sessions : sessions.filter(({ cwd }) => cwd === undefined || isWithin(under, cwd)));
+  async allSessions(): Promise<DiscoveredSession[]> {
+    return discovered(await allSessions());
+  },
+
+  // Each session and its subagents' logs cost a stat, so what ran elsewhere goes first.
+  async sessionsAround(cwd: string, top: string): Promise<[SessionFile[], DiscoveredSession[]]> {
+    const near = (await allSessions()).filter((session) => session.cwd === undefined || session.cwd === cwd || isWithin(top, session.cwd));
+    const around = await discovered(near);
+    return [around.filter((file) => file.cwd === cwd), around];
   },
 
   async cwdOf(path: string): Promise<string | undefined> {

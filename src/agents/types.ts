@@ -64,6 +64,11 @@ export interface Agent {
    */
   allSessions(under?: string): Promise<DiscoveredSession[]>;
   /**
+   * `sessionsIn(cwd)` and what `allSessions(top)` would say, from one listing, for a
+   * CLI that reads every session on the machine to answer either. A commit asks both.
+   */
+  sessionsAround?(cwd: string, top: string): Promise<[SessionFile[], DiscoveredSession[]]>;
+  /**
    * Where one session ran, for the adapters whose listing does not know. Separate
    * from `allSessions` on purpose: it costs a read, and a sweep only needs it for
    * the sessions that grew since last time. Undefined for a file that cannot be

@@ -66,13 +66,14 @@ export async function* sessionsInTree(
   readsElsewhere = Infinity,
 ): AsyncGenerator<DiscoveredSession> {
   const top = await workTreeTop(cwd);
-  // At once, as a listing that has to read every session for either answer then reads them once.
-  const [recorded, around] = await Promise.all([agent.sessionsIn(cwd), top ? agent.allSessions(top) : []]);
   if (!top) {
-    yield* recorded;
+    yield* await agent.sessionsIn(cwd);
     return;
   }
 
+  const [recorded, around] = agent.sessionsAround
+    ? await agent.sessionsAround(cwd, top)
+    : [await agent.sessionsIn(cwd), await agent.allSessions(top)];
   const here = new Set(recorded.map((file) => file.path));
   const oldest = Date.now() - SWEEP_WINDOW_MS;
   const elsewhere = around.filter((file) => !here.has(file.path) && file.modifiedAt.getTime() >= oldest);

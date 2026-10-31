@@ -53,9 +53,10 @@ test("a commit lists Kimi's sessions once, and those that ran elsewhere go no fu
     await writeFile(join(dir, "agents", "main", "wire.jsonl"), '{"type":"metadata","protocol_version":"1"}\n');
   }
 
-  const near = async (under?: string) => (await kimiAgent.allSessions(under)).map((file) => file.cwd).sort();
-  assert.deepEqual(await near(top), [top, join(top, "app")].sort());
-  assert.equal((await near()).length, directories.length);
+  const [recorded, around] = await kimiAgent.sessionsAround!(top, top);
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(around.map((file) => file.cwd).sort(), [top, join(top, "app")].sort());
+  assert.equal((await kimiAgent.allSessions()).length, directories.length);
 
   const original = fsPromises.readFile;
   let reads = 0;
