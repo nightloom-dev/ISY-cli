@@ -771,11 +771,18 @@ test("a catch that only logs counts after a check failed, not after a word or a 
     ["grep -rq TODO src", "", true],
     ["grep -rq 'npm test' .github", "", true],
     ["ls missing", "ls: cannot access 'missing'", true],
+    ["cat <<'EOF' > notes.txt\nnpm test\nEOF\nfalse", "", true],
   ] as const) {
     assert.deepEqual(detectErrorSuppressed(written(command, stdout, isError)), [], command);
   }
 
-  assert.equal(detectErrorSuppressed(written("cargo test", "test result: FAILED. 1 failed", true)).length, 1);
+  for (const command of [
+    "cargo test",
+    "cat package.json && npm test",
+    "cat <<'EOF' > fixture.json\n{}\nEOF\nnpm run check 2>&1 | tail -5",
+  ]) {
+    assert.equal(detectErrorSuppressed(written(command, "", true)).length, 1, command);
+  }
 });
 
 test("a silent catch given a log line is no signal, even right after a failed check", () => {

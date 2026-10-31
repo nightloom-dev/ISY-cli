@@ -920,7 +920,9 @@ function checkFailedBefore(session: ParsedSession, recordIndex: number): boolean
       use.recordIndex >= recordIndex - FAILURE_LOOKBACK_RECORDS &&
       use.result?.isError === true &&
       verifies(use) &&
-      !READER.test(use.input.command as string),
+      commandSegments(withoutHeredocs(use.input.command as string)).some(
+        (segment) => VERIFY_COMMAND.test(segment) && !READER.test(segment),
+      ),
   );
 }
 
