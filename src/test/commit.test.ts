@@ -1636,6 +1636,27 @@ test("what a session wrote through the shell counts when the commit holds a file
   assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
 });
 
+test("a root commit shows what it holds, whatever log.showroot says", async () => {
+  // A file the session edited and no mark took, by its name.
+  let cwd = await newRepo("isy-commit-root-");
+  await onBranch(await writeSession(cwd, "sess-root", "left-pad"), "main");
+  await run("git", ["config", "log.showroot", "false"], { cwd });
+  await run("git", ["switch", "-q", "--orphan", "fresh"], { cwd });
+  await commitFile(cwd, "src/f0.ts");
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  await writeFile(sessionStatePath(), "{}\n");
+
+  // A mark's lines, by what they say, once a human has changed one of them.
+  cwd = await newRepo("isy-commit-root-");
+  await onBranch(await writeSession(cwd, "sess-root", "left-pad"), "main");
+  await run("git", ["config", "log.showroot", "false"], { cwd });
+  await commitFile(cwd, "own.txt", LONG);
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+  await run("git", ["switch", "-q", "--orphan", "fresh"], { cwd });
+  await commitFile(cwd, "own.txt", longWith("human"));
+  assert.equal((await runCommit({ noUpload: true }, cwd)).skipped, undefined);
+});
+
 test("a commit moving a submodule's pointer holds what the session edited under it", async () => {
   const cwd = await newRepo("isy-commit-pointer-");
   const lib = await newRepo("isy-commit-pointer-lib-");

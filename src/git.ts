@@ -135,7 +135,7 @@ export async function branchExists(cwd: string, name: string): Promise<boolean> 
  * side as it was, which tells whether what was settled differs from it just as well.
  */
 export async function filesInHead(cwd: string): Promise<string[]> {
-  const show = ["show", "-z", "--format=", "--name-only", "--no-renames"];
+  const show = ["show", "--root", "-z", "--format=", "--name-only", "--no-renames"];
   const drivers = await git(cwd, ["config", "--name-only", "--get-regexp", "^merge\\..*\\.driver$"]);
   const quiet = drivers?.split("\n").flatMap((driver) => ["-c", `${driver}=false`]) ?? [];
   const files = (await git(cwd, [...quiet, ...show, "--remerge-diff", "HEAD", "--"])) ?? (await git(cwd, [...show, "HEAD", "--"]));
@@ -149,7 +149,7 @@ export async function filesInHead(cwd: string): Promise<string[]> {
  */
 export async function blobsOf(cwd: string, shas: string[]): Promise<Map<string, Set<string>>> {
   const raw = await git(cwd, [
-    "log", "--no-walk", "--ignore-missing", "-z", "--format=", "--raw", "--no-abbrev", "--no-renames", ...shas, "--",
+    "log", "--root", "--no-walk", "--ignore-missing", "-z", "--format=", "--raw", "--no-abbrev", "--no-renames", ...shas, "--",
   ]);
   const fields = raw?.split("\0").filter(Boolean) ?? [];
   const blobs = new Map<string, Set<string>>();
@@ -171,7 +171,7 @@ export async function addedLines(cwd: string, shas: string[]): Promise<string[] 
   let diff: string;
   try {
     diff = await gitOutput(cwd, [
-      "log", "--no-walk", "--ignore-missing", "--format=", "-p", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", ...shas, "--",
+      "log", "--root", "--no-walk", "--ignore-missing", "--format=", "-p", "-U0", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", ...shas, "--",
     ]);
   } catch {
     return undefined;
