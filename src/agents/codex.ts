@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { parkAlert, withParkedAlerts } from "../alert.js";
 import { maskRootsFor } from "../git.js";
-import { installHookIn, installedHooksIn, removeHookIn } from "../hook.js";
+import { NPX_ISY, installHookIn, installedHooksIn, removeHookIn } from "../hook.js";
 import type { HookFile } from "../hook.js";
 import { parseLines } from "../parser.js";
 import { firstLine } from "../paths.js";
@@ -44,8 +44,8 @@ function codexHooks(): AgentHook[] {
   return [
     {
       event: "SessionStart",
-      command: "npx @nightloom/isy check --hook --agent codex",
-      superseded: ["npx isy check --hook --agent codex"],
+      command: `${NPX_ISY} check --hook --agent codex`,
+      superseded: ["npx isy check --hook --agent codex", "npx @nightloom/isy check --hook --agent codex"],
     },
     {
       event: "SessionEnd",
@@ -58,11 +58,12 @@ function codexHooks(): AgentHook[] {
       //
       // ponytail: POSIX `&`, so no Windows. Codex's own `commandWindows`
       // override is the way up if anyone runs ISY there.
-      command: "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
+      command: `exec 3<&0; nohup ${NPX_ISY} upload --hook --agent codex <&3 >/dev/null 2>&1 &`,
       superseded: [
         "npx isy upload --hook --agent codex",
         "nohup npx isy upload --hook --agent codex >/dev/null 2>&1 </dev/null &",
         "exec 3<&0; nohup npx isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
+        "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
       ],
     },
   ];

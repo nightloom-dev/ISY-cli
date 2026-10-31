@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { parkAlert } from "../alert.js";
 import { maskRootsFor } from "../git.js";
+import { NPX_ISY } from "../hook.js";
 import { parseLines } from "../parser.js";
 import { firstLine, firstLines, lastActive, pendingAlertPath } from "../paths.js";
 import { redactLines } from "../redact.js";
@@ -404,11 +405,15 @@ const OLDER_UPLOADS = [
   "npx isy upload --hook",
   "npx isy upload --hook --agent kimi",
   "npx @nightloom/isy upload --hook --agent kimi",
+  "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent kimi <&3 >/dev/null 2>&1 &",
 ];
 
-const START_COMMAND = "npx @nightloom/isy check --hook --agent kimi";
-const KIMI_CLI_UPLOAD = "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent kimi <&3 >/dev/null 2>&1 &";
-const KIMI_CODE_UPLOAD = "npx @nightloom/isy upload --hook --agent kimi";
+/** The commands an older isy wrote for the session start, in any home. */
+const OLDER_STARTS = ["npx isy check --hook --agent kimi", "npx @nightloom/isy check --hook --agent kimi"];
+
+const START_COMMAND = `${NPX_ISY} check --hook --agent kimi`;
+const KIMI_CLI_UPLOAD = `exec 3<&0; nohup ${NPX_ISY} upload --hook --agent kimi <&3 >/dev/null 2>&1 &`;
+const KIMI_CODE_UPLOAD = `${NPX_ISY} upload --hook --agent kimi`;
 
 /**
  * Every command an isy has written into a Kimi config, for either CLI — Kimi
@@ -417,7 +422,7 @@ const KIMI_CODE_UPLOAD = "npx @nightloom/isy upload --hook --agent kimi";
  */
 const ISY_COMMANDS = new Set([
   START_COMMAND,
-  "npx isy check --hook --agent kimi",
+  ...OLDER_STARTS,
   KIMI_CLI_UPLOAD,
   KIMI_CODE_UPLOAD,
   ...OLDER_UPLOADS,
@@ -436,7 +441,7 @@ function kimiHooks(home = kimiHome()): AgentHook[] {
   const start: AgentHook = {
     event: "SessionStart",
     command: START_COMMAND,
-    superseded: ["npx isy check --hook --agent kimi"],
+    superseded: OLDER_STARTS,
   };
 
   if (!isKimiCodeHome(home)) {
@@ -470,7 +475,7 @@ function kimiHooks(home = kimiHome()): AgentHook[] {
     {
       event: "SessionEnd",
       command: KIMI_CODE_UPLOAD,
-      superseded: OLDER_UPLOADS.slice(0, 2),
+      superseded: OLDER_UPLOADS,
     },
     // SessionStart and SessionEnd are observation-only in Kimi Code and their
     // stdout is discarded, so an alert that could not reach the terminal

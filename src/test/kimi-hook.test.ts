@@ -83,7 +83,7 @@ async function machine(name: string): Promise<{ repo: string; env: NodeJS.Proces
   const entry = join(import.meta.dirname, "..", "index.ts");
   await writeFile(
     join(bin, "npx"),
-    `#!/bin/sh\n[ "$1" = "@nightloom/isy" ] && shift\nexec "${process.execPath}" --import "${tsx}" "${entry}" "$@"\n`,
+    `#!/bin/sh\nwhile [ "$1" != "@nightloom/isy" ]; do shift; done\nshift\nexec "${process.execPath}" --import "${tsx}" "${entry}" "$@"\n`,
   );
   await chmod(join(bin, "npx"), 0o755);
 

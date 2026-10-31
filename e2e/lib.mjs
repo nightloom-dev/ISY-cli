@@ -131,6 +131,7 @@ NODE='${node}'
 REAL_NPX='${realNpx}'
 LOG="\${ISY_E2E_RUN_DIR:-\$HOME}/shim.log"
 now() { date +%s.%N; }
+while :; do case "$1" in --fetch-*) shift ;; *) break ;; esac; done
 case "$1" in
   @nightloom/isy)
     shift

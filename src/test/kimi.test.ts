@@ -298,7 +298,7 @@ test("adds its hook block to config.toml once, and can take it back out", async 
   assert.match(contents, /event = "SessionEnd"/);
   assert.match(
     contents,
-    /command = "exec 3<&0; nohup npx @nightloom\/isy upload --hook --agent kimi <&3 >\/dev\/null 2>&1 &"/,
+    /command = "exec 3<&0; nohup npx --fetch-retries=0 --fetch-timeout=2000 @nightloom\/isy upload --hook --agent kimi <&3 >\/dev\/null 2>&1 &"/,
   );
 
   assert.deepEqual(await kimiAgent.hooksInstalled(), ["SessionStart", "SessionEnd"]);

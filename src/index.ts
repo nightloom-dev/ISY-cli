@@ -13,7 +13,8 @@ import { runNotes } from "./commands/notes.js";
 import { runSettings } from "./commands/settings.js";
 import { runStatus } from "./commands/status.js";
 import { formatUploadAlert, formatUploadReport, runUpload } from "./commands/upload.js";
-import { errorMessage, logError } from "./log.js";
+import { repairGitHook } from "./githook.js";
+import { errorMessage, logError, logLine } from "./log.js";
 import { packageVersion } from "./paths.js";
 import { spawnIsy } from "./spawn.js";
 
@@ -228,6 +229,15 @@ if (values.version || command === "version") {
 
 if (!COMMANDS.has(command)) {
   fail(`unknown command '${command}'. ${USAGE}`, silent);
+}
+
+// Whatever a hook runs, git's or a CLI's, says `--hook`, or `--all` for pre-push.
+// The next thing to happen in a repository is what brings its older blocks up to
+// date, with no `isy init` to go through.
+if (values.hook || values.all) {
+  await repairGitHook(process.cwd()).catch((error: unknown) => {
+    logLine(`git hooks: not brought up to date: ${errorMessage(error)}`);
+  });
 }
 
 try {

@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { chmod, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
+import { NPX_ISY } from "./hook.js";
 
 const run = promisify(execFile);
 
@@ -15,7 +16,7 @@ const END = "# isy:end";
  * already happened. It is about the user's own script: a hook running under
  * `set -e` must not abort at our line.
  */
-export const COMMIT_COMMAND = "npx @nightloom/isy commit --hook || true";
+export const COMMIT_COMMAND = `${NPX_ISY} commit --hook || true`;
 
 /**
  * The push is the moment the analysis is actually waiting for: a pull request
@@ -33,7 +34,7 @@ export const COMMIT_COMMAND = "npx @nightloom/isy commit --hook || true";
  * someone else's pre-push it would hand git a 0 for a push their own hook had
  * just rejected.
  */
-export const PUSH_COMMAND = "npx @nightloom/isy upload --silent --all >/dev/null 2>&1 </dev/null &";
+export const PUSH_COMMAND = `${NPX_ISY} upload --silent --all >/dev/null 2>&1 </dev/null &`;
 
 /**
  * The repository-side hooks, both written into the same managed block format.
@@ -119,6 +120,20 @@ async function readHook(path: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * Swapped in whole rather than written over, with the mode it has now. A hook is
+ * rewritten by the very commands it runs, and a shell reads its script as it
+ * goes: written in place, bash would carry on from its old offset, in the middle
+ * of a line of the new text. A hook linked in from elsewhere stays linked.
+ */
+async function replaceHook(path: string, contents: string): Promise<void> {
+  const target = await realpath(path);
+  const temporary = join(dirname(target), `.${basename(target)}.isy-${process.pid}`);
+  await writeFile(temporary, contents, "utf8");
+  await chmod(temporary, (await stat(target)).mode & 0o7777);
+  await rename(temporary, target);
+}
+
 /** The managed block as it currently stands in this file, if it is there at all. */
 function existingBlock(contents: string): string | undefined {
   const start = contents.indexOf(BEGIN);
@@ -165,7 +180,7 @@ async function installOne(
 
   const next = existing === undefined ? insert(contents, desired) : contents.replace(existing, desired);
 
-  await writeFile(path, next, "utf8");
+  await replaceHook(path, next);
   await chmod(path, 0o755);
   return "installed";
 }
@@ -208,20 +223,42 @@ async function hookLocation(cwd: string): Promise<{ hooks: string; gitDir: strin
 }
 
 /**
+ * Whether core.hooksPath points out of the git directory — `.husky`, a team's
+ * `githooks/`. Such a directory is usually committed: a write there nobody asked
+ * for reaches every teammate, and until then leaves the tree dirty, which is
+ * enough for `git rebase` to refuse. Those are left to `isy init`, run on purpose.
+ */
+function isShared(location: { hooks: string; gitDir: string }): boolean {
+  const inside = relative(location.gitDir, location.hooks);
+  return inside.startsWith("..") || isAbsolute(inside);
+}
+
+/**
+ * Bring the blocks an older isy wrote up to date where they stand, adding none:
+ * what every run from a hook does first, so that an upgrade reaches a repository
+ * the next time anything happens in it, with no `isy init` to go through.
+ */
+export async function repairGitHook(cwd: string): Promise<void> {
+  const location = await hookLocation(cwd);
+  if (!location || isShared(location)) return;
+
+  for (const hook of GIT_HOOKS) {
+    const contents = await readHook(resolve(location.hooks, hook.name));
+    const existing = contents === undefined ? undefined : existingBlock(contents);
+    if (existing !== undefined && existing !== block(hook.command)) await installOne(cwd, hook);
+  }
+}
+
+/**
  * What the SessionEnd hook runs in every repository a session happened in, so
  * `isy init` is once per machine rather than once per repository. It writes
- * only where nobody else will see it: a hooks directory inside the git
- * directory. One that core.hooksPath points elsewhere — `.husky`, a team's
- * `githooks/` — is usually committed, and writing there would hand the hook to
- * every teammate. That one is left to `isy init`, run on purpose.
+ * only where nobody else will see it (`isShared`).
  */
 export async function autoInstallGitHook(cwd: string): Promise<GitHookOutcome | "shared-hooks"> {
   const location = await hookLocation(cwd);
   if (!location) return "not-a-repository";
   if (await gitHookInstalled(cwd)) return "already-present";
-
-  const inside = relative(location.gitDir, location.hooks);
-  if (inside.startsWith("..") || isAbsolute(inside)) return "shared-hooks";
+  if (isShared(location)) return "shared-hooks";
 
   // A repository created without templates has no hooks directory at all.
   await mkdir(location.hooks, { recursive: true });

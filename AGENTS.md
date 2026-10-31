@@ -39,7 +39,9 @@ database or to a model.
   up with `npx @nightloom/isy init` never installed anything globally. Old
   commands are listed in `superseded`, so installing over them rewrites the line
   in place instead of stacking a second hook (`hook.ts`, `githook.ts`,
-  `agents/kimi.ts`, `agents/codex.ts`).
+  `agents/kimi.ts`, `agents/codex.ts`). Every line starts with `hook.ts:NPX_ISY`:
+  npx asks the registry before it starts anything, and on its defaults a commit
+  waited 70 seconds offline and 16 minutes on a network that never answers.
 - **The parser must survive unknown fields and record types.** Transcript
   formats are undocumented and move between CLI versions. Log and skip; never
   throw.
@@ -117,7 +119,11 @@ database or to a model.
   older isy wrote where they stand (`Agent.repairHooks`) and adds none that are
   missing. Sending the reader to `isy init` for it meant signing in again, and
   on a plan with one key that means revoking the key in use — which is also why
-  `init` keeps a key the server still takes. In a Kimi config a hook is isy's by
+  `init` keeps a key the server still takes. Whatever a hook runs does the same
+  for the git hooks of the repository it stands in (`githook.ts:repairGitHook`),
+  swapping the file whole, because a shell reads a script as it runs it. A
+  directory core.hooksPath points out of the git directory waits for `isy init`,
+  and so does Codex, which asks again for a hook it has not seen. In a Kimi config a hook is isy's by
   its parsed `command` (`kimi-config.ts`), not by the comments around isy's
   block: both Kimi CLIs write their config back without comments, and Kimi
   Code's migration copies Kimi CLI's hooks into its own.

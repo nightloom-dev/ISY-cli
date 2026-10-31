@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
-import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -277,6 +277,106 @@ test("replaces a block an older isy wrote rather than stacking a second one", as
   assert.equal(body.match(/isy:begin/g)?.length, 1);
   assert.ok(!body.includes("npx isy upload --silent"));
   assert.ok(body.includes(COMMIT_COMMAND));
+});
+
+const OLD_COMMIT_BLOCK =
+  "# isy:begin — managed by isy, do not edit inside this block\nnpx @nightloom/isy commit --hook || true\n# isy:end\n";
+const OLD_PUSH_BLOCK =
+  "# isy:begin — managed by isy, do not edit inside this block\nnpx @nightloom/isy upload --silent --all >/dev/null 2>&1 </dev/null &\n# isy:end\n";
+
+/** This checkout's isy, run the way a hook runs it: nothing on stdin. */
+function cli(cwd: string, args: readonly string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), join(import.meta.dirname, "..", "index.ts"), ...args],
+      { cwd, stdio: "ignore" },
+    );
+    child.on("error", reject);
+    child.on("close", () => resolve());
+  });
+}
+
+test("whatever a hook runs next in a repository brings an older block up to date", async () => {
+  for (const args of [
+    ["commit", "--hook"],
+    ["check", "--hook"],
+    ["upload", "--hook"],
+    ["upload", "--silent", "--all"],
+  ]) {
+    const label = args.join(" ");
+    const fresh = await newRepo("isy-hook-stale-");
+    const commit = (await postCommitPath(fresh))!;
+    const push = (await prePushPath(fresh))!;
+    await writeFile(commit, `#!/bin/sh\n${OLD_COMMIT_BLOCK}echo mine\n`);
+    await writeFile(push, `#!/bin/sh\n${OLD_PUSH_BLOCK}echo mine\n`);
+
+    await cli(fresh, args);
+
+    const begin = OLD_COMMIT_BLOCK.split("\n")[0];
+    assert.equal(await readFile(commit, "utf8"), `#!/bin/sh\n${begin}\n${COMMIT_COMMAND}\n# isy:end\necho mine\n`, label);
+    assert.equal(await readFile(push, "utf8"), `#!/bin/sh\n${begin}\n${PUSH_COMMAND}\n# isy:end\necho mine\n`, label);
+    assert.equal(await gitHookInstalled(fresh), true, label);
+  }
+});
+
+test("bringing a block up to date adds none that is not there, and leaves a shared directory alone", async () => {
+  const fresh = await newRepo("isy-hook-stale-none-");
+  await cli(fresh, ["commit", "--hook"]);
+  await assert.rejects(() => stat(join(fresh, ".git", "hooks", "post-commit")));
+
+  const shared = await newRepo("isy-hook-stale-shared-");
+  await mkdir(join(shared, ".husky"));
+  await run("git", ["config", "core.hooksPath", ".husky"], { cwd: shared });
+  // Tracked, so a rewrite nobody asked for leaves the tree dirty and `git rebase` refuses.
+  const written = `#!/bin/sh\n${OLD_COMMIT_BLOCK}`;
+  await writeFile(join(shared, ".husky", "post-commit"), written);
+  await cli(shared, ["commit", "--hook"]);
+  assert.equal(await readFile(join(shared, ".husky", "post-commit"), "utf8"), written);
+
+  // `isy init`, run on purpose, does write there.
+  await installGitHook(shared);
+  assert.ok((await readFile(join(shared, ".husky", "post-commit"), "utf8")).includes(COMMIT_COMMAND));
+});
+
+test("a hook rewritten while it runs carries on with the rest of the user's script", async () => {
+  const fresh = await newRepo("isy-hook-running-");
+  const path = (await postCommitPath(fresh))!;
+  const marker = join(fresh, "mine-ran");
+  // bash goes back to the file for every line, at the offset it had reached.
+  await writeFile(path, `#!/bin/bash\n${OLD_COMMIT_BLOCK}echo ran >> "${marker}"\n`);
+  await chmod(path, 0o755);
+
+  // The old line as it runs for real: npx starts isy, and isy rewrites the hook running it.
+  const bin = await mkdtemp(join(tmpdir(), "isy-hook-bin-"));
+  await writeFile(
+    join(bin, "npx"),
+    `#!/bin/sh\nwhile [ "$1" != "@nightloom/isy" ]; do shift; done\nshift\n` +
+      `exec "${process.execPath}" --import "${import.meta.resolve("tsx")}" "${join(import.meta.dirname, "..", "index.ts")}" "$@"\n`,
+  );
+  await chmod(join(bin, "npx"), 0o755);
+
+  const { stderr } = await run("git", ["commit", "-q", "--allow-empty", "-m", "next"], {
+    cwd: fresh,
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+  });
+
+  assert.equal(stderr, "");
+  assert.equal(await readFile(marker, "utf8"), "ran\n");
+  assert.ok((await readFile(path, "utf8")).includes(COMMIT_COMMAND));
+});
+
+test("a hook linked in from elsewhere stays linked when its block is rewritten", async () => {
+  const fresh = await newRepo("isy-hook-linked-");
+  const path = (await postCommitPath(fresh))!;
+  const script = join(fresh, "post-commit.sh");
+  await writeFile(script, `#!/bin/sh\n${OLD_COMMIT_BLOCK}`);
+  await symlink(script, path);
+
+  assert.equal(await installGitHook(fresh), "installed");
+
+  assert.equal((await lstat(path)).isSymbolicLink(), true);
+  assert.ok((await readFile(script, "utf8")).includes(COMMIT_COMMAND));
 });
 
 test("writes where core.hooksPath points, not where it does not", async () => {

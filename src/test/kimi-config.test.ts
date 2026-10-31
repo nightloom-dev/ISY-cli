@@ -98,6 +98,32 @@ test("a basic string holds any command exactly", () => {
   }
 });
 
+test("rewrites the lines written before a hook could give up on the registry, in either home", async () => {
+  const older: Record<string, string> = {
+    SessionStart: "npx @nightloom/isy check --hook --agent kimi",
+  };
+  for (const [home, upload] of [
+    [kimiCli, "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent kimi <&3 >/dev/null 2>&1 &"],
+    [kimiCode, "npx @nightloom/isy upload --hook --agent kimi"],
+  ] as const) {
+    process.env.KIMI_HOME = home;
+    await writeFile(
+      kimiConfigPath(),
+      `[[hooks]]\nevent = "SessionStart"\ncommand = ${basicString(older.SessionStart!)}\ntimeout = 30\n\n` +
+        `[[hooks]]\nevent = "SessionEnd"\ncommand = ${basicString(upload)}\ntimeout = 30\n`,
+    );
+
+    assert.equal(await kimiAgent.repairHooks?.(), true, home);
+    const contents = await readFile(kimiConfigPath(), "utf8");
+    const commands = hookTables(contents).map((table) => table.command ?? "");
+    assert.equal(commands.filter((command) => command.includes("npx")).length, 2, home);
+    for (const command of commands.filter((line) => line.includes("npx"))) {
+      assert.match(command, /(?:^|\s)npx --fetch-retries=0 --fetch-timeout=\d+ @nightloom\/isy /, home);
+    }
+    assert.equal(await kimiAgent.repairHooks?.(), false, home);
+  }
+});
+
 test("finds its hooks by what they run once Kimi has written the config back without its markers", async () => {
   process.env.KIMI_HOME = kimiCli;
   // An isy 1.0 install as `tomlkit` writes it back after `/model`: no markers,
@@ -127,14 +153,15 @@ test("finds its hooks by what they run once Kimi has written the config back wit
   ].join("\n");
   await writeFile(kimiConfigPath(), rewritten);
 
-  // Its SessionEnd is the one Kimi CLI kills after five seconds.
-  assert.deepEqual(await kimiAgent.hooksInstalled(), ["SessionStart"]);
+  // Its SessionEnd is the one Kimi CLI kills after five seconds, and neither
+  // line gives up on the registry early.
+  assert.deepEqual(await kimiAgent.hooksInstalled(), []);
   assert.equal(await kimiAgent.repairHooks?.(), true);
 
   let contents = await readFile(kimiConfigPath(), "utf8");
   assert.equal(count(contents, /^\[\[hooks\]\]$/gm), 3);
-  assert.equal(count(contents, /npx @nightloom\/isy/g), 2);
-  assert.match(contents, /exec 3<&0; nohup npx @nightloom\/isy upload --hook --agent kimi/);
+  assert.equal(count(contents, /npx --fetch-retries=0 --fetch-timeout=2000 @nightloom\/isy/g), 2);
+  assert.match(contents, /exec 3<&0; nohup npx --fetch-retries=0 --fetch-timeout=2000 @nightloom\/isy upload --hook --agent kimi/);
   assert.match(contents, /command = "\.\/guard\.sh"/);
   assert.match(contents, /\[models\.k2\]\nprovider = "moonshot"/);
   assert.deepEqual(await kimiAgent.hooksInstalled(), ["SessionStart", "SessionEnd"]);
@@ -174,7 +201,7 @@ test("the hooks Kimi Code's migration copied from Kimi CLI become Kimi Code's, o
     ].join("\n"),
   );
 
-  assert.deepEqual(await kimiAgent.hooksInstalled(), ["SessionStart"]);
+  assert.deepEqual(await kimiAgent.hooksInstalled(), []);
   assert.equal(await kimiAgent.installHooks(), "installed");
 
   const contents = await readFile(kimiConfigPath(), "utf8");

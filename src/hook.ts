@@ -3,10 +3,19 @@ import { basename, dirname, join } from "node:path";
 import type { AgentHook } from "./agents/types.js";
 import { claudeConfigDir, claudeSettingsPath } from "./paths.js";
 
+/**
+ * How every hook line starts. npx asks the registry for the newest version on
+ * every run, before it starts anything, and left to its defaults that held a
+ * commit for 70 seconds offline and 16 minutes on a network that never answers.
+ * With these it gives up after two seconds and runs what it has cached. Updates
+ * still arrive: the timeout is on an answer and on silence, not on a download.
+ */
+export const NPX_ISY = "npx --fetch-retries=0 --fetch-timeout=2000 @nightloom/isy";
+
 export const HOOK_EVENT = "SessionEnd";
-export const HOOK_COMMAND = "exec 3<&0; nohup npx @nightloom/isy upload --hook <&3 >/dev/null 2>&1 &";
+export const HOOK_COMMAND = `exec 3<&0; nohup ${NPX_ISY} upload --hook <&3 >/dev/null 2>&1 &`;
 export const START_HOOK_EVENT = "SessionStart";
-export const START_HOOK_COMMAND = "npx @nightloom/isy check --hook";
+export const START_HOOK_COMMAND = `${NPX_ISY} check --hook`;
 
 /**
  * The scope is spelled out, and npx stays. npx resolves a bare name against the
@@ -40,9 +49,14 @@ export const ISY_HOOKS: (AgentHook & { superseded: string[] })[] = [
       "npx isy upload --silent",
       "npx isy upload --hook",
       "npx @nightloom/isy upload --hook",
+      "exec 3<&0; nohup npx @nightloom/isy upload --hook <&3 >/dev/null 2>&1 &",
     ],
   },
-  { event: START_HOOK_EVENT, command: START_HOOK_COMMAND, superseded: ["npx isy check --hook"] },
+  {
+    event: START_HOOK_EVENT,
+    command: START_HOOK_COMMAND,
+    superseded: ["npx isy check --hook", "npx @nightloom/isy check --hook"],
+  },
 ];
 
 /**

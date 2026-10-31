@@ -648,13 +648,13 @@ test("writes its hooks into hooks.json and takes them out again", async () => {
   };
   assert.equal(
     contents.hooks.SessionStart?.[0]?.hooks[0]?.command,
-    "npx @nightloom/isy check --hook --agent codex",
+    "npx --fetch-retries=0 --fetch-timeout=2000 @nightloom/isy check --hook --agent codex",
   );
   // Detached, because Codex is closing the session and the hook shell must not
   // wait; the payload goes over fd 3, because a background job's stdin is /dev/null.
   assert.match(
     contents.hooks.SessionEnd?.[0]?.hooks[0]?.command ?? "",
-    /^exec 3<&0; nohup npx @nightloom\/isy upload --hook --agent codex <&3 .*&$/,
+    /^exec 3<&0; nohup npx --fetch-retries=0 --fetch-timeout=2000 @nightloom\/isy upload --hook --agent codex <&3 .*&$/,
   );
 
   assert.deepEqual(await codexAgent.hooksInstalled(), ["SessionStart", "SessionEnd"]);
@@ -671,6 +671,8 @@ test("replaces an older isy command rather than stacking a second one", async ()
     "nohup npx isy upload --hook --agent codex >/dev/null 2>&1 </dev/null &",
     // Same command, back when it was reached through npx.
     "exec 3<&0; nohup npx isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
+    // Same command, before npx was told not to wait on the registry.
+    "exec 3<&0; nohup npx @nightloom/isy upload --hook --agent codex <&3 >/dev/null 2>&1 &",
   ]) {
     await writeFile(
       codexHooksPath(),
@@ -683,7 +685,7 @@ test("replaces an older isy command rather than stacking a second one", async ()
       hooks: { SessionEnd: { hooks: { command: string }[] }[] };
     };
     assert.equal(contents.hooks.SessionEnd.length, 1, older);
-    assert.match(contents.hooks.SessionEnd[0]?.hooks[0]?.command ?? "", /<&3 /, older);
+    assert.match(contents.hooks.SessionEnd[0]?.hooks[0]?.command ?? "", /--fetch-retries=0 .*<&3 /, older);
   }
 });
 

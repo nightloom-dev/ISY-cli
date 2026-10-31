@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
+import { codexAgent } from "../agents/codex.js";
+import { COMMIT_COMMAND, GIT_HOOKS } from "../githook.js";
 import {
   HOOK_COMMAND,
+  ISY_HOOKS,
   START_HOOK_COMMAND,
   installHook,
   installedHooks,
@@ -172,6 +178,65 @@ test("replaces the hook an older isy wrote instead of stacking a second one", as
   }
 });
 
+test("rewrites the lines written before a hook could give up on the registry", async () => {
+  await writeSettings({
+    hooks: {
+      SessionEnd: [
+        { hooks: [{ type: "command", command: "exec 3<&0; nohup npx @nightloom/isy upload --hook <&3 >/dev/null 2>&1 &" }] },
+      ],
+      SessionStart: [{ hooks: [{ type: "command", command: "npx @nightloom/isy check --hook" }] }],
+    },
+  });
+
+  assert.equal(await repairHooks(), true);
+  const hooks = (await settings()).hooks as Record<string, { hooks: { command: string }[] }[]>;
+  assert.equal(hooks.SessionEnd?.[0]?.hooks[0]?.command, HOOK_COMMAND);
+  assert.equal(hooks.SessionStart?.[0]?.hooks[0]?.command, START_HOOK_COMMAND);
+  assert.equal(await isHookInstalled(), true);
+});
+
+test("every npx line, in git hooks and in a CLI's settings, gives up on the registry early", () => {
+  for (const { command } of [...GIT_HOOKS, ...ISY_HOOKS, ...codexAgent.hooks()]) {
+    assert.match(command, /(?:^|\s)npx --fetch-retries=0 --fetch-timeout=\d+ @nightloom\/isy /, command);
+  }
+});
+
+test("a hook line run by the real npx does not wait on a registry that never answers", async () => {
+  const held: Socket[] = [];
+  const hole = createServer((socket) => void held.push(socket.on("error", () => undefined)));
+  await new Promise<void>((resolve) => hole.listen(0, "127.0.0.1", resolve));
+  const home = await mkdtemp(join(tmpdir(), "isy-npx-"));
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    // Nothing cached and nothing installed globally: all that is left is the registry.
+    npm_config_cache: join(home, "cache"),
+    npm_config_prefix: join(home, "prefix"),
+    npm_config_registry: `http://127.0.0.1:${(hole.address() as AddressInfo).port}/`,
+  };
+
+  try {
+    for (const line of [COMMIT_COMMAND, START_HOOK_COMMAND]) {
+      const finished = await new Promise<boolean>((resolve) => {
+        // Its own process group: killing the shell alone leaves npx waiting.
+        const child = spawn("sh", ["-c", line], { cwd: home, env, stdio: "ignore", detached: true });
+        const limit = setTimeout(() => {
+          process.kill(-child.pid!, "SIGKILL");
+          resolve(false);
+        }, 20_000);
+        child.on("close", () => {
+          clearTimeout(limit);
+          resolve(true);
+        });
+      });
+      assert.equal(finished, true, line);
+    }
+  } finally {
+    for (const socket of held) socket.destroy();
+    hole.close();
+  }
+});
+
 test("removes a hook left behind by an older isy", async () => {
   await writeSettings({
     hooks: { SessionEnd: [{ hooks: [{ type: "command", command: "npx isy upload --silent" }] }] },
@@ -187,7 +252,7 @@ test("the upload runs detached, so the end of a session waits for nothing", asyn
   const hooks = (await settings()).hooks as Record<string, { hooks: Record<string, unknown>[] }[]>;
   // Claude Code cancels a SessionEnd hook after 1.5s, and waits out a longer
   // one on /clear and /resume: the shell hands the payload over and returns.
-  assert.match(String(hooks.SessionEnd?.[0]?.hooks[0]?.command), /^exec 3<&0; nohup npx @nightloom\/isy upload --hook <&3 .*&$/);
+  assert.match(String(hooks.SessionEnd?.[0]?.hooks[0]?.command), /^exec 3<&0; nohup npx [^&]*@nightloom\/isy upload --hook <&3 .*&$/);
   assert.equal(hooks.SessionEnd?.[0]?.hooks[0]?.timeout, undefined);
   assert.equal(hooks.SessionStart?.[0]?.hooks[0]?.timeout, undefined);
 });
