@@ -138,14 +138,16 @@ database or to a model.
   work tree whose own file moved last (`paths.ts:lastActive`): a session's mtime
   includes its subagents', and the one whose background subagent wrote last is
   not the one that committed. Another one at work in the last ten minutes goes
-  first if it shows the commit is its own, with a `git` call still running or
-  edits to what HEAD changed (`commit.ts:sessionOfCommit`): an agent waiting on
-  its `git commit` writes nothing while the others go on. git runs its hooks at
-  the top of the tree, so a session started further down is looked for there too
-  (`agents/index.ts:sessionsInTree`). It takes the commit only if the agent is
-  making it, it lands on the session's branch, or it holds what the session left
-  uncommitted (`commit.ts:isItsCommit`): a mark moves a session to that branch's
-  pull request, so every other commit made there afterwards must not leave one.
+  first if it shows the commit is its own, with a command that makes commits still
+  running or edits to what HEAD changed (`commit.ts:sessionOfCommit`): an agent
+  waiting on its `git commit` writes nothing while the others go on. git runs its
+  hooks at the top of the tree, so a session started further down is looked for
+  there too (`agents/index.ts:sessionsInTree`). On another branch than its own,
+  a session that has only looked since its last mark, or written files this
+  commit does not hold, gives the commit up (`commit.ts:isItsCommit`,
+  `parser.ts:shellOnlyLooks`): a mark moves a session to that branch's pull
+  request, so every other commit made there afterwards must not leave one. A
+  command nobody can read keeps it, because what it wrote may be the commit.
 - **Stage 0 is calibrated with the server.** The induced corpus and the
   snapshots it is calibrated against live there, so a detector change is
   verified by publishing a prerelease (`1.2.0-next.0` lands on `next`) and

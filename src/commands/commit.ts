@@ -4,7 +4,7 @@ import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
 import { branchExists, currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
 import { maskPath } from "../mask-paths.js";
-import { gitCommands, mayWrite, parseLines, shellWrites } from "../parser.js";
+import { gitCommands, mayWrite, parseLines, shellOnlyLooks, shellWrites } from "../parser.js";
 import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
 import { candidateKey, namedBranch, readState, unseen, updateSession, withCommit } from "../state.js";
@@ -105,17 +105,30 @@ function movesBranch(use: ToolUse): boolean {
   return typeof command === "string" && gitCommands(command).some((subcommand) => BRANCH_MOVERS.has(subcommand));
 }
 
+/** A call after which nobody can say what it left in the tree. */
+function leavesUnknown(use: ToolUse): boolean {
+  const { command } = use.input;
+  if (use.name === "Bash" && typeof command === "string") return !shellOnlyLooks(command);
+  return mayWrite(use.name, use.input);
+}
+
 /**
- * Whether the commit just made belongs to this session. A commit is what moves a
- * session to another pull request, so one that ended on another branch must not
- * take every commit made here afterwards. It belongs if the agent is making it this
- * moment or if it lands on the session's own branch.
+ * Whether a commit that does not show itself to be this session's can still be. A
+ * commit is what moves a session to another pull request, so one that ended on
+ * another branch must not take every commit made here afterwards. It is refused only
+ * on evidence: the session stands on another branch, and since its last mark it has
+ * done nothing but look and write files it named, which are not these.
  *
  * Its own branch is the one its row stands on (`SessionState.branch`) before the
  * one its transcript last named, which a resume that only read has moved. The
  * transcript wins when the row has fallen behind it: the agent left for that branch
  * itself, or the name in the row is on no branch any more. No branch known, as with
  * a session on a detached HEAD, is no reason to refuse.
+ *
+ * ponytail: a session that ran a build or `npm test` since its last mark takes an
+ * unrelated commit on another branch, as it did before branches were looked at,
+ * since a command line cannot say what those wrote. List such a runner in
+ * `shellOnlyLooks` if one proves to move sessions to the wrong pull request.
  */
 async function isItsCommit(
   session: ParsedSession,
@@ -123,15 +136,12 @@ async function isItsCommit(
   branch: string | undefined,
   cwd: string,
 ): Promise<boolean> {
-  if (session.toolUses.some(isRunning)) return true;
   const own = state.branch ?? session.meta.gitBranch;
   if (!branch || !own || own === "HEAD" || own === branch) return true;
-  if (session.meta.gitBranch !== branch) return false;
   const since = state.commits?.at(-1)?.records ?? 0;
-  return (
-    session.toolUses.some((use) => use.recordIndex >= since && movesBranch(use)) ||
-    !(await branchExists(cwd, own))
-  );
+  const calls = session.toolUses.filter((use) => use.recordIndex >= since);
+  if (calls.some(leavesUnknown)) return true;
+  return session.meta.gitBranch === branch && (calls.some(movesBranch) || !(await branchExists(cwd, own)));
 }
 
 /** The git commands that fire the post-commit hook, each pick of a rebase included. */

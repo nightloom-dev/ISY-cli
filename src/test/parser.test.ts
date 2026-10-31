@@ -15,6 +15,7 @@ import {
   shellReadPaths,
   shellWrites,
   gitCommands,
+  shellOnlyLooks,
   withoutHeredocs,
 } from "../parser.js";
 import { subagentsOf } from "../subagents.js";
@@ -718,5 +719,45 @@ test("telling a git command from anything else gets through 200 KB of text built
     gitCommands(text);
     const took = performance.now() - started;
     assert.ok(took < 1000, `took ${Math.round(took)} ms`);
+  }
+});
+
+test("a command only looks when every part of it is known to, and anything else nobody can say", () => {
+  for (const command of [
+    "git status",
+    "git log --oneline -5 | head -3",
+    "git add -A && git commit -m 'run npm install' && git push",
+    "git switch -c topic",
+    "gh pr create --fill",
+    "cd src && ls -la; pwd",
+    "# what is there\ncat README.md",
+    "grep -rn 'npm run build' . | sort | uniq",
+    "for f in a b; do cat $f; done",
+    "if [ -f a ]; then echo yes; fi",
+    "cat > docs/notes.md <<'EOF'\nnpm run build\nEOF",
+    "sed -i 's/a/b/' a.txt",
+    "",
+  ]) {
+    assert.equal(shellOnlyLooks(command), true, command);
+  }
+
+  for (const command of [
+    "npm run format",
+    "npm install",
+    "cargo fmt",
+    "python3 -c \"open('a','w')\"",
+    "python3 - <<'PY'\nprint(1)\nPY",
+    "npx prettier --write src/a.ts",
+    "./scripts/gen.sh",
+    "git apply fix.patch",
+    "git pull",
+    "git stash pop",
+    "git status && make",
+    "cat a.txt | xargs rm",
+    "echo $(npm run build)",
+    "touch a.txt",
+    "curl -o a.txt http://x/y",
+  ]) {
+    assert.equal(shellOnlyLooks(command), false, command);
   }
 });

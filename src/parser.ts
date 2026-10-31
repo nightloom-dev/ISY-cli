@@ -495,6 +495,31 @@ export function gitCommands(command: string): string[] {
   return found;
 }
 
+/** Besides `SHELL_READERS`, what leaves the tree as it found it: a comment and a loop's own words too. */
+const SHELL_LOOKS =
+  /^(?:#|(?:cd|ls|pwd|echo|printf|date|sleep|true|false|which|sort|uniq|cut|tr|ps|mkdir|export|test|\[|gh|for|done|fi)(?:\s|$))/;
+
+/** Git commands that put nothing into the tree for a commit to hold. */
+const GIT_LOOKS = new Set([
+  "status", "log", "diff", "show", "blame", "reflog", "rev-parse", "rev-list", "ls-files", "describe",
+  "config", "remote", "fetch", "push", "branch", "tag", "worktree", "switch", "checkout", "add", "commit",
+]);
+
+/**
+ * Whether a shell command leaves nothing behind for a commit to hold, apart from
+ * what it writes by name (`shellWrites`). Anything not known here reads as no: a
+ * formatter, a build, a script write what nobody can say from the command line.
+ */
+export function shellOnlyLooks(command: string): boolean {
+  return commandSegments(withoutHeredocs(command)).every((segment) => {
+    const bare = withoutQuoted(segment);
+    const subcommand = GIT_CALL.exec(bare)?.[1];
+    if (subcommand !== undefined) return GIT_LOOKS.has(subcommand);
+    const called = bare.replace(LEADING_WORDS, "");
+    return called.trim() === "" || SHELL_READERS.test(called) || SHELL_LOOKS.test(called);
+  });
+}
+
 /**
  * `sed -i` rewrites the file; whatever else it is, it is not a look at it. GNU
  * takes any backup suffix (`-i.bak`, `-ie`), the flag rides in a cluster

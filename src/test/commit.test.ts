@@ -1136,6 +1136,44 @@ test("a branch the agent left for itself, or a rename, leaves its row behind and
   assert.match((await runCommit({ noUpload: true }, cwd)).skipped ?? "", /another branch/);
 });
 
+test("a command nobody can read keeps the commit with its session, and one that only looks gives it up", async () => {
+  for (const [command, file, kept] of [
+    [`python3 -c "open('docs/n.md','w').write('x')"`, "docs/n.md", true],
+    ["npx prettier --write src/a.ts", "src/a.ts", true],
+    ["git apply fix.patch", "src/a.ts", true],
+    ["curl -o docs/n.md http://x/y", "docs/n.md", true],
+    ["cargo fmt", "src/a.rs", true],
+    ["npm run format", "src/a.ts", true],
+    ["npm install", "package-lock.json", true],
+    ["git status && git log -3 && cat README.md", "README.md", false],
+    ["git add -A && git commit -m notes.md && git push", "docs/notes.md", false],
+    ["gh pr create --fill", "other.md", false],
+  ] as const) {
+    const cwd = await newRepo("isy-commit-unread-");
+    const path = await writeSession(cwd, "sess-unread", "left-pad");
+    await appendTurn(path, "sess-unread", shell("t-call", command), OLD);
+    await onBranch(path, "main");
+    await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+    await commitFile(cwd, file);
+
+    const { skipped } = await runCommit({ noUpload: true }, cwd);
+    if (kept) assert.equal(skipped, undefined, command);
+    else assert.match(skipped ?? "", /another branch/, command);
+    await writeFile(sessionStatePath(), "{}\n");
+  }
+
+  // Waiting on one that only looks says nothing either, and on one nobody can read it may.
+  for (const [busy, kept] of [["tail -f server.log", false], ["./release.sh", true]] as const) {
+    const cwd = await newRepo("isy-commit-busy-");
+    const path = await writeSession(cwd, "sess-busy", "left-pad");
+    await appendTurn(path, "sess-busy", shell("t-busy", busy), new Date().toISOString());
+    await onBranch(path, "main");
+    await run("git", ["switch", "-q", "-c", "feat"], { cwd });
+    await commitFile(cwd, "README.md");
+    assert.equal((await runCommit({ noUpload: true }, cwd)).skipped === undefined, kept, busy);
+  }
+});
+
 test("a commit passes over a newer session on another branch for the one standing on this one", async () => {
   const cwd = await realpath(await newRepo("isy-commit-standing-"));
   await mkdir(join(cwd, "docs"));
