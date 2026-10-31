@@ -1073,6 +1073,60 @@ test("telling sessions apart reads no further than its budget, at every pick of 
   assert.ok(!reads.includes("sess-third"), reads.join());
 });
 
+test("how much of git a commit asks does not grow with the sessions active beside it", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-many-"));
+  const newest = await writeSession(cwd, "sess-newest", "ms");
+  for (let index = 0; index < 20; index += 1) {
+    await age(await writeSession(cwd, `sess-${index}`, "ms"), 1 / 1440);
+  }
+  await commitFile(cwd, "README.md");
+
+  // Every git this process starts leaves a line, before running the real one.
+  const bin = await mkdtemp(join(tmpdir(), "isy-commit-bin-"));
+  const log = join(bin, "calls");
+  const real = (await run("sh", ["-c", "command -v git"], { cwd })).stdout.trim();
+  await writeFile(join(bin, "git"), `#!/bin/sh\necho "$1" >> "${log}"\nexec "${real}" "$@"\n`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-newest");
+  } finally {
+    process.env.PATH = path;
+  }
+  assert.equal((await readState())[newest]?.commits?.length, 1);
+
+  const calls = (await readFile(log, "utf8")).trim().split("\n");
+  assert.equal(calls.filter((call) => call === "show").length, 1, calls.join());
+  assert.ok(calls.length <= 12, calls.join());
+});
+
+test("a tree full of other repositories' sessions bounds the walk a commit makes for its own", async () => {
+  const cwd = await realpath(await newRepo("isy-commit-walk-"));
+  const nested = await newRepo("isy-commit-walk-nested-");
+  const inside = join(cwd, "work", "proj");
+  await mkdir(dirname(inside), { recursive: true });
+  await rename(nested, inside);
+  for (let index = 0; index < 40; index += 1) {
+    await age(await writeSession(inside, `sess-nested-${index}`, "ms"), 2 / 24);
+  }
+  const own = await writeSession(cwd, "sess-own", "ms");
+  await age(own, 3 / 24);
+  await commitFile(cwd, "README.md");
+
+  const { cwdOf } = claudeAgent;
+  let looked = 0;
+  claudeAgent.cwdOf = async (file) => {
+    looked += 1;
+    return cwdOf(file);
+  };
+  try {
+    assert.equal((await runCommit({ noUpload: true }, cwd)).sessionId, "sess-own");
+  } finally {
+    claudeAgent.cwdOf = cwdOf;
+  }
+  assert.ok(looked <= 32, String(looked));
+});
+
 test("a CLI that records no branch is judged by the one its upload found", async () => {
   const cwd = await newRepo("isy-commit-nobranch-");
   const path = await writeSession(cwd, "sess-nobranch", "left-pad");

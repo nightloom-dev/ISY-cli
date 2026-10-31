@@ -68,6 +68,7 @@ function isWithin(top: string, directory: string): boolean {
 export async function* sessionsInTree(
   agent: Agent,
   cwd: string,
+  readsElsewhere = Infinity,
 ): AsyncGenerator<DiscoveredSession> {
   const recorded = await agent.sessionsIn(cwd);
   const top = await workTreeTop(cwd);
@@ -89,6 +90,8 @@ export async function* sessionsInTree(
       yield file;
       continue;
     }
+    if (readsElsewhere <= 0) continue;
+    readsElsewhere -= 1;
     // Listed a moment ago, and one that cannot be opened now says nothing of the rest.
     const directory = file.cwd ?? (await agent.cwdOf(file.path).catch(() => undefined));
     if (!directory || !isWithin(top, directory)) continue;
@@ -104,8 +107,13 @@ export async function* sessionsInTree(
  *
  * ponytail: a subagent working for a session does not move that time, so one that
  * commits after its session has waited on it for longer than `withinMs` is not
- * looked for. Walk by `modifiedAt`, which counts subagents, if that shows up.
+ * looked for. Walk by `modifiedAt`, which counts subagents, if that shows up. And
+ * a hook is waiting on this, so with other repositories' sessions all through the
+ * tree, as with dotfiles at $HOME, only `READS_FROM_A_HOOK` of those further down
+ * are looked into, and a session of this tree behind them is not found.
  */
+const READS_FROM_A_HOOK = 32;
+
 export async function latestSessions(
   cwd: string,
   withinMs: number,
@@ -114,7 +122,7 @@ export async function latestSessions(
   const found: { agent: Agent; file: DiscoveredSession }[] = [];
 
   for (const agent of await presentAgents()) {
-    for await (const file of sessionsInTree(agent, cwd)) {
+    for await (const file of sessionsInTree(agent, cwd, READS_FROM_A_HOOK)) {
       found.push({ agent, file });
       if (lastActive(file) < oldest) break;
     }

@@ -9,6 +9,7 @@ import { spawnIsy } from "../spawn.js";
 import { runStage0 } from "../stage0.js";
 import { candidateKey, namedBranch, readState, unseen, updateSession, withCommit } from "../state.js";
 import type { ClientState, SessionState } from "../state.js";
+import type { MaskRoots } from "../mask-paths.js";
 import type { Candidate, DiscoveredSession, ParsedSession, ToolUse } from "../types.js";
 
 export interface CommitReport {
@@ -75,20 +76,17 @@ export function wordsOf(input: unknown): string[] {
 async function carriesItsWork(
   session: ParsedSession,
   state: SessionState,
-  sessionCwd: string,
-  cwd: string,
+  committed: Set<string>,
+  names: Set<string>,
+  roots: () => Promise<MaskRoots>,
 ): Promise<boolean> {
   const since = state.commits?.at(-1)?.records ?? 0;
-  const files = await filesInHead(cwd);
-  const committed = new Set(files);
   // A transcript read as it is holds paths as the agent wrote them, and git names
   // a file from the top of the tree: the rule the upload rewrites them by.
-  const roots = await maskRootsFor(sessionCwd);
   for (const [path, edits] of session.fileEdits) {
-    if (edits.some((edit) => edit.recordIndex >= since) && committed.has(maskPath(path, roots))) return true;
+    if (edits.some((edit) => edit.recordIndex >= since) && committed.has(maskPath(path, await roots()))) return true;
   }
 
-  const names = new Set(files.map((file) => basename(file)));
   return session.toolUses.some(
     (use) =>
       use.recordIndex >= since &&
@@ -204,11 +202,26 @@ async function sessionOfCommit(
   }
   if (read.length === 0) return { skipped: "no session here could be read" };
 
+  const files = await filesInHead(cwd);
+  const committed = new Set(files);
+  const names = new Set(files.map((file) => basename(file)));
+  const roots = new Map<string, Promise<MaskRoots>>();
+  const rootsIn = (directory: string) => {
+    if (!roots.has(directory)) roots.set(directory, maskRootsFor(directory));
+    return roots.get(directory)!;
+  };
+  // Asking takes the git calls above and what a directory or a branch adds, so
+  // however many were read, it gets the same again and stops there.
+  const askUntil = deadline + TELLING_APART_MS;
   for (const entry of read) {
-    if (await carriesItsWork(entry.session, states[entry.file.path] ?? {}, entry.file.cwd ?? cwd, cwd)) return entry;
+    const state = states[entry.file.path] ?? {};
+    const directory = entry.file.cwd ?? cwd;
+    if (await carriesItsWork(entry.session, state, committed, names, () => rootsIn(directory))) return entry;
+    if (Date.now() >= askUntil) break;
   }
   for (const entry of read) {
     if (await isItsCommit(entry.session, states[entry.file.path] ?? {}, branch, cwd)) return entry;
+    if (Date.now() >= askUntil) break;
   }
   return { skipped: "the sessions here are on another branch and this commit holds none of their work" };
 }
