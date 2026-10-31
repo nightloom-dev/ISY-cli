@@ -128,6 +128,25 @@ export async function filesInHead(cwd: string): Promise<string[]> {
 }
 
 /**
+ * What the given commits left in each file they changed, by blob. A merge has none,
+ * as what it brings in is the other side's, and a commit gone from the repository
+ * is passed over.
+ */
+export async function blobsOf(cwd: string, shas: string[]): Promise<Map<string, Set<string>>> {
+  const raw = await git(cwd, [
+    "log", "--no-walk", "--ignore-missing", "-z", "--format=", "--raw", "--no-abbrev", "--no-renames", ...shas, "--",
+  ]);
+  const fields = raw?.split("\0").filter(Boolean) ?? [];
+  const blobs = new Map<string, Set<string>>();
+  // `:100644 100644 <old> <new> M`, then the path.
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const path = fields[index + 1]!;
+    blobs.set(path, (blobs.get(path) ?? new Set()).add(fields[index]!.split(" ")[3]!));
+  }
+  return blobs;
+}
+
+/**
  * For a question about a directory, which may not be the one a hook runs in: a
  * post-commit hook in a linked worktree inherits `GIT_DIR`, and git then takes
  * any directory it stands in for the top of the tree.

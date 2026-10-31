@@ -2,7 +2,7 @@ import { basename, relative, resolve } from "node:path";
 import { latestSessions } from "../agents/index.js";
 import type { Agent, AgentId } from "../agents/index.js";
 import { readConfig } from "../config.js";
-import { branchExists, currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
+import { blobsOf, branchExists, currentBranch, filesInHead, headSha, maskRootsFor } from "../git.js";
 import { errorMessage, logError } from "../log.js";
 import { maskPath } from "../mask-paths.js";
 import { gitCommands, mayWrite, parseLines, shellOnlyLooks, shellWrites } from "../parser.js";
@@ -66,8 +66,8 @@ export function wordsOf(input: unknown): string[] {
 }
 
 /**
- * Whether HEAD holds what the session left uncommitted: an edit past its last
- * mark to a file HEAD changed, or a write it could not name that mentions one.
+ * Whether HEAD holds what the session left: an edit past `since` to a file HEAD
+ * changed, or a write it could not name that mentions one.
  *
  * ponytail: by file, not by line, and for the unnamed writes by base name, so a
  * commit that happens to touch such a file counts, and a script that writes files
@@ -76,13 +76,12 @@ export function wordsOf(input: unknown): string[] {
  */
 async function carriesItsWork(
   session: ParsedSession,
-  state: SessionState,
+  since: number,
   committed: Set<string>,
   names: Set<string>,
   directory: string,
   rootsIn: (directory: string) => Promise<MaskRoots>,
 ): Promise<boolean> {
-  const since = state.commits?.at(-1)?.records ?? 0;
   // A transcript read as it is holds paths as the agent wrote them, from where it
   // stood or in full, and git names a file from the top of the tree.
   for (const [path, edits] of session.fileEdits) {
@@ -96,6 +95,30 @@ async function carriesItsWork(
       writesUnnamed(use) &&
       wordsOf(use.input).some((word) => names.has(word)),
   );
+}
+
+/**
+ * Whether HEAD holds work from behind the session's last mark, however it got here:
+ * a file as one of its marks left it, which is an amend, a redo, a pick or a rebase
+ * on another branch, or a file it edited that no mark took, which is its edits split
+ * over commits. A clean merge shows neither: it changes no file of its own.
+ */
+async function holdsMovedWork(
+  session: ParsedSession,
+  state: SessionState,
+  files: string[],
+  directory: string,
+  cwd: string,
+  rootsIn: (directory: string) => Promise<MaskRoots>,
+): Promise<boolean> {
+  const marks = state.commits?.map((mark) => mark.sha);
+  if (!marks?.length) return false;
+  const marked = await blobsOf(cwd, marks);
+  for (const [file, blobs] of await blobsOf(cwd, ["HEAD"])) {
+    if ([...blobs].some((blob) => marked.get(file)?.has(blob))) return true;
+  }
+  const unmarked = files.filter((file) => !marked.has(file));
+  return carriesItsWork(session, 0, new Set(unmarked), new Set(unmarked.map((file) => basename(file))), directory, rootsIn);
 }
 
 /** How an agent leaves for another branch itself. A rename is told by the old name being gone. */
@@ -163,7 +186,7 @@ function isCommitting(use: ToolUse): boolean {
  * agent waiting on its `git commit` writes nothing while another session goes on
  * writing. So one making a commit this moment comes first, then one whose work the
  * commit holds, as when a human commits what an agent left, and only then the newest
- * that can take it (`isItsCommit`).
+ * that can take it (`isItsCommit`) or whose marked work moved here (`holdsMovedWork`).
  *
  * Read as they are, because a transcript's redaction costs five times its read and
  * only the session this ends on goes up. Past the first, one the budget does not
@@ -219,12 +242,14 @@ async function sessionOfCommit(
   // however many were read, it gets the same again and stops there.
   const askUntil = deadline + TELLING_APART_MS;
   for (const entry of read) {
-    const state = states[entry.file.path] ?? {};
-    if (await carriesItsWork(entry.session, state, committed, names, entry.file.cwd ?? cwd, rootsIn)) return entry;
+    const since = states[entry.file.path]?.commits?.at(-1)?.records ?? 0;
+    if (await carriesItsWork(entry.session, since, committed, names, entry.file.cwd ?? cwd, rootsIn)) return entry;
     if (Date.now() >= askUntil) break;
   }
   for (const entry of read) {
-    if (await isItsCommit(entry.session, states[entry.file.path] ?? {}, branch, cwd)) return entry;
+    const state = states[entry.file.path] ?? {};
+    if (await isItsCommit(entry.session, state, branch, cwd)) return entry;
+    if (await holdsMovedWork(entry.session, state, files, entry.file.cwd ?? cwd, cwd, rootsIn)) return entry;
     if (Date.now() >= askUntil) break;
   }
   return { skipped: "the sessions here are on another branch and this commit holds none of their work" };
