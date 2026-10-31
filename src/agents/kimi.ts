@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { parkAlert } from "../alert.js";
 import { maskRootsFor } from "../git.js";
-import { NPX_ISY } from "../hook.js";
+import { NPX_ISY, NPX_ISY_CACHED } from "../hook.js";
 import { parseLines } from "../parser.js";
 import { firstLine, firstLines, lastActive, pendingAlertPath } from "../paths.js";
 import { redactLines } from "../redact.js";
@@ -409,9 +409,13 @@ const OLDER_UPLOADS = [
 ];
 
 /** The commands an older isy wrote for the session start, in any home. */
-const OLDER_STARTS = ["npx isy check --hook --agent kimi", "npx @nightloom/isy check --hook --agent kimi"];
+const OLDER_STARTS = [
+  "npx isy check --hook --agent kimi",
+  "npx @nightloom/isy check --hook --agent kimi",
+  `${NPX_ISY} check --hook --agent kimi`,
+];
 
-const START_COMMAND = `${NPX_ISY} check --hook --agent kimi`;
+const START_COMMAND = `${NPX_ISY_CACHED} check --hook --agent kimi`;
 const KIMI_CLI_UPLOAD = `exec 3<&0; nohup ${NPX_ISY} upload --hook --agent kimi <&3 >/dev/null 2>&1 &`;
 const KIMI_CODE_UPLOAD = `${NPX_ISY} upload --hook --agent kimi`;
 

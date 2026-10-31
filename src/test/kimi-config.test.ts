@@ -118,7 +118,7 @@ test("rewrites the lines written before a hook could give up on the registry, in
     const commands = hookTables(contents).map((table) => table.command ?? "");
     assert.equal(commands.filter((command) => command.includes("npx")).length, 2, home);
     for (const command of commands.filter((line) => line.includes("npx"))) {
-      assert.match(command, /(?:^|\s)npx --fetch-retries=0 --fetch-timeout=\d+ @nightloom\/isy /, home);
+      assert.match(command, /(?:^|\s)npx (?:--prefer-offline )?--fetch-retries=0 --fetch-timeout=\d+ @nightloom\/isy /, home);
     }
     assert.equal(await kimiAgent.repairHooks?.(), false, home);
   }
@@ -160,7 +160,7 @@ test("finds its hooks by what they run once Kimi has written the config back wit
 
   let contents = await readFile(kimiConfigPath(), "utf8");
   assert.equal(count(contents, /^\[\[hooks\]\]$/gm), 3);
-  assert.equal(count(contents, /npx --fetch-retries=0 --fetch-timeout=2000 @nightloom\/isy/g), 2);
+  assert.equal(count(contents, /npx (?:--prefer-offline )?--fetch-retries=0 --fetch-timeout=2000 @nightloom\/isy/g), 2);
   assert.match(contents, /exec 3<&0; nohup npx --fetch-retries=0 --fetch-timeout=2000 @nightloom\/isy upload --hook --agent kimi/);
   assert.match(contents, /command = "\.\/guard\.sh"/);
   assert.match(contents, /\[models\.k2\]\nprovider = "moonshot"/);

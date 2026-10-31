@@ -39,9 +39,12 @@ database or to a model.
   up with `npx @nightloom/isy init` never installed anything globally. Old
   commands are listed in `superseded`, so installing over them rewrites the line
   in place instead of stacking a second hook (`hook.ts`, `githook.ts`,
-  `agents/kimi.ts`, `agents/codex.ts`). Every line starts with `hook.ts:NPX_ISY`:
-  npx asks the registry before it starts anything, and on its defaults a commit
-  waited 70 seconds offline and 16 minutes on a network that never answers.
+  `agents/kimi.ts`, `agents/codex.ts`). Every line starts with `hook.ts:NPX_ISY`
+  or, where someone is waiting on it, `hook.ts:NPX_ISY_CACHED`: npx asks the
+  registry before it starts anything, and on its defaults a commit waited 70
+  seconds offline and 16 minutes on a network that never answers. A line someone
+  waits on asks nothing while a version is cached, and an update reaches it
+  through the lines that run in the background, so those must keep asking.
 - **The parser must survive unknown fields and record types.** Transcript
   formats are undocumented and move between CLI versions. Log and skip; never
   throw.

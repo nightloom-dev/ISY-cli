@@ -648,7 +648,7 @@ test("writes its hooks into hooks.json and takes them out again", async () => {
   };
   assert.equal(
     contents.hooks.SessionStart?.[0]?.hooks[0]?.command,
-    "npx --fetch-retries=0 --fetch-timeout=2000 @nightloom/isy check --hook --agent codex",
+    "npx --prefer-offline --fetch-retries=0 --fetch-timeout=2000 @nightloom/isy check --hook --agent codex",
   );
   // Detached, because Codex is closing the session and the hook shell must not
   // wait; the payload goes over fd 3, because a background job's stdin is /dev/null.

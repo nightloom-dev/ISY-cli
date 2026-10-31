@@ -12,10 +12,23 @@ import { claudeConfigDir, claudeSettingsPath } from "./paths.js";
  */
 export const NPX_ISY = "npx --fetch-retries=0 --fetch-timeout=2000 @nightloom/isy";
 
+/**
+ * How a line someone is waiting on starts: a commit, a session starting. npm's
+ * timeout does not cover connecting, so on a network that drops packets on the way
+ * to the registry the line above still holds for over two minutes. This one asks
+ * nothing while there is a cached version to run. The lines that run in the
+ * background ask, and what they learn is in the cache this reads, so an update
+ * reaches it one background run later.
+ *
+ * ponytail: with nothing cached the first such line still asks, and holds that long
+ * once on such a network. A real limit there takes a wrapper around npx.
+ */
+export const NPX_ISY_CACHED = "npx --prefer-offline --fetch-retries=0 --fetch-timeout=2000 @nightloom/isy";
+
 export const HOOK_EVENT = "SessionEnd";
 export const HOOK_COMMAND = `exec 3<&0; nohup ${NPX_ISY} upload --hook <&3 >/dev/null 2>&1 &`;
 export const START_HOOK_EVENT = "SessionStart";
-export const START_HOOK_COMMAND = `${NPX_ISY} check --hook`;
+export const START_HOOK_COMMAND = `${NPX_ISY_CACHED} check --hook`;
 
 /**
  * The scope is spelled out, and npx stays. npx resolves a bare name against the
@@ -55,7 +68,7 @@ export const ISY_HOOKS: (AgentHook & { superseded: string[] })[] = [
   {
     event: START_HOOK_EVENT,
     command: START_HOOK_COMMAND,
-    superseded: ["npx isy check --hook", "npx @nightloom/isy check --hook"],
+    superseded: ["npx isy check --hook", "npx @nightloom/isy check --hook", `${NPX_ISY} check --hook`],
   },
 ];
 

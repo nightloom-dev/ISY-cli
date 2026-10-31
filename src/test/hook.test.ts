@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
+import { promisify } from "node:util";
 import { codexAgent } from "../agents/codex.js";
-import { COMMIT_COMMAND, GIT_HOOKS } from "../githook.js";
+import { COMMIT_COMMAND, GIT_HOOKS, PUSH_COMMAND } from "../githook.js";
 import {
   HOOK_COMMAND,
   ISY_HOOKS,
+  NPX_ISY,
   START_HOOK_COMMAND,
   installHook,
   installedHooks,
@@ -197,7 +201,7 @@ test("rewrites the lines written before a hook could give up on the registry", a
 
 test("every npx line, in git hooks and in a CLI's settings, gives up on the registry early", () => {
   for (const { command } of [...GIT_HOOKS, ...ISY_HOOKS, ...codexAgent.hooks()]) {
-    assert.match(command, /(?:^|\s)npx --fetch-retries=0 --fetch-timeout=\d+ @nightloom\/isy /, command);
+    assert.match(command, /(?:^|\s)npx (?:--prefer-offline )?--fetch-retries=0 --fetch-timeout=\d+ @nightloom\/isy /, command);
   }
 });
 
@@ -235,6 +239,83 @@ test("a hook line run by the real npx does not wait on a registry that never ans
     for (const socket of held) socket.destroy();
     hole.close();
   }
+});
+
+test("a line someone waits on runs what is cached without asking, and a line in the background brings the update", async () => {
+  const home = await mkdtemp(join(tmpdir(), "isy-npx-cached-"));
+  const ran = join(home, "ran");
+  const tarballs = new Map<string, Buffer>();
+  for (const version of ["1.0.0", "1.0.1"]) {
+    const dir = join(home, version);
+    await mkdir(dir);
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "@nightloom/isy", version, bin: { isy: "isy.js" } }));
+    await writeFile(join(dir, "isy.js"), `#!/usr/bin/env node\nrequire("fs").writeFileSync(${JSON.stringify(ran)}, ${JSON.stringify(version)});\n`);
+    const { stdout } = await promisify(execFile)("npm", ["pack", "--silent"], { cwd: dir });
+    tarballs.set(version, await readFile(join(dir, stdout.trim())));
+  }
+
+  let latest = "1.0.0";
+  let asked = 0;
+  const registry = createHttpServer((request, response) => {
+    asked += 1;
+    const base = `http://127.0.0.1:${(registry.address() as AddressInfo).port}`;
+    if (request.url?.endsWith(".tgz")) {
+      response.end(tarballs.get(/([\d.]+)\.tgz$/.exec(request.url)![1]!));
+      return;
+    }
+    const versions = Object.fromEntries(
+      [...tarballs].filter(([version]) => version <= latest).map(([version, body]) => [version, {
+        name: "@nightloom/isy",
+        version,
+        bin: { isy: "isy.js" },
+        dist: {
+          tarball: `${base}/isy-${version}.tgz`,
+          integrity: `sha512-${createHash("sha512").update(body).digest("base64")}`,
+        },
+      }]),
+    );
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ name: "@nightloom/isy", "dist-tags": { latest }, versions }));
+  });
+  await new Promise<void>((resolve) => registry.listen(0, "127.0.0.1", resolve));
+
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    npm_config_cache: join(home, "cache"),
+    npm_config_prefix: join(home, "prefix"),
+    npm_config_registry: `http://127.0.0.1:${(registry.address() as AddressInfo).port}/`,
+    npm_config_update_notifier: "false",
+    npm_config_audit: "false",
+  };
+  const runs = async (line: string): Promise<{ version: string; asked: number }> => {
+    asked = 0;
+    await promisify(execFile)("sh", ["-c", line], { cwd: home, env });
+    return { version: await readFile(ran, "utf8"), asked };
+  };
+  const inTheBackground = PUSH_COMMAND.replace(/ &$/, "");
+
+  try {
+    assert.equal((await runs(COMMIT_COMMAND)).version, "1.0.0");
+
+    latest = "1.0.1";
+    assert.deepEqual(await runs(COMMIT_COMMAND), { version: "1.0.0", asked: 0 });
+    assert.deepEqual(await runs(START_HOOK_COMMAND), { version: "1.0.0", asked: 0 });
+    assert.equal((await runs(inTheBackground)).version, "1.0.1");
+    assert.deepEqual(await runs(COMMIT_COMMAND), { version: "1.0.1", asked: 0 });
+  } finally {
+    registry.close();
+  }
+});
+
+test("a line that asked the registry every time is brought up to date in place", async () => {
+  const older = `${NPX_ISY} check --hook`;
+  assert.notEqual(older, START_HOOK_COMMAND);
+  await writeSettings({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: older }] }] } });
+
+  assert.equal(await repairHooks(), true);
+  const hooks = (await settings()).hooks as Record<string, { hooks: { command: string }[] }[]>;
+  assert.equal(hooks.SessionStart?.[0]?.hooks[0]?.command, START_HOOK_COMMAND);
 });
 
 test("removes a hook left behind by an older isy", async () => {

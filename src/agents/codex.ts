@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { parkAlert, withParkedAlerts } from "../alert.js";
 import { maskRootsFor } from "../git.js";
-import { NPX_ISY, installHookIn, installedHooksIn, removeHookIn } from "../hook.js";
+import { NPX_ISY, NPX_ISY_CACHED, installHookIn, installedHooksIn, removeHookIn } from "../hook.js";
 import type { HookFile } from "../hook.js";
 import { parseLines } from "../parser.js";
 import { firstLine } from "../paths.js";
@@ -44,8 +44,12 @@ function codexHooks(): AgentHook[] {
   return [
     {
       event: "SessionStart",
-      command: `${NPX_ISY} check --hook --agent codex`,
-      superseded: ["npx isy check --hook --agent codex", "npx @nightloom/isy check --hook --agent codex"],
+      command: `${NPX_ISY_CACHED} check --hook --agent codex`,
+      superseded: [
+        "npx isy check --hook --agent codex",
+        "npx @nightloom/isy check --hook --agent codex",
+        `${NPX_ISY} check --hook --agent codex`,
+      ],
     },
     {
       event: "SessionEnd",

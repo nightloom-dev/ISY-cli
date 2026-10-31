@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import { NPX_ISY } from "./hook.js";
+import { NPX_ISY, NPX_ISY_CACHED } from "./hook.js";
 import { logLine } from "./log.js";
 
 const run = promisify(execFile);
@@ -22,7 +22,7 @@ const END = "# isy:end";
  * already happened. It is about the user's own script: a hook running under
  * `set -e` must not abort at our line.
  */
-export const COMMIT_COMMAND = `${NPX_ISY} commit --hook || true`;
+export const COMMIT_COMMAND = `${NPX_ISY_CACHED} commit --hook || true`;
 
 /**
  * The push is the moment the analysis is actually waiting for: a pull request
