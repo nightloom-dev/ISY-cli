@@ -879,6 +879,106 @@ test("leaves what is said about a secret alone, and code that only names one", (
   }
 });
 
+test("a secret's name stays one through its value, its environment and its version", () => {
+  const masked = marker("assignment");
+  const value = "aB3dE6gH9jK2mN5p";
+  for (const name of [
+    "DB_PASSWORD_PROD",
+    "DB_PASSWORD_PRODUCTION",
+    "API_KEY_PROD",
+    "AUTH_TOKEN_DEV",
+    "SESSION_SECRET_OLD",
+    "JWT_SECRET_NEW",
+    "stripe_secret_key_live",
+    "STRIPE_SECRET_KEY_TEST",
+    "SMTP_PASSWORD_STAGING",
+    "SMTP_PASSWORD_STAGE",
+    "ADMIN_TOKEN_LOCAL",
+    "SECRET_KEY_BASE_OLD",
+    "GITHUB_TOKEN_2",
+    "API_KEY_PROD_2",
+    "SECRET_VALUE",
+    "token_value",
+    "api_key_value",
+    "secret-old",
+    "DB_PWD_PROD",
+    "accessTokenProd",
+    "apiKeyProd",
+    "dbPasswordOld",
+    "secretOld",
+    "tokenValue",
+    "accessToken2",
+  ]) {
+    assert.equal(redactOne(`${name}=${value}`), `${name}=${masked}`, name);
+    assert.equal(redactOne(`${name}: "${value}"`), `${name}: "${masked}"`, name);
+    const record = redactOne(JSON.stringify({ [name]: value }));
+    assert.equal(record, JSON.stringify({ [name]: masked }), name);
+  }
+
+  assert.deepEqual(throughCall("mcp__vault__put", { DB_PASSWORD_PROD: value, accessToken2: value, tokenValue: value }, "plain output").input, {
+    DB_PASSWORD_PROD: masked,
+    accessToken2: masked,
+    tokenValue: masked,
+  });
+
+  // A plain name takes a space and no quote, and a hump is as often code.
+  assert.equal(redactOne(`DB_PASSWORD_PROD = ${value}`), `DB_PASSWORD_PROD = ${masked}`);
+  assert.equal(redactOne(`export API_KEY_PROD=${value} && psql`), `export API_KEY_PROD=${masked} && psql`);
+  assert.equal(redactOne(`--token-prod ${value}`), `--token-prod ${masked}`);
+  for (const text of [
+    "const tokenValue = someLongVariableName",
+    "secretValue: someLongVariableName",
+    `tokenValue = ${value}`,
+    `accessTokenProd: ${value}`,
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+});
+
+test("what is said about a secret still ends in a word of its own", () => {
+  for (const name of [
+    "PASSWORD_HASH",
+    "passwordHash",
+    "TOKEN_COUNT",
+    "token_program",
+    "destination_token_program",
+    "owner_token_x",
+    "tokens_old",
+    "token_prodigy",
+    "secret_newsletter",
+    "token_2022",
+    "klend-repay-token2022",
+    "token0",
+    "token1",
+    "oauth2",
+    "password2",
+  ]) {
+    const text = `${name}=aB3dE6gH9jK2mN5p`;
+    assert.equal(redactOne(text), text);
+  }
+});
+
+test("a camelCase name ending in a secret's word, spaced from a bare value, counts when the value looks generated", () => {
+  const masked = marker("assignment");
+  for (const name of ["accessToken", "refreshToken", "clientSecret", "dbPassword", "_authToken"]) {
+    assert.equal(redactOne(`${name}: aB3dE6gH9jK2mN5p`), `${name}: ${masked}`, name);
+    assert.equal(redactOne(`  ${name}:  aB3dE6gH9jK2mN5p,`), `  ${name}:  ${masked}`, name);
+  }
+  for (const text of [
+    "accessToken: string",
+    "accessToken: request.headers.authorization",
+    "clientSecret: process.env.CLIENT_SECRET",
+    "dbPassword: documentation",
+    "accessToken: 202410201230",
+    "accessToken = aB3dE6gH9jK2mN5p",
+    "accessToken:aB3dE6gH9jK2mN5p",
+    "accessTokenUrl: aB3dE6gH9jK2mN5p",
+    "myApiKey: aB3dE6gH9jK2mN5p",
+  ]) {
+    assert.equal(redactOne(text), text);
+  }
+});
+
 test("a secret made of digits is still a secret", () => {
   const masked = marker("assignment");
   const cases: [string, string][] = [
