@@ -1349,6 +1349,68 @@ test("an in-place edit of a dotenv file loses its script behind whatever runs it
   assert.deepEqual(shellEditPaths(`sed -i ${m} .env*`, "."), [], "and a glob still names no file to the parse");
 });
 
+test("a dotenv file is one however a variable builds its path", () => {
+  const m = marker("dotenv");
+  const value = "Hy4tN7wB2cQs";
+  const write = `echo K=${value} > "$ENV_FILE"`;
+  const script = `'s/^K=.*/K=${value}/'`;
+  const cases: [string, string][] = [
+    // A value in quotes is one word, and what a substitution turns up only says where it starts.
+    [`ENV_FILE="$(git rev-parse --show-toplevel)/.env"\n${write}`, `${m} > .env`],
+    [`ENV_FILE=$(git rev-parse --show-toplevel)/.env\n${write}`, `${m} > .env`],
+    [`ENV_FILE="$(dirname "$0")/.env"\n${write}`, `${m} > .env`],
+    [`ENV_FILE="$(dirname "$(realpath "$0")")/../.env.local"\n${write}`, `${m} > ../.env.local`],
+    [`ENV_FILE="/srv/My Project/.env"\n${write}`, `${m} > Project/.env`],
+    [`ENV_FILE='/srv/My Project/.env'\n${write}`, `${m} > Project/.env`],
+    // One variable from another.
+    [`A=.env; B=$A\necho K=${value} > "$B"`, `${m} > .env`],
+    [`A=.env\nB="\${A}"\necho K=${value} >> "\${B}"`, `${m} > .env`],
+    // A default.
+    [`echo K=${value} > "\${ENV_FILE:-.env}"`, `${m} > .env`],
+    [`echo K=${value} > \${ENV_FILE-.env}`, `${m} > .env`],
+    [`echo K=${value} > "\${ENV_FILE:=.env.local}"`, `${m} > .env.local`],
+    [`ENV_FILE="\${ENV_FILE:-.env}"\n${write}`, `${m} > .env`],
+    // A name that comes from a variable.
+    [`echo K=${value} > "$STAGE.env"`, `${m} > $STAGE.env`],
+    [`echo K=${value} > "\${STAGE}.env"`, `${m} > \${STAGE}.env`],
+    [`echo K=${value} > config/$STAGE.env`, `${m} > config/$STAGE.env`],
+    [`echo K=${value} | tee "$STAGE.env"`, `${m} > $STAGE.env`],
+    [`F="$STAGE.env"\necho K=${value} > "$F"`, `${m} > $STAGE.env`],
+    // And an edit named any of these ways.
+    [`sed -i ${script} "$STAGE.env"`, `sed -i ${m} .env`],
+    [`sed -i ${script} "\${STAGE}.env"`, `sed -i ${m} .env`],
+    [`sed -i ${script} "\${F:-.env}"`, `sed -i ${m} .env`],
+    [`A=.env; B=$A; sed -i ${script} "$B"`, `sed -i ${m} .env`],
+  ];
+  for (const [command, expected] of cases) {
+    const session = summaryFor([
+      ...callAndResult("Bash", { command }, ""),
+      { type: "user", message: { role: "user", content: `the key is ${value}` } },
+    ]);
+    assert.equal(throughCall("Bash", { command }, "plain output").input.command, expected, command);
+    assert.ok(!session.lines.join("\n").includes(value), command);
+    assert.equal(throughCall("Bash", { command: expected }, "plain output").input.command, expected, "and a second pass changes nothing");
+  }
+
+  // What a variable builds into another file stays, and so does a quote that only closes.
+  for (const kept of [
+    `F="$(pwd)/a.txt"; echo K=${value} > "$F"`,
+    `F="/srv/My Project/a.txt"; echo K=${value} > "$F"`,
+    `A=.env; B=a.txt; echo K=${value} > "$B"`,
+    `echo K=${value} > "\${F:-a.txt}"`,
+    `echo K=${value} > "$STAGE.envelope"`,
+    `echo K=${value} > "$STAGE.environment"`,
+    `echo "$config.env is not set" > a.txt`,
+    `K="$(cat .env)"; echo "$K" > a.txt`,
+  ]) {
+    assert.equal(throughCall("Bash", { command: kept }, "plain output").input.command, kept);
+  }
+  assert.equal(
+    throughCall("Bash", { command: `echo "a=b" > x; F=.env; echo "K=${value}" > $F` }, "plain output").input.command,
+    `${m} > .env`,
+  );
+});
+
 test("cuts what a ! command typed in Claude Code printed from a dotenv file, or wrote into one", () => {
   const turn = (content: string) => ({ type: "user", message: { role: "user", content } });
   const { lines } = summaryFor([

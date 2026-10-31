@@ -514,11 +514,11 @@ function cutLearnedValues(lines: string[], context: RedactContext): string[] {
  */
 const CODE_ENV = /(?:^|\.)(?:process|meta|this|self|globalThis|window|Deno|Bun|ctx|c|os|context|event|req|request)\.env$/;
 
-/** `.env`, `.env.local`, and the other way of naming one: `prod.env`, `.x.env`. */
+/** `.env`, `.env.local`, and the other way of naming one: `prod.env`, `.x.env`, `$STAGE.env`. */
 function isDotenvPath(filePath: unknown): boolean {
   if (typeof filePath !== "string") return false;
   const name = basename(filePath);
-  return name.startsWith(".env") || (/^[\w.*?-]*\.env$/.test(name) && !CODE_ENV.test(name));
+  return name.startsWith(".env") || (/^[\w.*?${}-]*\.env$/.test(name) && !CODE_ENV.test(name));
 }
 
 /**
@@ -656,12 +656,19 @@ const GROUP_WRITE = /(?:[})]|\b(?:done|fi|esac))\s*(?:\d?>|&>|\|)/;
 /** A write whose values come later or from around it: `exec 3>.env; echo K=v >&3`, `export K=v; envsubst < t > .env`. */
 const WRITES_FROM_AROUND = /^\s*exec\b|\benvsubst\b/;
 
-/** `F=.env`, and a loop over a list: both say what `$F` is, and that `F` was set. */
-const ASSIGNMENT = /(?<![\w$])([A-Za-z_]\w*)=([^\s;&|]*)/g;
+/**
+ * `F=.env`, and a loop over a list: both say what `$F` is, and that `F` was set. A quote
+ * right behind the `=` makes the value one word, one anywhere else closes something.
+ */
+const ASSIGNMENT = /(?<![\w$])([A-Za-z_]\w*)=("[^"]*"|'[^']*'|[^\s;&|]*)/g;
 const FOR_LOOP = /\bfor\s+([A-Za-z_]\w*)\s+in\s([^\n;]{0,2000})/g;
 const VARIABLE = /\$\{?([A-Za-z_]\w*)\}?/g;
-/** What says only where a path starts: `$HOME/.env`. */
-const VARIABLE_DIR = /\$\{?\w+\}?\//g;
+/** `${F:-.env}`, `${F:=.env}`: nothing else in the command says what `F` is. */
+const VARIABLE_DEFAULT = /\$\{\w+:?[-=]([^{}]*)\}/g;
+/** What says only where a path starts or how it is named: `$HOME/.env`, `$STAGE.env`. */
+const VARIABLE_DIR = /\$\{?\w+\}?(?:\/|(?=\.env\b))/g;
+/** `F="$(pwd)/.env"`: what a substitution turns up says as little. */
+const SUBSTITUTED_DIR = /\$\([^()]*\)\/?/g;
 
 /** What sed's `a`, `i` and `c` open with, right against the text: `$aK=v`, `1iK=v`, `/^K=/cK=v`. */
 const SED_TEXT_COMMAND = /(?<=^|['"\s])(?:\$|\d{1,12}|\/[^/\n]{0,256}\/)[ \t]{0,8}[aic]\\?[ \t]{0,8}/g;
@@ -702,23 +709,26 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
   // Once, as a statement asking for itself would rescan the command for each one.
   const assigned = new Set<string>();
   const files = new Map<string, string>();
-  for (const [, name, list] of [...command.matchAll(ASSIGNMENT), ...command.matchAll(FOR_LOOP)]) {
-    assigned.add(name!);
-    const file = list!.split(/\s+/).map(unquoted).find(isDotenvPath);
-    // A glob in the list is that file as far as a write goes.
-    if (file !== undefined) files.set(name!, file.replace(/[*?]/g, ""));
-  }
   // ponytail: one budget for the command, as a long name used in every statement otherwise
   // grows it past what memory holds. A write past the budget reads as no write, as one
   // through a variable nothing knows does; a real command spends a few hundred bytes of it.
   let room = 1 << 16;
   const resolved = (text: string): string =>
-    text.replace(VARIABLE, (whole, name: string) => {
+    text.replace(VARIABLE_DEFAULT, "$1").replace(VARIABLE, (whole, name: string) => {
       const file = files.get(name);
       if (file === undefined || file.length > room) return whole;
       room -= file.length;
       return file;
     });
+  // ponytail: a substitution inside one, the deepest a path is usually built.
+  const unsubstituted = command.replace(SUBSTITUTED_DIR, "").replace(SUBSTITUTED_DIR, "");
+  // In the order they run, for `A=.env; B=$A`.
+  for (const [, name, list] of [...unsubstituted.matchAll(ASSIGNMENT), ...command.matchAll(FOR_LOOP)]) {
+    assigned.add(name!);
+    const file = resolved(list!).split(/\s+/).map(unquoted).find(isDotenvPath);
+    // A glob in the list is that file as far as a write goes.
+    if (file !== undefined) files.set(name!, file.replace(/[*?]/g, ""));
+  }
   const parsedEdit = (text: string): string | undefined =>
     shellEditWords(resolved(text).replace(VARIABLE_DIR, "").replace(/\\\n/g, " ")).find(isDotenvPath);
   const editedFile = (text: string): string | undefined => {
