@@ -426,10 +426,7 @@ const BARE_VALUE = /^[^\s"'{}[\]<>=]+=*$/;
 /** A word or a number: `password`, `changeme`, `production` and `12345678` are all through normal text. */
 const PLAIN_WORD = /^(?:[A-Z]?[a-z]+|[A-Z]+|\d+)$/;
 const MIN_LEARNED_VALUE = 12;
-/**
- * ponytail: the sweep costs this times the session's size, and a session names far
- * fewer. The first ones win; an Aho-Corasick scan is the way up.
- */
+/** ponytail: a session names far fewer, and each costs a look wherever text starts as it does. The first ones win. */
 const MAX_LEARNED_VALUES = 500;
 
 /**
@@ -521,22 +518,55 @@ const NOT_SAID = new Set([
   "gitBranch",
 ]);
 
-function withoutValues(value: unknown, values: readonly string[], context: RedactContext, key?: string): unknown {
+type FindValue = (text: string, from: number) => [at: number, value: string] | undefined;
+
+/** Two bits up per character, so that one falls off the top after `MIN_SENSITIVE_VALUE`, which no value is shorter than. */
+const hashedOn = (hash: number, code: number): number => ((hash << 2) ^ code) & 0xffff;
+
+/**
+ * Finds the next of some values, longest first among those that start together, in one
+ * pass over the text whatever their number. A loop over them costs that number times the
+ * session's size; one alternation of them is slower than that below a few hundred, and
+ * does not compile when they are long.
+ */
+function valueFinder(values: readonly string[]): FindValue {
+  const starting = new Map<number, string[]>();
+  const seen = new Uint8Array(1 << 16);
+  for (const value of values) {
+    let hash = 0;
+    for (let i = 0; i < MIN_SENSITIVE_VALUE; i += 1) hash = hashedOn(hash, value.charCodeAt(i));
+    seen[hash] = 1;
+    starting.set(hash, [...(starting.get(hash) ?? []), value]);
+  }
+  return (text, from) => {
+    let hash = 0;
+    for (let end = from; end < text.length; end += 1) {
+      hash = hashedOn(hash, text.charCodeAt(end));
+      if (seen[hash] === 0 || end - from < MIN_SENSITIVE_VALUE - 1) continue;
+      const at = end - MIN_SENSITIVE_VALUE + 1;
+      const value = starting.get(hash)!.find((candidate) => text.startsWith(candidate, at));
+      if (value !== undefined) return [at, value];
+    }
+    return undefined;
+  };
+}
+
+function withoutValues(value: unknown, find: FindValue, context: RedactContext, key?: string): unknown {
   if (typeof value === "string") {
     if (key !== undefined && NOT_SAID.has(key)) return value;
-    let text = value;
-    for (const secret of values) {
-      if (!text.includes(secret)) continue;
-      const parts = text.split(secret);
-      count(context, "dotenv", parts.length - 1);
-      text = parts.join(marker("dotenv"));
+    let text = "";
+    let from = 0;
+    for (let hit = find(value, 0); hit !== undefined; hit = find(value, from)) {
+      text += value.slice(from, hit[0]) + marker("dotenv");
+      from = hit[0] + hit[1].length;
+      count(context, "dotenv", 1);
     }
-    return text;
+    return text + value.slice(from);
   }
-  if (Array.isArray(value)) return value.map((item) => withoutValues(item, values, context));
+  if (Array.isArray(value)) return value.map((item) => withoutValues(item, find, context));
   if (!isObject(value)) return value;
   const result: Record<string, unknown> = {};
-  for (const [entryKey, entry] of Object.entries(value)) result[entryKey] = withoutValues(entry, values, context, entryKey);
+  for (const [entryKey, entry] of Object.entries(value)) result[entryKey] = withoutValues(entry, find, context, entryKey);
   return result;
 }
 
@@ -549,13 +579,14 @@ function cutLearnedValues(lines: string[], context: RedactContext): string[] {
   if (context.learned.size === 0) return lines;
   // Longest first: a value inside another must not leave the rest of that one.
   const values = [...context.learned].sort((a, b) => b.length - a.length);
-  const inJson = values.map((value) => JSON.stringify(value).slice(1, -1));
+  const inText = valueFinder(values);
+  const inLine = valueFinder(values.map((value) => JSON.stringify(value).slice(1, -1)));
   return lines.map((line) => {
-    if (!inJson.some((value) => line.includes(value))) return line;
+    if (inLine(line, 0) === undefined) return line;
     try {
-      return JSON.stringify(withoutValues(JSON.parse(line), values, context));
+      return JSON.stringify(withoutValues(JSON.parse(line), inText, context));
     } catch {
-      return withoutValues(line, values, context) as string;
+      return withoutValues(line, inText, context) as string;
     }
   });
 }
@@ -809,6 +840,8 @@ function cutDotenvWrites(command: string, context: RedactContext): string {
     kept.push(
       parts
         .map((part) => {
+          // Once per statement of what can be a few hundred thousand, so no check for one that names no file.
+          if (!part.includes(".env") && (files.size === 0 || !part.includes("$"))) return part;
           const indent = /^\s*/.exec(part)![0];
           const target = dotenvTarget(resolved(part));
           if (target === undefined) {

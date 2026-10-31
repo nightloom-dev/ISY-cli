@@ -2141,6 +2141,53 @@ test("redacted output still parses into the same session structure", { skip: !ex
   assert.ok(checked > 0);
 });
 
+test("a command of many statements and a sweep of many values cost what their text is long", () => {
+  const timed = (lines: string[]): string[] => {
+    const started = performance.now();
+    const out = redactLines(lines).lines;
+    const took = performance.now() - started;
+    assert.ok(took < 5000, `took ${Math.round(took)}ms on ${lines[0]!.slice(0, 60)}…`);
+    return out;
+  };
+  const bash = (command: string): string => JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } });
+  for (const command of [`${";".repeat(1_000_000)} .env`, `for f in ${";".repeat(1_000_000)} > .env`, `${"&&".repeat(500_000)} .env`, `${"|".repeat(1_000_000)} .env`]) {
+    assert.equal(timed([bash(command)]).length, 1);
+  }
+
+  const values = Array.from({ length: 500 }, (_, i) => `a${i}b${String(i).padStart(12, "0")}xyz`);
+  const read = callAndResult("Read", { file_path: "/repo/.env" }, values.map((value, i) => `K${i}=${value}`).join("\n")).map((record) => JSON.stringify(record));
+  const text = values.join(" ").repeat(Math.ceil(200_000 / values.join(" ").length));
+  const said = Array.from({ length: 100 }, () => JSON.stringify({ type: "user", message: { role: "user", content: text } }));
+  const out = timed([...read, ...said]).join("\n");
+  for (const value of values) assert.ok(!out.includes(value), value);
+});
+
+test("a sweep cuts every learned value wherever it sits, the longest of those that start together", () => {
+  const m = marker("dotenv");
+  const short = "Zq8vR2mK";
+  const long = "Zq8vR2mK9xLpWq7T";
+  const inner = "Hy4tN7wB2cQs";
+  const outer = "xxHy4tN7wB2cQsyy";
+  const escaped = "ab\\cTp3sV8nJ";
+  const wide = "пароль-Zq8vR2mK9xLq";
+  const dotenv = [`A_PASSWORD=${short}`, `B_PASSWORD=${long}`, `C_PASSWORD=${inner}`, `D_PASSWORD=${outer}`, `E_PASSWORD=${escaped}`, `F_PASSWORD=${wide}`].join("\n");
+  const cases: [string, string][] = [
+    [short, m],
+    [long, m],
+    [`${long}${short}${inner}`, `${m}${m}${m}`],
+    [`${short}${short}`, `${m}${m}`],
+    [`at ${outer} and ${inner}.`, `at ${m} and ${m}.`],
+    [`Zq8vR2m ${short.slice(1)} Zq8vR2mK`, `Zq8vR2m ${short.slice(1)} ${m}`],
+    [escaped, m],
+    [`before ${wide} after`, `before ${m} after`],
+    ["nothing learned here", "nothing learned here"],
+  ];
+  for (const [said, expected] of cases) {
+    const { lines } = summaryFor([...callAndResult("Read", { file_path: "/repo/.env" }, dotenv), { type: "user", uuid: "u", message: { role: "user", content: said } }]);
+    assert.equal((JSON.parse(lines.at(-1)!) as { message: { content: string } }).message.content, expected);
+  }
+});
+
 test("every rule gets through long runs it has nothing to match in", () => {
   // Shapes a tool's output holds by the hundred kilobytes: a version list, a
   // URL-encoded query, dotted and dashed names. A rule that rescans the rest of
