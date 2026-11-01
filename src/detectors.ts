@@ -158,14 +158,53 @@ interface FileState {
   edited: boolean;
 }
 
-function applyEdit(content: string, oldString: string, newString: string, all: boolean): string | undefined {
-  if (oldString.length === 0 || !content.includes(oldString)) return undefined;
-  return all ? content.replaceAll(oldString, newString) : content.replace(oldString, newString);
+// What following a session's files may cost, in characters walked: each edit
+// walks its file and digests the result, so a file doubled by replace_all, or
+// edited thousands of times at full size, took the heap or many minutes. The
+// most in a real session, of 518 MB of transcript, was 10.6 million.
+// ponytail: past this no file is followed and later abandoned approaches go unseen; a budget per file if one file should not blind the rest.
+const TRACKED_CHARS = 32 * 1024 * 1024;
+
+// `text.split(pattern)`, or only around the first occurrence, in time
+// proportional to both: the engine's own search walks a long pattern that almost
+// repeats again from every position, half a minute for 100 KB over a 1 MB file.
+function piecesAround(text: string, pattern: string, all: boolean): string[] {
+  const fallback = new Int32Array(pattern.length);
+  for (let at = 1, matched = 0; at < pattern.length; at += 1) {
+    while (matched > 0 && pattern.charCodeAt(at) !== pattern.charCodeAt(matched)) matched = fallback[matched - 1]!;
+    if (pattern.charCodeAt(at) === pattern.charCodeAt(matched)) matched += 1;
+    fallback[at] = matched;
+  }
+
+  const pieces: string[] = [];
+  let end = 0;
+  for (let at = 0, matched = 0; at < text.length; at += 1) {
+    while (matched > 0 && text.charCodeAt(at) !== pattern.charCodeAt(matched)) matched = fallback[matched - 1]!;
+    if (text.charCodeAt(at) === pattern.charCodeAt(matched)) matched += 1;
+    if (matched === pattern.length) {
+      pieces.push(text.slice(end, at + 1 - matched));
+      end = at + 1;
+      matched = 0;
+      if (!all) break;
+    }
+  }
+  pieces.push(text.slice(end));
+  return pieces;
+}
+
+// Literal, as the edit tools are, and undefined when the text is not there or
+// the result would not fit in `room`, which is known before it is built.
+function applyEdit(content: string, oldString: string, newString: string, all: boolean, room: number): string | undefined {
+  if (oldString.length === 0 || oldString.length > content.length || room < 0) return undefined;
+  const pieces = piecesAround(content, oldString, all);
+  const length = content.length + (pieces.length - 1) * (newString.length - oldString.length);
+  return pieces.length === 1 || length > room ? undefined : pieces.join(newString);
 }
 
 function trackContent(session: ParsedSession): Candidate[] {
   const candidates: Candidate[] = [];
   const states = new Map<string, FileState>();
+  let room = TRACKED_CHARS;
 
   const state = (filePath: string): FileState => {
     let existing = states.get(filePath);
@@ -178,6 +217,11 @@ function trackContent(session: ParsedSession): Candidate[] {
 
   const record = (file: FileState, filePath: string, use: ToolUse, isEdit: boolean): void => {
     if (file.content === undefined) return;
+    room -= file.content.length;
+    if (room < 0) {
+      file.content = undefined;
+      return;
+    }
     const key = digest(file.content);
     const firstSeen = file.seen.get(key);
     const unchanged = key === file.lastKey;
@@ -236,7 +280,8 @@ function trackContent(session: ParsedSession): Candidate[] {
           file.content = undefined;
           break;
         }
-        file.content = applyEdit(file.content, from, to, use.input.replace_all === true);
+        room -= file.content.length + from.length;
+        file.content = applyEdit(file.content, from, to, use.input.replace_all === true, room);
       }
 
       record(file, filePath, use, true);

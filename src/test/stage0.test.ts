@@ -1067,3 +1067,57 @@ test("SQL inside a search pattern or a substitution is text, not a migration", (
   ]);
   assert.equal(detectDestructiveCommand(real).length, 1);
 });
+
+function writtenThenEdited(content: string, edits: object[]): ParsedSession {
+  return padded([
+    assistant("w", "pad19", [{ type: "tool_use", id: "w0", name: "Write", input: { file_path: "/r/a.txt", content } }]),
+    ...edits.map((edit, i) =>
+      assistant(`e${i}`, i === 0 ? "w" : `e${i - 1}`, [
+        { type: "tool_use", id: `t${i}`, name: "Edit", input: { file_path: "/r/a.txt", ...edit } },
+      ]),
+    ),
+  ]);
+}
+
+test("a file doubled over and over stops being followed before it takes the heap", () => {
+  const doubling = { old_string: "\n", new_string: "\n\n", replace_all: true };
+  const session = writtenThenEdited("\n", Array.from({ length: 40 }, () => doubling));
+  assert.deepEqual(detectAbandonedApproach(session), []);
+});
+
+test("a large file edited over and over stops being followed before it takes minutes", () => {
+  const edits = Array.from({ length: 1000 }, (_, i) => ({ old_string: i % 2 ? "b" : "a", new_string: i % 2 ? "a" : "b" }));
+  const session = writtenThenEdited(`a${"\n".repeat(4_000_000)}`, edits);
+  const started = performance.now();
+  detectAbandonedApproach(session);
+  const took = performance.now() - started;
+  assert.ok(took < 5000, `took ${took} ms`);
+});
+
+test("a long edit that almost repeats is looked for in time proportional to the file", () => {
+  const half = "a".repeat(50_000);
+  const session = writtenThenEdited("a".repeat(400_000), [{ old_string: `${half}b${half}`, new_string: "c" }]);
+  const started = performance.now();
+  assert.deepEqual(detectAbandonedApproach(session), []);
+  const took = performance.now() - started;
+  assert.ok(took < 1000, `took ${took} ms`);
+});
+
+test("an edit's new text is literal, as the tool that made it", () => {
+  const candidates = detectAbandonedApproach(
+    writtenThenEdited("a b", [
+      { old_string: "a", new_string: "$&x" },
+      { old_string: "$&", new_string: "a" },
+      { old_string: "x", new_string: "" },
+    ]),
+  );
+  assert.deepEqual(candidates.map((candidate) => candidate.category), ["abandoned_approach"]);
+});
+
+test("replace_all takes occurrences from the left without overlap, and a plain edit only the first", () => {
+  const back = (edit: object, after: string): number =>
+    detectAbandonedApproach(writtenThenEdited("aaaaa", [edit, { old_string: after, new_string: "aaaaa" }])).length;
+  assert.equal(back({ old_string: "aa", new_string: "b", replace_all: true }, "bba"), 1);
+  assert.equal(back({ old_string: "aa", new_string: "b" }, "baaa"), 1);
+  assert.equal(back({ old_string: "aa", new_string: "b" }, "bba"), 0);
+});
