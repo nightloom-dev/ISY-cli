@@ -4,6 +4,7 @@ import { parseLines } from "../parser.js";
 import {
   LOG_ONLY_CATCHES,
   SUPPRESSORS,
+  addedDependencies,
   detectAbandonedApproach,
   detectDestructiveCommand,
   detectErrorSuppressed,
@@ -11,6 +12,7 @@ import {
   detectTestModifiedToPass,
   detectUnverifiedAssumption,
   detectUnverifiedFix,
+  installedPackages,
   isTestFile,
   weakensTest,
 } from "../detectors.js";
@@ -1194,4 +1196,114 @@ test("a failed check is read once, not again for each edit after it", () => {
   detectErrorSuppressed(session);
   const took = performance.now() - started;
   assert.ok(took < 3000, `took ${took} ms`);
+});
+
+function assertQuick(label: string, run: () => unknown): void {
+  const started = performance.now();
+  run();
+  const took = performance.now() - started;
+  assert.ok(took < 2000, `${label} took ${Math.round(took)} ms`);
+}
+
+test("a manifest of blank lines or of an open table is read in time proportional to it", () => {
+  for (const [file, text] of [
+    ["requirements.txt", "\n".repeat(40_000)],
+    ["requirements.txt", " \n".repeat(40_000)],
+    ["pyproject.toml", "\n".repeat(40_000)],
+    ["pyproject.toml", ` ${"\n ".repeat(40_000)}`],
+    ["pyproject.toml", `[${" ".repeat(3_000)}`],
+  ] as const) {
+    assertQuick(`${file} of ${JSON.stringify(text.slice(0, 2))}`, () => addedDependencies(`/r/${file}`, "", text));
+  }
+});
+
+test("a dependency is found behind blank lines and indentation, and a table however it is spaced", () => {
+  assert.deepEqual(
+    addedDependencies("/r/requirements.txt", "", "\n\n  \n\trequests==2.31.0\r\n\r\n\u00a0flask>=2\n\ufeffclick~=8\n"),
+    ["click", "flask", "requests"],
+  );
+  assert.deepEqual(addedDependencies("/r/Gemfile", "", "\n \n  gem 'rails'\n"), ["rails"]);
+  assert.deepEqual(addedDependencies("/r/go.mod", "", "\n \n  require github.com/a/b v1.0.0\n"), ["github.com/a/b"]);
+  assert.deepEqual(
+    addedDependencies("/r/Cargo.toml", "", '\n\n[ dependencies ]  # pinned\n\n  serde = "1.0"\n\n[[ bin ]]\nclap = "4"\n'),
+    ["serde"],
+  );
+  assert.deepEqual(addedDependencies("/r/Cargo.toml", "", '\n \n  "serde" = "1.0"\n'), ["serde"]);
+  assert.deepEqual(addedDependencies("/r/pyproject.toml", "", '\n\n[ project ]\n\n  dependencies = ["click"]\n'), ["click"]);
+});
+
+test("a command that says one thing over and over is read in time proportional to it", () => {
+  const destructive = (command: string) => detectDestructiveCommand(padded([ran("b", "pad19", command)]));
+  assertQuick("a run of dots", () => installedPackages(`npm install ${".".repeat(100_000)}a`));
+  assertQuick("a run of spaces after a delete", () => destructive(`DELETE FROM a${" ".repeat(100_000)}x`));
+  assertQuick("many pushes", () => destructive("git push ".repeat(20_000)));
+  assertQuick("a run of spaces after a push", () => destructive(`git push${" ".repeat(40_000)}${"x".repeat(40_000)}`));
+});
+
+test("a package, a delete and a force push are found however they are spaced", () => {
+  assert.deepEqual(installedPackages("npm install left-pad, and more")?.packages, ["left-pad"]);
+  assert.deepEqual(installedPackages("npm install left-pad...")?.packages, ["left-pad"]);
+  assert.equal(installedPackages("npm install ...a"), undefined);
+
+  for (const [command, fires, detail] of [
+    ["DELETE FROM a", true, "no WHERE clause"],
+    ["delete from a ;", true, "no WHERE clause"],
+    ['psql -c "DELETE FROM a  "  ', true, "no WHERE clause"],
+    ["psql -c 'DELETE FROM a'", true, "no WHERE clause"],
+    ["DELETE FROM a WHERE b", false, "no WHERE clause"],
+    ["git push origin main --force", true, "force-pushed"],
+    ["git  push \t origin --force", true, "force-pushed"],
+    ["git push origin -f", true, "force-pushed"],
+    ["git push  -f", true, "force-pushed"],
+    ["git push a git push b --force", true, "force-pushed"],
+    ["git push --force-with-lease git push --force", true, "force-pushed"],
+    ["git push a git push -f", true, "force-pushed"],
+    ["git push git push git push -f", true, "force-pushed"],
+    ["git push origin --force-with-lease", false, "force-pushed"],
+    ["git push origin main", false, "force-pushed"],
+  ] as const) {
+    const found = detectDestructiveCommand(padded([ran("b", "pad19", command)]));
+    assert.equal(found.some((candidate) => candidate.detail.includes(detail)), fires, command);
+  }
+});
+
+test("a discard is held up to a session's files once, however many paths it names", () => {
+  const files = Array.from({ length: 200 }, (_, index) => edited(`e${index}`, "pad19", `/r/f${index}.ts`));
+  const discards = Array.from({ length: 8 }, (_, index) => ran(`g${index}`, "e199", `git checkout ${"z ".repeat(20_000)}`));
+  const session = padded([...files, ...discards]);
+  assertQuick("many paths", () => detectAbandonedApproach(session));
+});
+
+test("a discard goes by the last part of a path, in or out of quotes", () => {
+  for (const [command, fires] of [
+    ["git checkout -- src/app.ts", true],
+    ["git checkout -- ./src/app.ts", true],
+    ["git checkout -- app.ts", true],
+    ["git checkout -- other/app.ts", true],
+    ['git restore "src/app.ts"', true],
+    ["git restore 'app.ts' b.ts", true],
+    ["git restore b.ts app.ts", true],
+    ["git checkout -- .", true],
+    ["git restore '*'", true],
+    ["git checkout -- src/app.tsx", false],
+    ["git restore pp.ts", false],
+    ["git restore src/", false],
+  ] as const) {
+    const session = padded([edited("e", "pad19", "/r/src/app.ts"), ran("g", "e", command)]);
+    const found = detectAbandonedApproach(session).filter((candidate) => candidate.detail.includes("git command"));
+    assert.equal(found.length, fires ? 1 : 0, command);
+  }
+});
+
+test("the rule for a dropped exception looks from one except as far as the next", () => {
+  const rule = SUPPRESSORS.find(({ pattern }) => pattern.source.startsWith("except"))!;
+  assertQuick("many excepts", () => "except ".repeat(1_000_000).match(rule.pattern));
+  for (const [text, count] of [
+    ["except except:\n    pass\n", 1],
+    ["except (exceptions.A, exceptions.B):\n    pass\n", 1],
+    ["except A:  # except this\n    pass\n", 1],
+    ["except A: x\nexcept B:\n    pass\nexcept C:\n    pass\n", 2],
+  ] as const) {
+    assert.equal(text.match(rule.pattern)?.length, count, text);
+  }
 });

@@ -327,9 +327,9 @@ function detectRevertPairs(session: ParsedSession): Candidate[] {
   return candidates;
 }
 
-function revertTargets(command: string): { everything: boolean; paths: string[] } | undefined {
+function revertTargets(command: string): { everything: boolean; names: Set<string> } | undefined {
   if (GIT_RESET.test(command) || GIT_STASH.test(command)) {
-    return { everything: true, paths: [] };
+    return { everything: true, names: new Set() };
   }
 
   const match = GIT_CHECKOUT.exec(command) ?? GIT_RESTORE.exec(command);
@@ -339,15 +339,12 @@ function revertTargets(command: string): { everything: boolean; paths: string[] 
   const paths = raw
     .trim()
     .split(/\s+/)
-    .filter((part) => part.length > 0 && !part.startsWith("-"));
+    .filter((part) => part.length > 0 && !part.startsWith("-"))
+    .map((part) => part.replace(/^\.\//, "").replace(/["']/g, ""));
 
-  return paths.length > 0 ? { everything: false, paths } : undefined;
-}
-
-function matchesPath(filePath: string, target: string): boolean {
-  const cleaned = target.replace(/^\.\//, "").replace(/["']/g, "");
-  if (cleaned === "." || cleaned === "*") return true;
-  return filePath.endsWith(`/${cleaned}`) || basename(filePath) === basename(cleaned);
+  if (paths.length === 0) return undefined;
+  // A file goes by its last part, so a command takes one look per file whatever it lists.
+  return { everything: paths.includes(".") || paths.includes("*"), names: new Set(paths.map((path) => basename(path))) };
 }
 
 const REVERT_FILES_LISTED = 5;
@@ -369,9 +366,7 @@ function detectGitReverts(session: ParsedSession): Candidate[] {
     for (const [filePath, edits] of session.fileEdits) {
       const earlier = edits.filter((edit) => edit.recordIndex < use.recordIndex);
       if (earlier.length === 0) continue;
-      if (!targets.everything && !targets.paths.some((path) => matchesPath(filePath, path))) {
-        continue;
-      }
+      if (!targets.everything && !targets.names.has(basename(filePath))) continue;
 
       discarded.push(filePath);
       const first = earlier[0]?.timestamp;
@@ -544,11 +539,12 @@ function jsonDependencies(text: string): Set<string> {
 
 function otherDependencies(text: string): Set<string> {
   const names = new Set<string>();
+  // A line's indentation is `\s` short of what ends a line: from each line, `\s` would walk all the blank ones after it.
   const patterns = [
-    /^\s*([A-Za-z0-9._-]+)\s*(?:==|>=|<=|~=|!=)/gm,
-    /^\s*gem\s+["']([^"']+)["']/gm,
+    /^[^\S\r\n\u2028\u2029]*([A-Za-z0-9._-]+)\s*(?:==|>=|<=|~=|!=)/gm,
+    /^[^\S\r\n\u2028\u2029]*gem\s+["']([^"']+)["']/gm,
     /<artifactId>([^<]+)<\/artifactId>/g,
-    /^\s*(?:require\s+)?([a-z0-9.-]+\.[a-z]{2,}\/[^\s]+)\s+v[0-9]/gm,
+    /^[^\S\r\n\u2028\u2029]*(?:require\s+)?([a-z0-9.-]+\.[a-z]{2,}\/[^\s]+)\s+v[0-9]/gm,
     /(?:implementation|api|testImplementation)\s+["']([^"':]+:[^"':]+)/g,
   ];
 
@@ -568,10 +564,11 @@ const TOML_DEPENDENCY_SUBTABLE = /(?:^|\.)(?:dev-|build-)?dependencies\.([A-Za-z
 const TOML_REQUIREMENT_TABLES = new Set(["project.optional-dependencies", "dependency-groups"]);
 /** Keys a TOML manifest gives a version, none of them a package. */
 const TOML_VERSION_KEYS = new Set(["python", "version", "edition", "rust-version", "requires-python"]);
-const TOML_HEADER = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/;
-const TOML_ASSIGNMENT = /^\s*["']?([A-Za-z0-9._-]+)["']?\s*=\s*(.*)$/gm;
+/** The name comes with its spaces, which its reader takes out: looked for here, they are a cubic walk of an open table. */
+const TOML_HEADER = /^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?$/;
+const TOML_ASSIGNMENT = /^[^\S\r\n\u2028\u2029]*["']?([A-Za-z0-9._-]+)["']?\s*=\s*(.*)$/gm;
 /** `key = [ … ]`, across lines, a `]` inside a quoted requirement (`"requests[socks]"`) included. */
-const TOML_ARRAY = /^\s*["']?([A-Za-z0-9_-]+)["']?\s*=\s*\[((?:"[^"]*"|'[^']*'|[^\]"'])*)/gm;
+const TOML_ARRAY = /^[^\S\r\n\u2028\u2029]*["']?([A-Za-z0-9_-]+)["']?\s*=\s*\[((?:"[^"]*"|'[^']*'|[^\]"'])*)/gm;
 
 /** Package names out of the body of a TOML array of PEP 508 requirement strings. */
 function requirementNames(array: string): string[] {
@@ -681,7 +678,7 @@ function packagesInSegment(segment: string, afterIndex: number): string[] | unde
     }
 
     const cleaned = token.replace(/["']/g, "");
-    const trimmed = cleaned.replace(/[.,;:]+$/, "");
+    const trimmed = cleaned.replace(/(?<![.,;:])[.,;:]+$/, "");
     // A registry name, not whatever else stood in that position: a line
     // continuation, a shell expansion whose value only the shell knows, a
     // stray brace from prose the command happened to carry.
@@ -971,7 +968,7 @@ export const SUPPRESSORS: { pattern: RegExp; detail: string }[] = [
   { pattern: /#\s*pylint:\s*disable\b/g, detail: "a pylint rule was disabled" },
   { pattern: /@SuppressWarnings\b/g, detail: "a compiler warning was suppressed" },
   { pattern: /#\[allow\(/g, detail: "a Rust lint was allowed" },
-  { pattern: /except[^\n:]{0,1000}:\s{0,200}(?:#[^\n]{0,1000})?\n\s{0,200}pass\b/g, detail: "an exception is caught and dropped" },
+  { pattern: /except(?:(?!except)[^\n:]){0,1000}:\s{0,200}(?:#[^\n]{0,1000})?\n\s{0,200}pass\b/g, detail: "an exception is caught and dropped" },
   { pattern: /catch\s{0,200}(?:\([^()]*\)\s{0,200})?\{\s{0,200}\}/g, detail: "an exception is caught and dropped" },
   { pattern: /rescue\s{0,200}(?:=>\s{0,200}\w+\s{0,200})?\n\s{0,200}end\b/g, detail: "an exception is caught and dropped" },
 ];
@@ -1118,8 +1115,9 @@ export function detectErrorSuppressed(session: ParsedSession): Candidate[] {
 const DESTRUCTIVE: { pattern: RegExp; weight: number; detail: string }[] = [
   { pattern: /\bDROP\s+(TABLE|DATABASE|SCHEMA)\b/i, weight: 0.8, detail: "a database object was dropped" },
   { pattern: /\bTRUNCATE\s+(TABLE\s+)?\w/i, weight: 0.8, detail: "a table was truncated" },
-  { pattern: /\bDELETE\s+FROM\s+\w+\s*["']?\s*(?:;|$)/i, weight: 0.8, detail: "rows were deleted with no WHERE clause" },
-  { pattern: /\bgit\s+push\s+[^\n;|&]*(?:--force\b(?!-with-lease)|(?:^|\s)-f\b)/, weight: 0.7, detail: "a branch was force-pushed" },
+  { pattern: /\bDELETE\s+FROM\s+\w+\s*(?:["']\s*)?(?:;|$)/i, weight: 0.8, detail: "rows were deleted with no WHERE clause" },
+  // Only as far as the next push, which looks on from there, short of one with its `-f` right behind it: that flag wants a space of its own.
+  { pattern: /\bgit\s+push\s(?:(?!\bgit\s+push\s(?!-f\b))[^\n;|&])*(?:--force\b(?!-with-lease)|(?:^|\s)-f\b)/, weight: 0.7, detail: "a branch was force-pushed" },
   { pattern: /\bgit\s+clean\s+-[a-z]*[fd]/, weight: 0.6, detail: "untracked files were deleted by git clean" },
   { pattern: /\bgit\s+branch\s+-D\b/, weight: 0.5, detail: "a branch was deleted unmerged" },
   { pattern: /\bgit\s+reset\s+--hard\b/, weight: 0.6, detail: "the working tree was reset, discarding uncommitted work" },
