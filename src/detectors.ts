@@ -8,6 +8,7 @@ import {
   shellReadPaths,
   withoutHeredocs,
 } from "./parser.js";
+import type { Budget } from "./parser.js";
 import type { Candidate, FileEdit, ParsedSession, ToolUse } from "./types.js";
 
 const FAILURE_LOOKBACK_RECORDS = 10;
@@ -766,40 +767,101 @@ export function detectExternalDependency(session: ParsedSession): Candidate[] {
  * way round, a directory matches everything under it, and a glob from
  * `cat src/*.js` matches every file it could have expanded to.
  */
-function samePath(known: string, filePath: string): boolean {
+function samePath(known: string, filePath: string, budget: Budget): boolean {
   if (known === filePath) return true;
-  if (/[*?]/.test(known)) return globMatches(known, filePath);
+  if (/[*?]/.test(known)) return globMatches(known, filePath, budget);
   if (filePath.startsWith(known.endsWith("/") ? known : `${known}/`)) return true;
   if (!filePath.startsWith("/") && known.endsWith(`/${filePath}`)) return true;
   return !known.startsWith("/") && filePath.endsWith(`/${known}`);
 }
 
-const GLOB_PARTS: Record<string, string> = { "?": "[^/]", "*": "[^/]*", "**": ".*", "**/": "(?:.*/)?" };
+// What holding globs up to a session's edited files may cost, in steps, where a
+// long glob over a long path takes millions each. The most in a real session
+// was 350 thousand.
+// ponytail: past this a glob covers nothing, so what it read counts as unread; matching in linear time if a real session comes near.
+const GLOB_STEPS = 20_000_000;
+const STAR = 42;
+const QUESTION = 63;
+const SLASH = 47;
 
-/** `*` and `?` within one path segment, `**` across them; a relative glob matches by suffix, like a relative path. */
-function globMatches(glob: string, filePath: string): boolean {
-  const body = glob
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*\/?|\*|\?/g, (wildcard) => GLOB_PARTS[wildcard]!);
-  return new RegExp(glob.startsWith("/") ? `^${body}$` : `(?:^|/)${body}$`).test(filePath);
+/**
+ * `*` and `?` within one path segment, `**` across them; a relative glob matches
+ * by suffix, like a relative path. It goes back only to the last star of each
+ * kind, since what an earlier one could take a later one can too: compiled to a
+ * pattern, a dozen stars over 100 characters never came back. For that a `**\/`
+ * stands for no directories only as a whole segment; `a**\/b` needs its slash.
+ */
+function globMatches(glob: string, filePath: string, budget: Budget): boolean {
+  let g = 0;
+  let at = 0;
+  let star = -1;
+  let starAt = 0;
+  let across = glob.startsWith("/") ? -1 : 0;
+  let acrossAt = 0;
+  let afterSlash = across === 0;
+
+  while (budget.left > 0) {
+    budget.left -= 1;
+    if (g < glob.length) {
+      const char = glob.charCodeAt(g);
+      if (char === STAR && glob.charCodeAt(g + 1) === STAR) {
+        afterSlash = glob.charCodeAt(g + 2) === SLASH && (g === 0 || glob.charCodeAt(g - 1) === SLASH);
+        g += afterSlash ? 3 : 2;
+        across = g;
+        acrossAt = at;
+        star = -1;
+        continue;
+      }
+      if (char === STAR) {
+        g += 1;
+        star = g;
+        starAt = at;
+        continue;
+      }
+      if (at < filePath.length && (char === QUESTION ? filePath.charCodeAt(at) !== SLASH : filePath.charCodeAt(at) === char)) {
+        g += 1;
+        at += 1;
+        continue;
+      }
+    } else if (at === filePath.length) {
+      return true;
+    }
+
+    if (star !== -1 && starAt < filePath.length && filePath.charCodeAt(starAt) !== SLASH) {
+      starAt += 1;
+      g = star;
+      at = starAt;
+      continue;
+    }
+    if (across === -1) return false;
+    const next = afterSlash ? filePath.indexOf("/", acrossAt) + 1 : acrossAt + 1;
+    if (next === 0 || next > filePath.length) return false;
+    budget.left -= next - acrossAt;
+    acrossAt = next;
+    g = across;
+    at = next;
+    star = -1;
+  }
+  return false;
 }
 
-function wasLookedUp(session: ParsedSession, filePath: string): boolean {
+function wasLookedUp(session: ParsedSession, filePath: string, budget: Budget): boolean {
   for (const known of session.filesRead) {
-    if (samePath(known, filePath)) return true;
+    if (samePath(known, filePath, budget)) return true;
   }
   return false;
 }
 
 export function detectUnverifiedAssumption(session: ParsedSession): Candidate[] {
   const candidates: Candidate[] = [];
+  const globSteps: Budget = { left: GLOB_STEPS };
 
   for (const [filePath, edits] of session.fileEdits) {
     const first = edits[0];
     if (!first) continue;
     // `sed -i` edits in place like Edit does, on the same picture of the file.
     if (first.tool !== "Edit" && first.tool !== "MultiEdit" && first.tool !== "Bash") continue;
-    if (wasLookedUp(session, filePath)) continue;
+    if (wasLookedUp(session, filePath, globSteps)) continue;
 
     candidates.push({
       category: "unverified_assumption",
@@ -1187,10 +1249,10 @@ function pathsSeen(use: ToolUse): string[] {
 }
 
 /** The last call that looked at this file, or nothing if none did. */
-function lastLook(seen: ReadonlyMap<string, number>, filePath: string): number | undefined {
+function lastLook(seen: ReadonlyMap<string, number>, filePath: string, budget: Budget): number | undefined {
   let latest: number | undefined;
   for (const [known, index] of seen) {
-    if (!samePath(known, filePath)) continue;
+    if (!samePath(known, filePath, budget)) continue;
     if (latest === undefined || index > latest) latest = index;
   }
   return latest;
@@ -1216,6 +1278,7 @@ function lastLook(seen: ReadonlyMap<string, number>, filePath: string): number |
 export function detectStaleContext(session: ParsedSession): Candidate[] {
   const breaks: { use: ToolUse; filePath: string; pauseMs: number; pausedAt?: string }[] = [];
   const seen = new Map<string, number>();
+  const globSteps: Budget = { left: GLOB_STEPS };
 
   let previous: ToolUse | undefined;
   let pauseIndex: number | undefined;
@@ -1237,7 +1300,7 @@ export function detectStaleContext(session: ParsedSession): Candidate[] {
 
     if (!reported && pauseIndex !== undefined && EDIT_TOOLS.has(use.name)) {
       const filePath = typeof use.input.file_path === "string" ? use.input.file_path : undefined;
-      const looked = filePath === undefined ? undefined : lastLook(seen, filePath);
+      const looked = filePath === undefined ? undefined : lastLook(seen, filePath, globSteps);
 
       // A file nobody ever looked at is `unverified_assumption`, and saying it
       // twice under two headings is one edit and two notes to reconcile.

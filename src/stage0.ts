@@ -68,9 +68,8 @@ function inTree(candidate: Candidate, cwd: string | undefined): boolean {
  * alone costs nothing: the largest real session, with its subagents, has 100 million
  * pairs, and the next has 36 million from 20 thousand calls and 72 file edits.
  *
- * ponytail: the session goes on with no findings, and a file read through a glob
- * compiles for each edit, so this limit is minutes if every read of a stranger's is
- * one. Make the detectors linear if real sessions come near this.
+ * ponytail: the session goes on with no findings. Make the detectors linear if real
+ * sessions come near this.
  */
 const MOST_PAIRS = 500_000_000;
 

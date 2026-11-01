@@ -1121,3 +1121,63 @@ test("replace_all takes occurrences from the left without overlap, and a plain e
   assert.equal(back({ old_string: "aa", new_string: "b" }, "baaa"), 1);
   assert.equal(back({ old_string: "aa", new_string: "b" }, "bba"), 0);
 });
+
+function readThenEdited(glob: string, filePath: string): ParsedSession {
+  return padded([read("r", "pad19", glob), edited("e", "r", filePath)]);
+}
+
+test("what a glob read covers of an edited file", () => {
+  const covers: [string, string, boolean][] = [
+    ["src/*.js", "/repo/src/a.js", true],
+    ["src/*.js", "/repo/src/lib/a.js", false],
+    ["*.js", "/repo/lib/a.js", true],
+    ["src/**/*.js", "/repo/src/a.js", true],
+    ["src/**/*.js", "/repo/src/lib/deep/a.js", true],
+    ["src/**/*.js", "/repo/other/a.js", false],
+    ["**/a.js", "/repo/a.js", true],
+    ["/repo/*.js", "/repo/a.js", true],
+    ["/repo/*.js", "/other/repo/a.js", false],
+    ["/repo/**", "/repo/x/y.js", true],
+    ["a?.js", "/repo/ab.js", true],
+    ["a?.js", "/repo/a/.js", false],
+    ["src/a*b*c.js", "/repo/src/axbyc.js", true],
+    ["src/a*b*c.js", "/repo/src/axbyd.js", false],
+    ["s*c/*.js", "/repo/src/a.js", true],
+    ["s*/**/z.js", "/repo/src/a/b/z.js", true],
+    ["re.o/*.js", "/repo/re.o/a.js", true],
+    ["re.o/*.js", "/repo/rexo/a.js", false],
+    ["a**/b.js", "/repo/ax/y/b.js", true],
+    ["a*a*b.js", "/repo/aaab.js", true],
+    ["src/*/a.js", "/repo/src/x/y/a.js", false],
+  ];
+  for (const [glob, filePath, covered] of covers) {
+    const found = detectUnverifiedAssumption(readThenEdited(glob, filePath));
+    assert.equal(found.length === 0, covered, `${glob} over ${filePath}`);
+  }
+});
+
+test("a read of many stars is held up to an edit in time proportional to it", () => {
+  const started = performance.now();
+  const found = detectUnverifiedAssumption(readThenEdited(`${"*a".repeat(6)}*b`, `/${"a".repeat(60)}`));
+  const took = performance.now() - started;
+  assert.equal(found.length, 1);
+  assert.ok(took < 1000, `took ${took} ms`);
+});
+
+test("a read of more stars than a pattern can hold is a read like any other", () => {
+  assert.equal(detectUnverifiedAssumption(readThenEdited(`${"*".repeat(128000)}a.js`, "/repo/a.js")).length, 0);
+  assert.equal(detectUnverifiedAssumption(readThenEdited(`${"*?".repeat(64000)}b`, "/repo/a.js")).length, 1);
+});
+
+test("many long globs against many long paths give up rather than take hours", () => {
+  const records: unknown[] = [];
+  const stretch = "a".repeat(2000);
+  for (let i = 0; i < 40; i += 1) records.push(read(`r${i}`, i === 0 ? "pad19" : `r${i - 1}`, `/**${stretch}${i}b`));
+  for (let i = 0; i < 40; i += 1) records.push(edited(`e${i}`, i === 0 ? "r39" : `e${i - 1}`, `/${stretch}${stretch}${i}`));
+  const session = padded(records);
+  const started = performance.now();
+  detectUnverifiedAssumption(session);
+  detectStaleContext(session);
+  const took = performance.now() - started;
+  assert.ok(took < 5000, `took ${took} ms`);
+});

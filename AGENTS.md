@@ -50,7 +50,7 @@ database or to a model.
   throw. On the server a transcript is also a stranger's, read in the process that
   serves requests, so what one can cost is bounded over the whole session
   (`parser.ts:SHELL_CHARS`, `LINE_CHARS`, `STRUCTURES`, `stage0.ts:MOST_PAIRS`,
-  `detectors.ts:TRACKED_CHARS`).
+  `detectors.ts:TRACKED_CHARS`, `GLOB_STEPS`).
 - **A JSONL file is split on `\n` alone** (`lines.ts:fileLines`), never with
   `node:readline`: it also ends a line at U+2028 and U+2029, which
   `JSON.stringify` leaves unescaped inside strings, and a record carrying one
