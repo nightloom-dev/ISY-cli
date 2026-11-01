@@ -545,7 +545,17 @@ const NOT_SAID = new Set([
   "gitBranch",
 ]);
 
-type FindValue = (text: string, from: number) => [at: number, value: string] | undefined;
+type FindValue = (text: string, from: number, walks: Budget) => [at: number, value: string] | undefined;
+
+/**
+ * What may be walked along values that then are not there, over a text of some length:
+ * one of 100 KB of a letter took a minute over 200 KB of that letter. Past this the text
+ * goes whole, since what could not be looked through may hold one.
+ *
+ * ponytail: a text held up against a value that keeps almost matching, like thousands of
+ * zeros against one that starts with dozens, is lost with it. Failure links if a real one is.
+ */
+const walksOver = (length: number): Budget => ({ left: 4096 + 8 * length });
 
 /** Two bits up per character, so that one falls off the top after `MIN_SENSITIVE_VALUE`, which no value is shorter than. */
 const hashedOn = (hash: number, code: number): number => ((hash << 2) ^ code) & 0xffff;
@@ -582,7 +592,7 @@ function valueFinder(values: readonly string[]): FindValue {
     seen[hash] = 1;
   }
   const root = branchOf([...values].sort(), 0);
-  return (text, from) => {
+  return (text, from, walks) => {
     let hash = 0;
     for (let end = from; end < text.length; end += 1) {
       hash = hashedOn(hash, text.charCodeAt(end));
@@ -590,11 +600,17 @@ function valueFinder(values: readonly string[]): FindValue {
       const at = end - MIN_SENSITIVE_VALUE + 1;
       let found: string | undefined;
       let next = at;
-      for (let branch: Branch | undefined = root; branch !== undefined && text.startsWith(branch.common, next); next += 1) {
-        next += branch.common.length;
+      for (let branch: Branch | undefined = root; branch !== undefined; next += 1) {
+        const { common } = branch;
+        let same = 0;
+        while (same < common.length && text.charCodeAt(next + same) === common.charCodeAt(same)) same += 1;
+        next += same;
+        if (same < common.length) break;
         found = branch.value ?? found;
         branch = branch.parts.get(text.charCodeAt(next));
       }
+      walks.left -= next - at - (found?.length ?? 0);
+      if (walks.left < 0) return undefined;
       if (found !== undefined) return [at, found];
     }
     return undefined;
@@ -606,10 +622,15 @@ function withoutValues(value: unknown, find: FindValue, context: RedactContext, 
     if (key !== undefined && NOT_SAID.has(key)) return value;
     let text = "";
     let from = 0;
-    for (let hit = find(value, 0); hit !== undefined; hit = find(value, from)) {
+    const walks = walksOver(value.length);
+    for (let hit = find(value, 0, walks); hit !== undefined; hit = find(value, from, walks)) {
       text += value.slice(from, hit[0]) + marker("dotenv");
       from = hit[0] + hit[1].length;
       count(context, "dotenv", 1);
+    }
+    if (walks.left < 0) {
+      count(context, "oversized", 1);
+      return marker("oversized");
     }
     return text + value.slice(from);
   }
@@ -632,7 +653,8 @@ function cutLearnedValues(lines: string[], context: RedactContext): string[] {
   const inText = valueFinder(values);
   const inLine = valueFinder(values.map((value) => JSON.stringify(value).slice(1, -1)));
   return lines.map((line) => {
-    if (inLine(line, 0) === undefined) return line;
+    const walks = walksOver(line.length);
+    if (inLine(line, 0, walks) === undefined && walks.left >= 0) return line;
     try {
       return JSON.stringify(withoutValues(JSON.parse(line), inText, context));
     } catch {

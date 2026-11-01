@@ -2797,3 +2797,43 @@ test("a line too dear to parse is cut whole, and so is what comes past the sessi
   assert.deepEqual(many.lines.map((line) => line === marker("oversized")), [false, false, false, true, true]);
   assert.equal(many.summary.counts.oversized, 2);
 });
+
+function dotenvThenSaid(value: string, said: string): string[] {
+  return redactLines([
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: ".env" } }] } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: `TOKEN=${value}` }] } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: said } }),
+  ]).lines;
+}
+
+test("a long learned value is looked for in time proportional to the text", () => {
+  const started = performance.now();
+  dotenvThenSaid(`${"a".repeat(30_000)}1`, "a".repeat(60_000));
+  const took = performance.now() - started;
+  assert.ok(took < 2000, `took ${Math.round(took)}ms`);
+});
+
+test("text too dear to look through for a learned value goes whole, so that none of it stays", () => {
+  const value = `${"a".repeat(30_000)}1`;
+  const said = `${"a".repeat(60_000)}${value} the rest`;
+  const lines = dotenvThenSaid(value, said);
+  assert.ok(!lines.join("\n").includes(value));
+  assert.ok(!lines.join("\n").includes("the rest"));
+  assert.ok(lines[2]!.includes("oversized"), lines[2]!.slice(0, 200));
+});
+
+test("a learned value said many times goes each time, however long it is", () => {
+  const value = `Zq8vR2mK9xLp${"Q7".repeat(5_000)}`;
+  const lines = dotenvThenSaid(value, `${value} and ${value} and ${value} and that is all`);
+  assert.ok(!lines.join("\n").includes(value));
+  assert.ok(lines[2]!.includes("and that is all"));
+  assert.equal(lines[2]!.split("dotenv").length - 1, 3);
+});
+
+test("a value that shares a stretch with the text around it does not cost that text", () => {
+  const value = `${"0".repeat(24)}Zq8vR2mK9xLp`;
+  const lines = dotenvThenSaid(value, `${"0".repeat(100)} and ${value} and the rest`);
+  assert.ok(!lines.join("\n").includes(value));
+  assert.ok(lines[2]!.includes("0".repeat(100)));
+  assert.ok(lines[2]!.includes("and the rest"));
+});
