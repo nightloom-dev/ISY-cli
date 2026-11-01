@@ -1114,6 +1114,7 @@ test("a line is charged what its objects, arrays and keys will cost once parsed"
   assert.equal(charged("[[]]"), 6);
   assert.equal(charged('{"a":0,"b" :1,"c"\t: 2}'), 6);
   assert.equal(charged('"a colon: in words"'), 0);
+  assert.equal(charged("[0.5,0.5,0.5,0.5]"), 4);
 });
 
 test("objects of hundreds of small keys fit a session only as far as a heap holds them", () => {
@@ -1124,4 +1125,14 @@ test("objects of hundreds of small keys fit a session only as far as a heap hold
   let fit = 0;
   while (mayParse(line, structures)) fit += 1;
   assert.ok(fit * 25_000 < 1_300_000_000, `${fit} of them fit`);
+});
+
+test("arrays of small numbers fit a session only as far as a heap holds them", () => {
+  // Parsed, each of these takes 24 bytes out of 4 of line.
+  const items = 3_000;
+  const line = `{"type":"user","x":[${"0.5,".repeat(items)}0]}`;
+  const structures = { left: STRUCTURES };
+  let fit = 0;
+  while (mayParse(line, structures)) fit += 1;
+  assert.ok(fit * items * 24 < 1_300_000_000, `${fit} of them fit`);
 });
