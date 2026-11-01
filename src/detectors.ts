@@ -780,17 +780,21 @@ export function detectExternalDependency(session: ParsedSession): Candidate[] {
  */
 function samePath(known: string, filePath: string, budget: Budget): boolean {
   if (known === filePath) return true;
+  budget.left -= known.length / CHARS_PER_STEP;
+  if (budget.left <= 0) return false;
   if (/[*?]/.test(known)) return globMatches(known, filePath, budget);
   if (filePath.startsWith(known.endsWith("/") ? known : `${known}/`)) return true;
   if (!filePath.startsWith("/") && known.endsWith(`/${filePath}`)) return true;
   return !known.startsWith("/") && filePath.endsWith(`/${known}`);
 }
 
-// What holding globs up to a session's edited files may cost, in steps, where a
-// long glob over a long path takes millions each. The most in a real session
-// was 350 thousand.
-// ponytail: past this a glob covers nothing, so what it read counts as unread; matching in linear time if a real session comes near.
+// What holding reads up to a session's edited files may cost, in steps, where a
+// long glob over a long path takes millions each. Any other read walks as far as
+// the two paths agree, at a fraction of a step a character. The most in a real
+// session was 350 thousand steps of glob and 7.4 million characters.
+// ponytail: past this only the path itself counts, so what else was read counts as unread; matching in linear time if a real session comes near.
 const GLOB_STEPS = 20_000_000;
+const CHARS_PER_STEP = 10;
 const STAR = 42;
 const QUESTION = 63;
 const SLASH = 47;

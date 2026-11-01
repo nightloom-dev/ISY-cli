@@ -1367,3 +1367,23 @@ test("a side chain is walked once, however many edits stand on it", () => {
   });
   assert.equal(found, 1);
 });
+
+test("many long reads against many edited files give up rather than take minutes, but for the path itself", () => {
+  const stretch = "r".repeat(1000);
+  const reads = Array.from({ length: 5000 }, (_, index) => read(`r${index}`, index === 0 ? "pad19" : `r${index - 1}`, `${stretch}${index}`));
+  const files = Array.from({ length: 1000 }, (_, index) => edited(`e${index}`, index === 0 ? "last" : `e${index - 1}`, `/r/f${index}.ts`));
+  const session = padded([...reads, read("last", "r4999", "/r/f999.ts"), ...files]);
+  let found: unknown[] = [];
+  assertQuick("long reads", () => {
+    found = detectUnverifiedAssumption(session);
+  });
+  assert.equal(found.length, 999);
+});
+
+test("many reads that share a long start with many edited files give up rather than take minutes", () => {
+  const stretch = "/".concat("r".repeat(2000));
+  const reads = Array.from({ length: 5000 }, (_, index) => read(`r${index}`, index === 0 ? "pad19" : `r${index - 1}`, `${stretch}${index}`));
+  const files = Array.from({ length: 1000 }, (_, index) => edited(`e${index}`, index === 0 ? "r4999" : `e${index - 1}`, `${stretch}/f${index}.ts`));
+  const session = padded([...reads, ...files]);
+  assertQuick("shared starts", () => detectUnverifiedAssumption(session));
+});
