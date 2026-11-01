@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { fileLines } from "./lines.js";
-import { type Budget, HEREDOC, STRUCTURES, commandSegments, mayParse, shellEditWords, withoutHeredocs } from "./parser.js";
+import { type Budget, HEREDOC, STRUCTURES, commandSegments, mayParse, shellEditWords, spend, withoutHeredocs } from "./parser.js";
 import {
   PATH_KEYS,
   REDACTION_MARKER,
@@ -405,6 +405,7 @@ interface RedactContext {
   /** What dotenv files held, as far as the session showed them (`learnValues`). */
   learned: Set<string>;
   structures: Budget;
+  dotenvCommands: Budget;
   /**
    * Mutable: a transcript names its own working directory on every record, so a
    * caller that did not pass one still gets repository-relative paths. The
@@ -632,7 +633,7 @@ function valueFinder(values: readonly string[]): FindValue {
  * dear to look through does. Each cut makes the text longer and holds a string of its
  * own until the text is done, and finding one spends no walks, so that a value repeated
  * through a few gzipped kilobytes is what the heap has to hold. The most in a real
- * session is 711.
+ * session is 5271.
  *
  * ponytail: one count for a session, so that past it a text with a single hit is lost
  * with the rest. Per-text limits if a real session ever comes near.
@@ -881,6 +882,17 @@ function learnEdit(statement: string, context: RedactContext): void {
 }
 
 /**
+ * What a session's commands naming a dotenv file may come to, past which one goes
+ * whole. Each statement of them is held up to a dozen patterns, up to 4.5 µs a byte
+ * against the 0.4 of any other text, on the thread that serves requests. The most in
+ * a real session is 3.1 MB, out of 552 MB, and in any other 67 KB.
+ *
+ * ponytail: what goes whole reads as no write to the parse, and teaches nothing of what
+ * it held. Raise it if sessions come near, or take redaction off that thread.
+ */
+const DOTENV_COMMAND_CHARS = 4 * 1024 * 1024;
+
+/**
  * `cat > .env << 'EOF'`, `echo "KEY=…" >> .env.local`, `… | tee .env`: a shell
  * call that writes a dotenv file holds what it writes, so unlike a read the
  * command is cut too. Only what carries the values goes — the statement that
@@ -890,6 +902,10 @@ function learnEdit(statement: string, context: RedactContext): void {
  */
 function cutDotenvWrites(command: string, context: RedactContext): string {
   if (!command.includes(".env")) return command;
+  if (!spend(context.dotenvCommands, command.length)) {
+    count(context, "oversized", 1);
+    return marker("oversized");
+  }
   // Once, as a statement asking for itself would rescan the command for each one.
   const assigned = new Set<string>();
   const files = new Map<string, string>();
@@ -1321,6 +1337,7 @@ function createContext(options: RedactOptions, invalid: string[]): RedactContext
     bashInputTouchedDotenv: false,
     learned: new Set(),
     structures: { left: STRUCTURES },
+    dotenvCommands: { left: DOTENV_COMMAND_CHARS },
     // The home directory is this machine's and is never in the transcript's
     // gift, so it is read here rather than passed by every caller.
     roots: resolveRoots({ cwd: options.cwd, home: options.home ?? homedir() }),

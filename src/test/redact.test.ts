@@ -2898,3 +2898,21 @@ test("past what a session may cut of learned values, the text that holds one goe
   assert.equal(JSON.parse(lines[4]!).message.content, marker("oversized"));
   assert.equal(JSON.parse(lines[5]!).message.content, "nothing of it");
 });
+
+test("a command that names a dotenv file goes whole past what a session may look through", () => {
+  const value = "Zq8vR2mK9xLp";
+  const bash = (id: string, command: string): string =>
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } });
+  const printed = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: `TOKEN=${value}` }] } });
+  const { lines, summary } = redactLines([
+    bash("t1", `F=.env; echo TOKEN=${value} > $F; ${"$a;".repeat(1_500_000)}`),
+    printed,
+    bash("t2", `echo TOKEN=${value} > .env`),
+  ]);
+  const command = (line: string): string => (JSON.parse(line) as { message: { content: { input: { command: string } }[] } }).message.content[0]!.input.command;
+  assert.equal(command(lines[0]!), marker("oversized"));
+  assert.equal(summary.counts.oversized, 1);
+  assert.ok(!lines[1]!.includes(value));
+  assert.equal(command(lines[2]!), `${marker("dotenv")} > .env`, "one that fits still goes as it does");
+  assert.ok(!lines.join("\n").includes(value));
+});

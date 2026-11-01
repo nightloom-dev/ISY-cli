@@ -634,7 +634,7 @@ export interface Budget {
 }
 
 /** Whether this much still fits the budget, which pays for it if so. */
-function spend(budget: Budget, amount: number): boolean {
+export function spend(budget: Budget, amount: number): boolean {
   if (budget.left < amount) return false;
   budget.left -= amount;
   return true;
