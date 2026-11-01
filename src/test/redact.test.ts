@@ -2568,6 +2568,98 @@ test("a walk that stops at the next of its kind leaves the password to that one"
   }
 });
 
+/** The rules that walk from a client's word to its flag. */
+const WALKING_RULES = BUILTIN_RULES.filter((rule) => rule.pattern.source.includes("curl"));
+
+test("a walk from a client stops only where the rule could start again", () => {
+  const value = "hunter2x";
+  const room = (length: number): string => "x".repeat(length);
+  for (const text of [
+    // Words that run on from the client's, on either side, start nothing.
+    `curl x xcurl -u a:${value}`,
+    `curl x curlx -u a:${value}`,
+    `curl x curl_y -u a:${value}`,
+    `curl x _curl -u a:${value}`,
+    `curl x CURL -u a:${value}`,
+    `curl x xcurl -b k=${value}`,
+    `curl x curlx -b k=${value}`,
+    `zip x xzip -P ${value}`,
+    `zip x zipper -P ${value}`,
+    `mysql x xmysql -p${value}`,
+    // After `.` or `-` a word is a file's or another tool's to the password flags.
+    `curl x a.curl -b k=${value}`,
+    `curl x a-curl -b k=${value}`,
+    `zip a.zip -P ${value}`,
+    `zip -r a-zip -P ${value}`,
+    `7z a x.7z -p${value}`,
+    `sshpass x a.sshpass -p ${value}`,
+    `ssh-keygen -f a.ssh-keygen -N ${value}`,
+    // A client that needs a space after it, and clients of more than one word.
+    `http x https://y -a a:${value}`,
+    `xh x http://y --auth a:${value}`,
+    `docker login x docker -p ${value}`,
+    `docker login x login -p ${value}`,
+    `helm registry login x helm registry -p ${value}`,
+    `gh secret set a gh secret -b ${value}`,
+    `doctl auth init x doctl auth -t ${value}`,
+    `security add-generic-password x security -w ${value}`,
+    // A start the walk stops at finds the same from there, in every spelling.
+    `curl x curl -u a:${value}`,
+    `curl x a.curl -u a:${value}`,
+    `curl x /usr/bin/curl -u a:${value}`,
+    `curl x curl -u "a:${value} b"`,
+    `curl x curl -u a:"${value} b"`,
+    `curl x curl -u 'a:${value} b'`,
+    `curl x curl -b k=${value}`,
+    `curl x\ncurl -u a:${value}`,
+    `zip x zip -P ${value}`,
+    `zip x unzip -P "${value} b"`,
+    `mysql x mariadb -p${value}`,
+    `http x xh -a a:${value}`,
+    `docker login x podman  login -p ${value}`,
+    `gh secret set a gh  secret  set -b ${value}`,
+    // With as much room again.
+    `curl ${room(199)} -u a:${value}`,
+    `zip ${room(199)} -P ${value}`,
+    `curl ${room(150)} curl ${room(150)} -u a:${value}`,
+    `zip ${room(150)} zip ${room(150)} -P ${value}`,
+    // A match of another kind takes the word the walk stopped at, and the second pass walks through.
+    `which smbclient && smbclient -U a%${value} //h/s`,
+    `apt install smbclient && smbclient -U a%${value} //h/s`,
+    `curl x sshpass -p curl -b k=${value}`,
+    `curl a sshpass -p 'x curl y' -b k=${value}`,
+    `curl a zip b curl -P x -b k=${value}`,
+    `curl -s a && ssh-keygen -t rsa && curl -N https://x -b sid=${value}`,
+  ]) {
+    assert.ok(!applyRules(text, WALKING_RULES).includes(value), text);
+  }
+  // Too far from its client a flag stays someone else's.
+  for (const text of [`curl ${room(200)} -u a:${value}`, `zip ${room(200)} -P ${value}`, `curl x\n${room(1)} -u a:${value}`, `zip x; -P ${value}`]) {
+    assert.equal(applyRules(text, WALKING_RULES), text);
+  }
+});
+
+test("the walks from a client's word add up to about the length of the line, however often it says the word", () => {
+  const scan = (text: string): number => {
+    const started = performance.now();
+    applyRules(text, WALKING_RULES);
+    return performance.now() - started;
+  };
+  const line = (unit: string): string => unit.repeat(Math.ceil(2_000_000 / unit.length));
+  const plain = line("hello w ");
+  for (const unit of ["curl ", "curl -b ", "curl -u ", "a.curl -u ", "zip ", "7z ", "xh ", "mysql "]) {
+    const text = line(unit);
+    // In turns, so a busy machine slows both; a walk from every word is 15 to 55 times a plain line.
+    let quickest = Infinity;
+    let quickestPlain = Infinity;
+    for (let turn = 0; turn < 5 && !(quickest < 8 * quickestPlain); turn += 1) {
+      quickestPlain = Math.min(quickestPlain, scan(plain));
+      quickest = Math.min(quickest, scan(text));
+    }
+    assert.ok(quickest < 8 * quickestPlain, `${unit}: ${Math.round(quickest)}ms, a plain line ${Math.round(quickestPlain)}ms`);
+  }
+});
+
 test("the rules stay small enough for a commit to compile them", () => {
   const size = BUILTIN_RULES.reduce((sum, rule) => sum + rule.pattern.source.length, 0);
   assert.ok(size < 18_000, `${size} characters of pattern`);

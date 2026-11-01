@@ -22,6 +22,8 @@ export interface RedactionRule {
   type: string;
   pattern: RegExp;
   replacement: string;
+  /** Goes over its own result once more when it cut something; a text with nothing to cut costs it one scan. */
+  again?: boolean;
 }
 
 /** `[pP][aA]…`: case by hand, so a rule can still tell a camelCase hump from a glued prefix. */
@@ -136,14 +138,23 @@ const KEY_FIELD = new RegExp(`^${KEY_NAME}$`);
 const KEY_END = String.raw`KEY(?<=(?<![A-Za-z0-9_])${KEY_NAME})`;
 
 /**
- * `curl -u admin:…`, its flag alone or last among others (`-fsSLu`). What precedes
- * the flag is capped, as every `curl` starts a new scan of the rest of its line.
+ * `curl -u admin:…`, its flag alone or last among others (`-fsSLu`). A walk to the flag
+ * stops at the next `curl`, which finds the same from there, so the walks of a line come
+ * to about its length however often it says `curl`. The cap says how far a flag is still
+ * this client's.
  */
-const CURL_USER_FLAG = String.raw`curl\b[^\n;|]{0,200}?\s(?:-[a-zA-Z]{0,16}[uU]\s*|--(?:proxy-)?user[=\s]\s*)`;
+const CURL_USER_FLAG = String.raw`curl\b(?:(?!\bcurl\b)[^\n;|]){0,200}?\s(?:-[a-zA-Z]{0,16}[uU]\s*|--(?:proxy-)?user[=\s]\s*)`;
 /** A name may be a marker already: an address is one by now. */
 const CURL_USER = String.raw`(?:\[ISY_REDACTED:\w+\]|(?!\[ISY_REDACTED)[^\s:"']+):`;
-/** A client, whatever comes between, and its flag. Capped as above. */
-const onClient = (client: string, flag: string): string => String.raw`(?:${client})\b[^\n;|]{0,200}?\s${flag}`;
+/**
+ * A client, whatever comes between, and its flag: stopped and capped as above, at a start
+ * as `PASSWORD_FLAG` has it.
+ *
+ * ponytail: the walks come to a line's length for each client it names, so a line naming
+ * every one of them in turn costs ten times a plain one. Finding each client's flags once,
+ * outside the pattern, is the way up if a stranger's session makes that matter.
+ */
+const onClient = (client: string, flag: string): string => String.raw`(?:${client})\b(?:(?!\b(?<![.-])(?:${client})\b)[^\n;|]){0,200}?\s${flag}`;
 /** The next word looks generated, for where what stands in front of it says too little. */
 const GENERATED_WORD = String.raw`(?=["']?[^\s"'/]{0,256}?${GENERATED_RUN})`;
 /**
@@ -377,9 +388,20 @@ export const BUILTIN_RULES: RedactionRule[] = [
   },
   {
     // One pass for both spellings, as each is a scan of every word for every client.
+    //
+    // Twice, as a walk that stops at its client's next word leaves the password to that
+    // word, and a match of another kind can take that word first: `apt install smbclient
+    // && smbclient -U a%b` gives it to the first word's share and password. It is a marker
+    // by the second pass, which walks through to the flag.
+    //
+    // ponytail: two passes, as until nothing changes is a pass per flag on a line of one
+    // client and many flags. A client named twice around another whose match takes the
+    // flag itself still loses it (`plink a mysql plink -pw b`: `-p`, then `w`). Tracking
+    // each client's flags outside the pattern is the way up if such a line ever turns up.
     type: "assignment",
     pattern: new RegExp(String.raw`(${PASSWORD_FLAG})(?:(["'])${quotedTo(String.raw`\2`)}|(["']?)(?!\[ISY_REDACTED|(?<=\s)-)[^\s"'$][^\s"']*)`, "g"),
     replacement: `$1$2$3${marker("assignment")}`,
+    again: true,
   },
 ];
 
@@ -449,10 +471,12 @@ export function applyRules(
 ): string {
   let result = text;
   for (const rule of rules) {
-    const matches = result.match(rule.pattern);
-    if (!matches) continue;
-    onMatch?.(rule.type, matches.length);
-    result = result.replace(rule.pattern, rule.replacement);
+    for (let passes = rule.again ? 2 : 1; passes > 0; passes -= 1) {
+      const matches = result.match(rule.pattern);
+      if (!matches) break;
+      onMatch?.(rule.type, matches.length);
+      result = result.replace(rule.pattern, rule.replacement);
+    }
   }
   return result;
 }
