@@ -154,7 +154,8 @@ const GENERATED_WORD = String.raw`(?=["']?[^\s"'/]{0,256}?${GENERATED_RUN})`;
  *
  * A walk that a text can start again and again stops where the next one starts, which
  * finds the same from there: a text of `mongo -u a ` is otherwise thousands of steps for
- * each word in it, and a text of `<` hundreds for each character.
+ * each word in it, and a text of `<` hundreds for each character. A `-u` with `-p` for its
+ * name finds nothing from there, so that one is walked through.
  *
  * ponytail: the clients people use. Another tool's own flag stays, as it does anywhere,
  * unless a project's own script (`./x`) gets something generated on one of these flags.
@@ -164,7 +165,7 @@ const USER_FLAG = String.raw`\s(?:-u|--username)[=\s]`;
 const PASSWORD_FLAG = String.raw`(?:\b(?<![.-])(?:${[
   onClient("sshpass", String.raw`-p\s*`),
   onClient(String.raw`(?:docker|podman)\s+login|helm\s+registry\s+login|az\s+login|twine\s+upload`, String.raw`-p\s+`),
-  String.raw`(?:${USER_FIRST})\b(?:(?!\b(?<![.-])(?:${USER_FIRST})\b)[^\n;|]){0,200}?${USER_FLAG}\s*\S+(?!\S)(?:(?!${USER_FLAG})[^\n;|]){0,200}?\s-p\s+(?!\d+:\d)`,
+  String.raw`(?:${USER_FIRST})\b(?:(?!\b(?<![.-])(?:${USER_FIRST})\b)[^\n;|]){0,200}?${USER_FLAG}\s*\S+(?!\S)(?:(?!${USER_FLAG}(?!\s*-p\s))[^\n;|]){0,200}?\s-p\s+(?!\d+:\d)`,
   onClient("redis-cli", String.raw`-a\s+`),
   onClient("mysql|mariadb|mysqldump|mysqladmin|7z|7za|7zz", String.raw`-p(?=[^\s=])`),
   onClient("sqlcmd|bcp|zip|unzip", String.raw`-P\s*`),
