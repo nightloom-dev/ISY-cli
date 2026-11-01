@@ -883,9 +883,9 @@ function learnEdit(statement: string, context: RedactContext): void {
 
 /**
  * What a session's commands naming a dotenv file may come to, past which one goes
- * whole. Each statement of them is held up to a dozen patterns, up to 4.5 µs a byte
- * against the 0.4 of any other text, on the thread that serves requests. The most in
- * a real session is 3.1 MB, out of 552 MB, and in any other 67 KB.
+ * whole. Each statement of them is held up to a dozen patterns, several times what a
+ * byte of any other text costs, on the thread that serves requests. The most in a real
+ * session is 3.1 MB, out of 552 MB, and in any other 67 KB.
  *
  * ponytail: what goes whole reads as no write to the parse, and teaches nothing of what
  * it held. Raise it if sessions come near, or take redaction off that thread.
