@@ -243,6 +243,9 @@ test("a hook line run by the real npx does not wait on a registry that never ans
 
 test("a line someone waits on runs what is cached without asking, and a line in the background brings the update", async () => {
   const home = await mkdtemp(join(tmpdir(), "isy-npx-cached-"));
+  // npm 10.8, Node 20's, reads the global tree before it installs and gives up if the
+  // prefix has no `lib`; npm 10.9 lets that go.
+  await mkdir(join(home, "prefix", "lib"), { recursive: true });
   const ran = join(home, "ran");
   const tarballs = new Map<string, Buffer>();
   for (const version of ["1.0.0", "1.0.1"]) {
