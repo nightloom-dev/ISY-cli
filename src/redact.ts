@@ -835,10 +835,11 @@ const SED_TEXT_COMMAND = /(?<=^|['"\s])(?:\$|\d{1,12}|\/[^/\n]{0,256}\/)[ \t]{0,
  * `docker exec app`, in the quotes of `ssh host "…"`. Only where to read from, as the
  * parse says whether it edits and what.
  *
- * ponytail: its flags ahead of its script, and the usual editors. `time sed 's/a/b/' -i .env`
- * or `sh -c "ex .env"` keeps its script, as a command nothing recognises does.
+ * ponytail: up to 16 flags ahead of its script, as any run of them is tried again from each
+ * word in it, and the usual editors. `time sed 's/a/b/' -i .env` or `sh -c "ex .env"` keeps
+ * its script, as a command nothing recognises does.
  */
-const EDITOR_CALL = /(?<![\w.-])(?:g?sed|g?awk|perl|ruby)(?:\s+-\S+)*?\s+(?:-[a-zA-Z0-9]*[iI]|--in-place|--include)/;
+const EDITOR_CALL = /(?<![\w.-])(?:g?sed|g?awk|perl|ruby)(?:\s+-\S+){0,16}?\s+(?:-[a-zA-Z0-9]*[iI]|--in-place|--include)/;
 /** What hands an editor its files from in front of it: `find … -exec sed -i`, `… | xargs sed -i`. */
 const FEEDS_FILES = /\s-(?:exec|ok)(?:dir)?\s|\bxargs\s/;
 

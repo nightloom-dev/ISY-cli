@@ -2837,3 +2837,16 @@ test("a value that shares a stretch with the text around it does not cost that t
   assert.ok(lines[2]!.includes("0".repeat(100)));
   assert.ok(lines[2]!.includes("and the rest"));
 });
+
+test("a command of many dashes in front of a dotenv file is read in time proportional to it", () => {
+  const command = `sed${" -/sed".repeat(20_000)} .env`;
+  const started = performance.now();
+  redactLines([JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command } }] } })]);
+  const took = performance.now() - started;
+  assert.ok(took < 2000, `took ${Math.round(took)}ms`);
+
+  const kept = (edit: string): string =>
+    redactLines([JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: edit } }] } })]).lines[0]!;
+  assert.ok(!kept(`sed -E -n -u -i 's/K=.*/K=Zq8vR2mK9xLp/' .env`).includes("Zq8vR2mK9xLp"));
+  assert.ok(!kept(`perl -p -i -e 's/K=.*/K=Zq8vR2mK9xLp/' .env`).includes("Zq8vR2mK9xLp"));
+});
