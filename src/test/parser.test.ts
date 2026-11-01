@@ -9,7 +9,9 @@ import { promisify } from "node:util";
 import { claudeAgent } from "../agents/claude.js";
 import { detectUnverifiedAssumption } from "../detectors.js";
 import {
+  STRUCTURES,
   commandSegments,
+  mayParse,
   mayWrite,
   onAbandonedBranch,
   onMainPath,
@@ -1100,4 +1102,26 @@ test("a command only looks when every part of it is known to, and anything else 
   ]) {
     assert.equal(shellOnlyLooks(command), true, command);
   }
+});
+
+test("a line is charged what its objects, arrays and keys will cost once parsed", () => {
+  const charged = (line: string): number => {
+    const structures = { left: 1000 };
+    assert.equal(mayParse(line, structures), true);
+    return 1000 - structures.left;
+  };
+  assert.equal(charged("{}"), 3);
+  assert.equal(charged("[[]]"), 6);
+  assert.equal(charged('{"a":0,"b" :1,"c"\t: 2}'), 6);
+  assert.equal(charged('"a colon: in words"'), 0);
+});
+
+test("objects of hundreds of small keys fit a session only as far as a heap holds them", () => {
+  // Parsed, one of these takes 25 KB out of 2.4 KB of line.
+  const keys = Array.from({ length: 342 }, (_, i) => `"k${i}":0`).join(",");
+  const line = `{"type":"user","x":{${keys}}}`;
+  const structures = { left: STRUCTURES };
+  let fit = 0;
+  while (mayParse(line, structures)) fit += 1;
+  assert.ok(fit * 25_000 < 1_300_000_000, `${fit} of them fit`);
 });

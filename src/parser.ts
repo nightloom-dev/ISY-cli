@@ -949,20 +949,30 @@ const REQUEST_RECORD_TYPES = new Set(["api-request", "api-request-shape", "api-r
 const LINE_CHARS = 64 * 1024 * 1024;
 
 /**
- * How many objects and arrays one session may hold. Parsed, the three bytes of `{},`
- * are 56 and with what is kept of the block 200, so a small upload that inflates to
- * nothing else outgrows any heap, and it has to be counted before it is parsed.
+ * What one session's objects, arrays and keys may come to, counting an object or
+ * array as three keys. Parsed, the three bytes of `{},` are 56 and with what is kept
+ * of the block 200, and a key takes 72 in an object of hundreds or of a shape of its
+ * own, ten times its line. So a small upload that inflates to nothing else outgrows
+ * any heap, and it has to be counted before it is parsed.
  *
- * ponytail: one flat count, 2.3 million in the largest of 1215 real sessions (276 MB).
- * What comes past it, or past `LINE_CHARS`, reads as a write nobody can name, and is
- * not read. Raise it if sessions of 500 MB turn up.
+ * ponytail: one flat count, 12.6 million in the most of 97 real sessions (252 MB), and
+ * a colon after a quote inside a string counts as a key. What comes past it, or past
+ * `LINE_CHARS`, reads as a write nobody can name, and is not read. Raise it if sessions
+ * of 500 MB as dense as that one turn up, and the heap with it.
  */
-export const STRUCTURES = 4_000_000;
+export const STRUCTURES = 16_000_000;
+const KEYS_PER_STRUCTURE = 3;
 
 function structuresIn(line: string): number {
   let count = 0;
   for (const opening of ["{", "["]) {
-    for (let at = line.indexOf(opening); at !== -1; at = line.indexOf(opening, at + 1)) count += 1;
+    for (let at = line.indexOf(opening); at !== -1; at = line.indexOf(opening, at + 1)) count += KEYS_PER_STRUCTURE;
+  }
+  for (let at = line.indexOf(":"); at !== -1; at = line.indexOf(":", at + 1)) {
+    // Backwards over what JSON lets stand before a colon, which ends at the colon before.
+    let before = at - 1;
+    while (line[before] === " " || line[before] === "\t" || line[before] === "\r") before -= 1;
+    if (line[before] === '"') count += 1;
   }
   return count;
 }
