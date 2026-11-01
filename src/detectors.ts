@@ -80,19 +80,30 @@ export function weakensTest(oldString: string, newString: string): string | unde
   return undefined;
 }
 
+/** Read once: output can run to megabytes, and every edit in the records after it asks. */
+const readAsFailed = new WeakMap<ToolUse, boolean>();
+
+function saysItFailed(use: ToolUse): boolean {
+  let failed = readAsFailed.get(use);
+  if (failed === undefined) {
+    const result = use.result;
+    failed =
+      result !== undefined &&
+      (result.isError ||
+        FAILURE_OUTPUT.test(result.stdout ?? "") ||
+        FAILURE_OUTPUT.test(result.stderr ?? "") ||
+        FAILURE_OUTPUT.test(result.text));
+    readAsFailed.set(use, failed);
+  }
+  return failed;
+}
+
 function failedBefore(session: ParsedSession, recordIndex: number): ToolUse | undefined {
   return session.toolUses.find((use) => {
     if (use.name !== "Bash") return false;
     if (use.recordIndex >= recordIndex) return false;
     if (use.recordIndex < recordIndex - FAILURE_LOOKBACK_RECORDS) return false;
-    const result = use.result;
-    if (!result) return false;
-    return (
-      result.isError ||
-      FAILURE_OUTPUT.test(result.stdout ?? "") ||
-      FAILURE_OUTPUT.test(result.stderr ?? "") ||
-      FAILURE_OUTPUT.test(result.text)
-    );
+    return saysItFailed(use);
   });
 }
 
@@ -292,21 +303,21 @@ function trackContent(session: ParsedSession): Candidate[] {
   return candidates;
 }
 
+/** An edit's two sides as one key. A digest, since past 16 KB a string hashes by its length alone, and a set of those is a walk. */
+function sidesOf(from: string, to: string): string {
+  return createHash("sha1").update(`${from.length}:${from}${to}`).digest("hex");
+}
+
 function detectRevertPairs(session: ParsedSession): Candidate[] {
   const candidates: Candidate[] = [];
 
   for (const [filePath, edits] of session.fileEdits) {
-    for (let later = 1; later < edits.length; later += 1) {
-      const current = edits[later]!;
+    const earlier = new Set<string>();
+    for (const current of edits) {
       if (current.oldString === undefined || current.newString === undefined) continue;
 
-      const reverted = edits.slice(0, later).some(
-        (earlier) =>
-          earlier.oldString !== undefined &&
-          earlier.newString !== undefined &&
-          earlier.oldString === current.newString &&
-          earlier.newString === current.oldString,
-      );
+      const reverted = earlier.has(sidesOf(current.newString, current.oldString));
+      earlier.add(sidesOf(current.oldString, current.newString));
       if (!reverted) continue;
 
       candidates.push({
@@ -351,6 +362,8 @@ const REVERT_FILES_LISTED = 5;
 
 function detectGitReverts(session: ParsedSession): Candidate[] {
   const candidates: Candidate[] = [];
+  // Once each, as a long path walked again for every discard is what takes the time.
+  const files = [...session.fileEdits].map(([filePath, edits]) => ({ filePath, edits, name: basename(filePath) }));
 
   for (const use of session.toolUses) {
     if (use.name !== "Bash") continue;
@@ -363,13 +376,13 @@ function detectGitReverts(session: ParsedSession): Candidate[] {
     const discarded: string[] = [];
     let startedAt: string | undefined;
 
-    for (const [filePath, edits] of session.fileEdits) {
-      const earlier = edits.filter((edit) => edit.recordIndex < use.recordIndex);
-      if (earlier.length === 0) continue;
-      if (!targets.everything && !targets.names.has(basename(filePath))) continue;
+    for (const { filePath, edits, name } of files) {
+      const earliest = edits.find((edit) => edit.recordIndex < use.recordIndex);
+      if (!earliest) continue;
+      if (!targets.everything && !targets.names.has(name)) continue;
 
       discarded.push(filePath);
-      const first = earlier[0]?.timestamp;
+      const first = earliest.timestamp;
       if (first && (!startedAt || first < startedAt)) startedAt = first;
     }
 
@@ -402,10 +415,11 @@ function detectGitReverts(session: ParsedSession): Candidate[] {
 function detectAbandonedBranches(session: ParsedSession): Candidate[] {
   const candidates: Candidate[] = [];
   if (session.mainPath.size === 0) return candidates;
+  const walked = new Map<string, boolean>();
 
   for (const [filePath, edits] of session.fileEdits) {
     for (const edit of edits) {
-      if (!onAbandonedBranch(session, edit.uuid)) continue;
+      if (!onAbandonedBranch(session, edit.uuid, walked)) continue;
 
       candidates.push({
         category: "abandoned_approach",

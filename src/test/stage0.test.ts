@@ -1307,3 +1307,63 @@ test("the rule for a dropped exception looks from one except as far as the next"
     assert.equal(text.match(rule.pattern)?.length, count, text);
   }
 });
+
+test("what a command printed is looked through once, not again for each edit after it", () => {
+  const printed = "x".repeat(16_000_000);
+  const session = padded([
+    ran("c", "pad19", "true"),
+    result("cr", "c", "bash-c", { toolUseResult: { stdout: printed, stderr: printed } }),
+    ran("s", "cr", `sed -i x ${"tests/a.ts ".repeat(1000)}`),
+  ]);
+  assertQuick("many edits", () => assert.deepEqual(detectTestModifiedToPass(session), []));
+});
+
+test("a long edit is held up to the ones before it in time proportional to them", () => {
+  const stretch = "q".repeat(1400);
+  const steps = Array.from({ length: 8000 }, () => ({ old_string: `${stretch}1`, new_string: `${stretch}2` }));
+  const session = padded([assistant("m", "pad19", [{ type: "tool_use", id: "t1", name: "MultiEdit", input: { file_path: "/r/a.ts", edits: steps } }])]);
+  assertQuick("many steps", () => assert.deepEqual(detectAbandonedApproach(session), []));
+});
+
+test("an edit undoes one before it only if each one's two sides are the other's", () => {
+  const editing = (uuid: string, parent: string, old_string: string, new_string: string): unknown =>
+    assistant(uuid, parent, [{ type: "tool_use", id: `t-${uuid}`, name: "Edit", input: { file_path: "/r/a.ts", old_string, new_string } }]);
+  const undone = (first: [string, string], second: [string, string]): number =>
+    detectAbandonedApproach(padded([editing("e1", "pad19", ...first), editing("e2", "e1", ...second)])).length;
+  assert.equal(undone(["ab", "c"], ["c", "ab"]), 1);
+  assert.equal(undone(["ab", "c"], ["bc", "a"]), 0);
+  assert.equal(undone(["ab", "c"], ["ab", "c"]), 0);
+});
+
+test("a discard takes the last part of each file's path once, however many discards there are", () => {
+  const stretch = "p".repeat(5000);
+  const files = Array.from({ length: 500 }, (_, index) => edited(`e${index}`, "pad19", `/${stretch}${index}`));
+  const discards = Array.from({ length: 2000 }, (_, index) => ran(`g${index}`, "e499", "git checkout z"));
+  const session = padded([...files, ...discards]);
+  assertQuick("many long paths", () => detectAbandonedApproach(session));
+});
+
+test("a discard names the first edit of each file it took back, not one made after it", () => {
+  const session = padded([ran("g", "pad19", "git checkout a.ts"), edited("e1", "g", "/r/a.ts")]);
+  assert.deepEqual(detectAbandonedApproach(session).filter((c) => c.detail.includes("discarded")), []);
+  const taken = padded([edited("e1", "pad19", "/r/a.ts"), ran("g", "e1", "git checkout a.ts"), edited("e2", "g", "/r/a.ts")]);
+  assert.deepEqual(
+    detectAbandonedApproach(taken).filter((c) => c.detail.includes("discarded")).map((c) => c.filePath),
+    ["/r/a.ts"],
+  );
+});
+
+test("a side chain is walked once, however many edits stand on it", () => {
+  const records: unknown[] = [];
+  const parentOf = (index: number): string => (index === 0 ? "pad19" : `c${index - 1}`);
+  for (let index = 0; index < 60_000; index += 1) records.push(assistant(`c${index}`, parentOf(index), [{ type: "text", text: "x" }]));
+  for (let index = 0; index < 2000; index += 1) records.push(edited(`e${index}`, index === 0 ? "c59999" : `e${index - 1}`, "/r/a.ts"));
+  records.push(assistant("live", "pad19", [{ type: "text", text: "different approach" }]));
+  records.push(assistant("tip", "live", [{ type: "text", text: "done" }]));
+  const session = padded(records);
+  let found = 0;
+  assertQuick("a long chain", () => {
+    found = detectAbandonedApproach(session).filter((c) => c.detail.includes("branch")).length;
+  });
+  assert.equal(found, 1);
+});

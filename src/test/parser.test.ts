@@ -852,6 +852,27 @@ test("follows a compaction back to the work before it", () => {
   assert.equal(onAbandonedBranch(session, "rewound"), true);
 });
 
+test("records that share a way back share what is found at its end", () => {
+  const session = parseLines(jsonl([
+    assistant("a", null, []),
+    assistant("side", "a", []),
+    assistant("side2", "side", []),
+    assistant("lost", "gone-from-this-file", []),
+    assistant("lost2", "lost", []),
+    { ...assistant("loop1", "loop2", []) },
+    { ...assistant("loop2", "loop1", []) },
+    assistant("loop3", "loop2", []),
+    assistant("b", "a", []),
+  ]));
+  const known = new Map<string, boolean>();
+  for (const uuid of ["side2", "side", "lost2", "lost", "loop3", "loop2", "loop1", "a", "b", "nobody"]) {
+    assert.equal(onAbandonedBranch(session, uuid, known), onAbandonedBranch(session, uuid), uuid);
+  }
+  assert.equal(onAbandonedBranch(session, "side2", known), true);
+  assert.equal(onAbandonedBranch(session, "lost2", known), false);
+  assert.equal(onAbandonedBranch(session, "loop3", known), false);
+});
+
 test("an unknown tool counts as an edit only when it could have named a file", () => {
   // Claude Code 2.1 bookkeeping: known, and a file is not among their arguments anyway.
   assert.equal(mayWrite("TaskCreate", { subject: "a", description: "b" }), false);

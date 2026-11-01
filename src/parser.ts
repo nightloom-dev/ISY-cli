@@ -1164,22 +1164,37 @@ export function onMainPath(session: ParsedSession, uuid: string | undefined): bo
   return typeof uuid === "string" && session.mainPath.has(uuid);
 }
 
-export function onAbandonedBranch(session: ParsedSession, uuid: string | undefined): boolean {
+/** `walked` holds what is known of records already walked, as all on a way back share what is at its end. */
+export function onAbandonedBranch(
+  session: ParsedSession,
+  uuid: string | undefined,
+  walked = new Map<string, boolean>(),
+): boolean {
   if (typeof uuid !== "string" || session.mainPath.size === 0) return false;
   if (session.mainPath.has(uuid)) return false;
 
   const visited = new Set<string>();
+  let abandoned = false;
   let current = session.byUuid.get(uuid);
 
   while (current && typeof current.uuid === "string" && !visited.has(current.uuid)) {
+    const known = walked.get(current.uuid);
+    if (known !== undefined) {
+      abandoned = known;
+      break;
+    }
     visited.add(current.uuid);
     const parent = parentOf(current);
-    if (parent === undefined) return false;
-    if (session.mainPath.has(parent)) return true;
+    if (parent === undefined) break;
+    if (session.mainPath.has(parent)) {
+      abandoned = true;
+      break;
+    }
     current = session.byUuid.get(parent);
   }
 
-  return false;
+  for (const seen of visited) walked.set(seen, abandoned);
+  return abandoned;
 }
 
 export function hasSkips(skipped: SkipStats): boolean {
