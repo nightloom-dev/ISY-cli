@@ -627,6 +627,18 @@ function valueFinder(values: readonly string[]): FindValue {
   };
 }
 
+/**
+ * What a session may cut before a text holding a learned value goes whole, as one too
+ * dear to look through does. Each cut makes the text longer and holds a string of its
+ * own until the text is done, and finding one spends no walks, so that a value repeated
+ * through a few gzipped kilobytes is what the heap has to hold. The most in a real
+ * session is 711.
+ *
+ * ponytail: one count for a session, so that past it a text with a single hit is lost
+ * with the rest. Per-text limits if a real session ever comes near.
+ */
+const MOST_CUTS = 1_000_000;
+
 function withoutValues(value: unknown, find: FindValue, context: RedactContext, key?: string): unknown {
   if (typeof value === "string") {
     if (key !== undefined && NOT_SAID.has(key)) return value;
@@ -634,6 +646,10 @@ function withoutValues(value: unknown, find: FindValue, context: RedactContext, 
     let from = 0;
     const walks = walksOver(value.length);
     for (let hit = find(value, 0, walks); hit !== undefined; hit = find(value, from, walks)) {
+      if ((context.counts.dotenv ?? 0) >= MOST_CUTS) {
+        count(context, "oversized", 1);
+        return marker("oversized");
+      }
       text += value.slice(from, hit[0]) + marker("dotenv");
       from = hit[0] + hit[1].length;
       count(context, "dotenv", 1);

@@ -2883,3 +2883,18 @@ test("a command of many dashes in front of a dotenv file is read in time proport
   assert.ok(!kept(`sed -E -n -u -i 's/K=.*/K=Zq8vR2mK9xLp/' .env`).includes("Zq8vR2mK9xLp"));
   assert.ok(!kept(`perl -p -i -e 's/K=.*/K=Zq8vR2mK9xLp/' .env`).includes("Zq8vR2mK9xLp"));
 });
+
+test("past what a session may cut of learned values, the text that holds one goes whole", () => {
+  const value = "a1a1a1a1";
+  const read = JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: ".env" } }] } });
+  const shown = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: `TOKEN=${value}` }] } });
+  const said = (text: string): string => JSON.stringify({ type: "user", message: { role: "user", content: text } });
+  const { lines, summary } = redactLines([read, shown, said(value.repeat(600_000)), said(`${value} and the rest`.repeat(400_001)), said(`${value} once`), said("nothing of it")]);
+  assert.ok(!lines.join("\n").includes(value));
+  assert.equal(summary.counts.dotenv, 1_000_000);
+  assert.equal(summary.counts.oversized, 2);
+  assert.equal(lines[2]!.split("dotenv").length - 1, 600_000);
+  assert.equal(JSON.parse(lines[3]!).message.content, marker("oversized"));
+  assert.equal(JSON.parse(lines[4]!).message.content, marker("oversized"));
+  assert.equal(JSON.parse(lines[5]!).message.content, "nothing of it");
+});
