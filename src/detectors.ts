@@ -1020,21 +1020,32 @@ function suppressionAdded(oldString: string, newString: string, rules = SUPPRESS
  * too, with the name of a check as its pattern as often as not. A failure piped
  * through `tail` exits 0 and goes unread here.
  */
-function checkFailedBefore(session: ParsedSession, recordIndex: number): boolean {
-  return session.toolUses.some(
-    (use) =>
-      use.recordIndex < recordIndex &&
-      use.recordIndex >= recordIndex - FAILURE_LOOKBACK_RECORDS &&
+function failedChecks(session: ParsedSession): Set<number> {
+  const records = new Set<number>();
+  for (const use of session.toolUses) {
+    if (
       use.result?.isError === true &&
       verifies(use) &&
       commandSegments(withoutHeredocs(use.input.command as string)).some(
         (segment) => VERIFY_COMMAND.test(segment) && !READER.test(segment),
-      ),
-  );
+      )
+    ) {
+      records.add(use.recordIndex);
+    }
+  }
+  return records;
+}
+
+function checkFailedBefore(failed: ReadonlySet<number>, recordIndex: number): boolean {
+  for (let back = 1; back <= FAILURE_LOOKBACK_RECORDS; back += 1) {
+    if (failed.has(recordIndex - back)) return true;
+  }
+  return false;
 }
 
 export function detectErrorSuppressed(session: ParsedSession): Candidate[] {
   const candidates: Candidate[] = [];
+  const failed = failedChecks(session);
 
   for (const [filePath, edits] of session.fileEdits) {
     // A weakened test is the same act with its own category and its own weight.
@@ -1049,7 +1060,7 @@ export function detectErrorSuppressed(session: ParsedSession): Candidate[] {
       // of the two: a silent catch given one hides less than it did. What a
       // whole-file write replaced is not in the transcript, so that reads as new.
       const logOnly =
-        CODE_EXTENSION.test(filePath) && checkFailedBefore(session, edit.recordIndex) && !suppressionAdded(after, before)
+        CODE_EXTENSION.test(filePath) && checkFailedBefore(failed, edit.recordIndex) && !suppressionAdded(after, before)
           ? suppressionAdded(before, after, LOG_ONLY_CATCHES)
           : undefined;
       const reason = suppressionAdded(before, after) ?? logOnly;

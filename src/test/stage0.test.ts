@@ -1181,3 +1181,17 @@ test("many long globs against many long paths give up rather than take hours", (
   const took = performance.now() - started;
   assert.ok(took < 5000, `took ${took} ms`);
 });
+
+test("a failed check is read once, not again for each edit after it", () => {
+  const command = `npm test ${"a ".repeat(150_000)}`;
+  const edits = Array.from({ length: 300 }, (_, i) => ({ type: "tool_use", id: `e${i}`, name: "Edit", input: { file_path: "/repo/src/a.ts", old_string: "a", new_string: "b" } }));
+  const session = padded([
+    assistant("c", "pad19", [{ type: "tool_use", id: "bash", name: "Bash", input: { command } }]),
+    result("cr", "c", "bash", { message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash", content: "failed", is_error: true }] } }),
+    assistant("e", "cr", edits),
+  ]);
+  const started = performance.now();
+  detectErrorSuppressed(session);
+  const took = performance.now() - started;
+  assert.ok(took < 3000, `took ${took} ms`);
+});
