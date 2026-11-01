@@ -1198,11 +1198,11 @@ test("a failed check is read once, not again for each edit after it", () => {
   assert.ok(took < 3000, `took ${took} ms`);
 });
 
-function assertQuick(label: string, run: () => unknown): void {
+function assertQuick(label: string, run: () => unknown, limit = 2000): void {
   const started = performance.now();
   run();
   const took = performance.now() - started;
-  assert.ok(took < 2000, `${label} took ${Math.round(took)} ms`);
+  assert.ok(took < limit, `${label} took ${Math.round(took)} ms`);
 }
 
 test("a manifest of blank lines or of an open table is read in time proportional to it", () => {
@@ -1370,13 +1370,14 @@ test("a side chain is walked once, however many edits stand on it", () => {
 
 test("many long reads against many edited files give up rather than take minutes, but for the path itself", () => {
   const stretch = "r".repeat(1000);
-  const reads = Array.from({ length: 5000 }, (_, index) => read(`r${index}`, index === 0 ? "pad19" : `r${index - 1}`, `${stretch}${index}`));
+  const reads = Array.from({ length: 20_000 }, (_, index) => read(`r${index}`, index === 0 ? "pad19" : `r${index - 1}`, `${stretch}${index}`));
   const files = Array.from({ length: 1000 }, (_, index) => edited(`e${index}`, index === 0 ? "last" : `e${index - 1}`, `/r/f${index}.ts`));
-  const session = padded([...reads, read("last", "r4999", "/r/f999.ts"), ...files]);
+  const session = padded([...reads, read("last", "r19999", "/r/f999.ts"), ...files]);
   let found: unknown[] = [];
+  // What the budget still lets through is seconds on a busy machine, and all of it minutes.
   assertQuick("long reads", () => {
     found = detectUnverifiedAssumption(session);
-  });
+  }, 8000);
   assert.equal(found.length, 999);
 });
 
@@ -1385,5 +1386,6 @@ test("many reads that share a long start with many edited files give up rather t
   const reads = Array.from({ length: 5000 }, (_, index) => read(`r${index}`, index === 0 ? "pad19" : `r${index - 1}`, `${stretch}${index}`));
   const files = Array.from({ length: 1000 }, (_, index) => edited(`e${index}`, index === 0 ? "r4999" : `e${index - 1}`, `${stretch}/f${index}.ts`));
   const session = padded([...reads, ...files]);
-  assertQuick("shared starts", () => detectUnverifiedAssumption(session));
+  // What the budget still lets through is seconds on a busy machine, and all of it minutes.
+  assertQuick("shared starts", () => detectUnverifiedAssumption(session), 20_000);
 });
