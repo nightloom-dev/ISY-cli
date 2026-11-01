@@ -2536,7 +2536,7 @@ test("every rule gets through text shaped almost like what it matches", () => {
 });
 
 test("what stands in front of a password is walked once, however often a text repeats it", () => {
-  for (const unit of ["<", "<<<a", "mongo -u a ", "mongo -u aa ", "mongo -u -p ", "KEY=", "A_KEY=", `./${"a".repeat(64)} `]) {
+  for (const unit of ["<", "=", "<<<a", "mongo -u a ", "mongo -u aa ", "mongo -u -p ", "KEY=", "A_KEY=", `./${"a".repeat(64)} `]) {
     const text = unit.repeat(Math.ceil(2_000_000 / unit.length));
     const started = performance.now();
     applyRules(text, BUILTIN_RULES);

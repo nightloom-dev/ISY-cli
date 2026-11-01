@@ -122,9 +122,10 @@ const afterName = (name: string, between: string, separator: string): string => 
 const CLOSED = String.raw`["']?\s*`;
 /**
  * `=>`, `:=`, a comparison and a subscript's `"] =`: what is code as often as data
- * (`password => password.trim()`), unless what follows is in quotes.
+ * (`password => password.trim()`), unless what follows is in quotes. A run of `=` is
+ * looked back from only where it starts, as no name stands right before the rest of it.
  */
-const beforeQuoted = (name: string): string => afterName(name, String.raw`["']?\]?\s*`, "(?:=>|:=|={1,3}|!={1,2})") + String.raw`\s*["']`;
+const beforeQuoted = (name: string): string => afterName(name, String.raw`["']?\]?\s*`, "(?:=>|:=|(?<!=)={1,3}|!={1,2})") + String.raw`\s*["']`;
 
 /** What nobody types by hand: twelve letters and digits in a row, both among them, as `documentation` and `202410201230` are not. */
 const GENERATED_RUN = String.raw`(?=[A-Za-z]{0,11}\d)(?=\d{0,11}[A-Za-z])[A-Za-z0-9]{12}`;
