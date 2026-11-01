@@ -132,6 +132,7 @@ const GENERATED = new RegExp(GENERATED_RUN);
 /** `STRIPE_KEY`, `HMAC_KEY`: as often a sort order as a secret (`SORT_KEY=created_at`), so what it holds has to look generated too. */
 const KEY_NAME = String.raw`(?:[A-Z][A-Z0-9_]{0,64}_)?KEY`;
 const KEY_FIELD = new RegExp(`^${KEY_NAME}$`);
+const KEY_END = String.raw`KEY(?<=(?<![A-Za-z0-9_])${KEY_NAME})`;
 
 /**
  * `curl -u admin:…`, its flag alone or last among others (`-fsSLu`). What precedes
@@ -151,13 +152,19 @@ const GENERATED_WORD = String.raw`(?=["']?[^\s"'/]{0,256}?${GENERATED_RUN})`;
  * and `--name mongo -p 27017:27017` is a container, so to that family `-p` counts
  * behind `-u`. What a here-string feeds is anyone's, so that word has to look generated.
  *
+ * A walk that a text can start again and again stops where the next one starts, which
+ * finds the same from there: a text of `mongo -u a ` is otherwise thousands of steps for
+ * each word in it, and a text of `<` hundreds for each character.
+ *
  * ponytail: the clients people use. Another tool's own flag stays, as it does anywhere,
  * unless a project's own script (`./x`) gets something generated on one of these flags.
  */
+const USER_FIRST = "mongosh|mongo|mongodump|mongorestore|mongoexport|mongoimport|cqlsh";
+const USER_FLAG = String.raw`\s(?:-u|--username)[=\s]`;
 const PASSWORD_FLAG = String.raw`(?:\b(?<![.-])(?:${[
   onClient("sshpass", String.raw`-p\s*`),
   onClient(String.raw`(?:docker|podman)\s+login|helm\s+registry\s+login|az\s+login|twine\s+upload`, String.raw`-p\s+`),
-  onClient("mongosh|mongo|mongodump|mongorestore|mongoexport|mongoimport|cqlsh", String.raw`(?:-u|--username)[=\s]\s*\S+[^\n;|]{0,200}?\s-p\s+(?!\d+:\d)`),
+  String.raw`(?:${USER_FIRST})\b(?:(?!\b(?<![.-])(?:${USER_FIRST})\b)[^\n;|]){0,200}?${USER_FLAG}\s*\S+(?!\S)(?:(?!${USER_FLAG})[^\n;|]){0,200}?\s-p\s+(?!\d+:\d)`,
   onClient("redis-cli", String.raw`-a\s+`),
   onClient("mysql|mariadb|mysqldump|mysqladmin|7z|7za|7zz", String.raw`-p(?=[^\s=])`),
   onClient("sqlcmd|bcp|zip|unzip", String.raw`-P\s*`),
@@ -181,7 +188,7 @@ const PASSWORD_FLAG = String.raw`(?:\b(?<![.-])(?:${[
   String.raw`(?:aws\s+configure\s+set|(?:npm|yarn|wp)\s+config\s+set|setx|setenv|set\s+-[a-z]*x[a-z]*)\s+(?:\S*[/:])?${secretName()}\s+`,
   String.raw`SetEnvironmentVariable\(\s*["']${secretName()}["']\s*,\s*`,
   String.raw`echo\s+(?:-n\s+)?(?=["']?[^\s"']{1,400}["']?\s*\|[^\n;|]{0,200}?--(?:password-stdin|with-token)\b)`,
-].join("|")})|-(?<=\s-)(?:(?:src|dest)?(?:store|key)pass\s+|Dsonar\.login=)|<<<\s*${GENERATED_WORD}|\.\/[\w.-]{1,64}[^\n;|]{0,200}?\s(?:-p|--key|--pwd)\s+${GENERATED_WORD})`;
+].join("|")})|-(?<=\s-)(?:(?:src|dest)?(?:store|key)pass\s+|Dsonar\.login=)|<<<\s*(?=["']?(?:(?!<<<)[^\s"'/]){0,256}?${GENERATED_RUN})|\.\/[\w.-](?:(?!\.\/[\w.-])[^\n;|]){0,263}?\s(?:-p|--key|--pwd)\s+${GENERATED_WORD})`;
 /** To a closing quote named by the backreference `quote`, spaces and the other quote included. */
 const quotedTo = (quote: string): string => String.raw`(?!\[ISY_REDACTED|\$)(?:(?!${quote})[^\n]){1,400}(?=${quote})`;
 
@@ -349,8 +356,9 @@ export const BUILTIN_RULES: RedactionRule[] = [
   },
   {
     // From the word back to the name, as the name from its front is a scan at every capital.
+    // The word is looked through as far as the next such name, which looks on from there.
     type: "assignment",
-    pattern: new RegExp(String.raw`KEY(?<=(?<![A-Za-z0-9_])${KEY_NAME})(["']?\]?\s*[=:]\s*["']?)(?=[^\s"']{0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
+    pattern: new RegExp(String.raw`${KEY_END}(["']?\]?\s*[=:]\s*["']?)(?=(?:(?!${KEY_END}\]?[=:])[^\s"']){0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
     replacement: `KEY$1${marker("assignment")}`,
   },
   {

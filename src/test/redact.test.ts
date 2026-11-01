@@ -2535,6 +2535,37 @@ test("every rule gets through text shaped almost like what it matches", () => {
   assert.ok(performance.now() - started < 1000);
 });
 
+test("what stands in front of a password is walked once, however often a text repeats it", () => {
+  for (const unit of ["<", "<<<a", "mongo -u a ", "mongo -u aa ", "KEY=", "A_KEY=", `./${"a".repeat(64)} `]) {
+    const text = unit.repeat(Math.ceil(2_000_000 / unit.length));
+    const started = performance.now();
+    applyRules(text, BUILTIN_RULES);
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `${JSON.stringify(unit)} took ${Math.round(took)}ms`);
+  }
+});
+
+test("a walk that stops at the next of its kind leaves the password to that one", () => {
+  const value = "aB3dE6gH9jK2mN5p";
+  for (const text of [
+    `cat <<<<<${value}`,
+    `cat <<<a<<<${value}`,
+    `A_KEY=B_KEY=${value}`,
+    `A_KEY=xKEY=${value}`,
+    `A_KEY=x-KEY-${value}`,
+    `A_KEY=sk-KEY]${value}`,
+    `mongo mongodump -u root -p ${value}`,
+    `mongo --name x.mongo -u root -p ${value}`,
+    `mongosh -u root -u admin -p ${value}`,
+    `mongosh -u 'a;b' -p ${value}`,
+    `./a ./b -p ${value}`,
+    `./a x=./ -p ${value}`,
+    `./${"a".repeat(80)} -p ${value}`,
+  ]) {
+    assert.ok(!redactOne(text).includes(value), text);
+  }
+});
+
 test("the rules stay small enough for a commit to compile them", () => {
   const size = BUILTIN_RULES.reduce((sum, rule) => sum + rule.pattern.source.length, 0);
   assert.ok(size < 18_000, `${size} characters of pattern`);
