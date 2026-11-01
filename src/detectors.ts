@@ -80,31 +80,40 @@ export function weakensTest(oldString: string, newString: string): string | unde
   return undefined;
 }
 
-/** Read once: output can run to megabytes, and every edit in the records after it asks. */
-const readAsFailed = new WeakMap<ToolUse, boolean>();
-
 function saysItFailed(use: ToolUse): boolean {
-  let failed = readAsFailed.get(use);
-  if (failed === undefined) {
-    const result = use.result;
-    failed =
-      result !== undefined &&
-      (result.isError ||
-        FAILURE_OUTPUT.test(result.stdout ?? "") ||
-        FAILURE_OUTPUT.test(result.stderr ?? "") ||
-        FAILURE_OUTPUT.test(result.text));
-    readAsFailed.set(use, failed);
-  }
-  return failed;
+  const result = use.result;
+  return (
+    result !== undefined &&
+    (result.isError ||
+      FAILURE_OUTPUT.test(result.stdout ?? "") ||
+      FAILURE_OUTPUT.test(result.stderr ?? "") ||
+      FAILURE_OUTPUT.test(result.text))
+  );
 }
 
+/**
+ * The first failing call of each record, worked out once: every edit asks about the
+ * records before it, thousands of edits can ask about 100000 calls, and output can run
+ * to megabytes. The parse is over by the time a detector runs, so what a call came to
+ * no longer changes.
+ */
+const failingCalls = new WeakMap<ParsedSession, Map<number, ToolUse>>();
+
 function failedBefore(session: ParsedSession, recordIndex: number): ToolUse | undefined {
-  return session.toolUses.find((use) => {
-    if (use.name !== "Bash") return false;
-    if (use.recordIndex >= recordIndex) return false;
-    if (use.recordIndex < recordIndex - FAILURE_LOOKBACK_RECORDS) return false;
-    return saysItFailed(use);
-  });
+  let failing = failingCalls.get(session);
+  if (failing === undefined) {
+    failing = new Map();
+    for (const use of session.toolUses) {
+      if (use.name === "Bash" && !failing.has(use.recordIndex) && saysItFailed(use)) failing.set(use.recordIndex, use);
+    }
+    failingCalls.set(session, failing);
+  }
+  // Earliest first, as a finding starts from it. Calls are in record order, as the parse pushes them.
+  for (let back = FAILURE_LOOKBACK_RECORDS; back >= 1; back -= 1) {
+    const use = failing.get(recordIndex - back);
+    if (use !== undefined) return use;
+  }
+  return undefined;
 }
 
 export function detectTestModifiedToPass(session: ParsedSession): Candidate[] {

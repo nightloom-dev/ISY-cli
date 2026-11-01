@@ -1198,6 +1198,86 @@ test("a failed check is read once, not again for each edit after it", () => {
   assert.ok(took < 3000, `took ${took} ms`);
 });
 
+/** A session around the record of one edit: `before` holds what stands so many records back, and the rest is filler. */
+function aroundAnEdit(editRecord: unknown[], before: Map<number, unknown[]>, after: unknown[] = []): ParsedSession {
+  const contents: unknown[][] = [];
+  for (let back = Math.max(0, ...before.keys()); back >= 1; back -= 1) contents.push(before.get(back) ?? [{ type: "text", text: "x" }]);
+  contents.push(editRecord);
+  if (after.length > 0) contents.push(after);
+  return padded(contents.map((content, i) => assistant(`r${i}`, i === 0 ? "pad19" : `r${i - 1}`, content)));
+}
+
+const bashCall = (id: string): unknown => ({ type: "tool_use", id, name: "Bash", input: { command: "npm test" } });
+/** The call and its result in one record, so that the result takes no place among those counted back. */
+const failedCall = (id: string): unknown[] => [bashCall(id), { type: "tool_result", tool_use_id: id, content: "1 test FAILED" }];
+
+test("a failing call counts for ten records before an edit, on each of the three ways to ask", () => {
+  const weakening = { type: "tool_use", id: "edit", name: "Edit", input: { file_path: "/r/t/a.test.ts", old_string: "expect(a).toBe(1);\nexpect(b).toBe(2);", new_string: "expect(a).toBe(1);" } };
+  const sed = { type: "tool_use", id: "edit", name: "Bash", input: { command: "sed -i x t/a.test.ts" } };
+  const suppression = { type: "tool_use", id: "edit", name: "Edit", input: { file_path: "/r/src/a.ts", old_string: "const x = f();", new_string: "// @ts-ignore\nconst x = f();" } };
+  const asks: [string, unknown, (session: ParsedSession) => boolean][] = [
+    ["a weakened test", weakening, (session) => detectTestModifiedToPass(session)[0]!.weight === 0.9],
+    ["a sed on a test", sed, (session) => detectTestModifiedToPass(session).length === 1],
+    ["a suppression", suppression, (session) => detectErrorSuppressed(session)[0]!.weight === 0.7],
+  ];
+  const failedRead = [{ type: "tool_use", id: "f", name: "Read", input: { file_path: "/r/a" } }, { type: "tool_result", tool_use_id: "f", content: "FAILED", is_error: true }];
+  for (const [label, edit, seesFailure] of asks) {
+    for (const [back, counted] of [[1, true], [10, true], [11, false]] as const) {
+      assert.equal(seesFailure(aroundAnEdit([edit], new Map([[back, failedCall("f")]]))), counted, `${label}, ${back} back`);
+    }
+    assert.equal(seesFailure(aroundAnEdit([...failedCall("f"), edit], new Map())), false, `${label}, in its own record`);
+    assert.equal(seesFailure(aroundAnEdit([edit], new Map(), failedCall("f"))), false, `${label}, after it`);
+    assert.equal(seesFailure(aroundAnEdit([edit], new Map([[1, [bashCall("f")]]]))), false, `${label}, a call with no result`);
+    assert.equal(seesFailure(aroundAnEdit([edit], new Map([[1, failedRead]]))), false, `${label}, a failure of no shell call`);
+  }
+});
+
+test("a finding starts from the earliest failing call in reach of its edit", () => {
+  const sed = { type: "tool_use", id: "edit", name: "Bash", input: { command: "sed -i x t/a.test.ts" } };
+  const session = aroundAnEdit([sed], new Map([[12, failedCall("out")], [9, failedCall("first")], [3, failedCall("second")]]));
+  const startedAt = (id: string): string | undefined => session.toolUses.find((use) => use.id === id)?.timestamp;
+  const [found] = detectTestModifiedToPass(session);
+  assert.equal(found?.startedAt, startedAt("first"));
+  assert.notEqual(startedAt("first"), startedAt("second"));
+  assert.notEqual(startedAt("first"), startedAt("out"));
+});
+
+test("what edits ask of a session's calls comes to one look at each, however many edits ask", () => {
+  // Counted and not timed: a look at each call for each edit is seconds at this size, which a
+  // loaded machine can match, and a million looks here against the few thousand of one round.
+  const calls = 2000;
+  const edits = 500;
+  const bash = Array.from({ length: calls }, (_, i) => bashCall(`b${i}`));
+  const failures = bash.map((_, i) => ({ type: "tool_result", tool_use_id: `b${i}`, content: "no", is_error: true }));
+  const seds = Array.from({ length: edits }, (_, i) => ({ type: "tool_use", id: `s${i}`, name: "Bash", input: { command: "sed -i x t/a.test.ts" } }));
+  const suppressions = Array.from({ length: edits }, (_, i) => ({ type: "tool_use", id: `e${i}`, name: "Edit", input: { file_path: "/r/src/a.ts", old_string: "const x = f();", new_string: "// @ts-ignore\nconst x = f();" } }));
+  const asked = [...seds, ...suppressions];
+  const gap = Array.from({ length: 12 }, () => [{ type: "text", text: "x" }]);
+  const forms: [string, unknown[][]][] = [
+    ["no results", [bash, asked]],
+    ["all failed right before", [bash, failures, asked]],
+    ["all failed out of reach", [bash, failures, ...gap, asked]],
+    ["all failed after", [asked, bash, failures]],
+  ];
+  for (const [label, contents] of forms) {
+    const session = padded(contents.map((content, i) => assistant(`f${i}`, i === 0 ? "pad19" : `f${i - 1}`, content)));
+    let looks = 0;
+    session.toolUses = session.toolUses.map(
+      (use) =>
+        new Proxy(use, {
+          get(target, key, receiver) {
+            looks += 1;
+            return Reflect.get(target, key, receiver);
+          },
+        }),
+    );
+    detectTestModifiedToPass(session);
+    detectErrorSuppressed(session);
+    const perCall = looks / session.toolUses.length;
+    assert.ok(perCall < 20, `${label}: ${Math.round(perCall)} looks at each of ${session.toolUses.length} calls`);
+  }
+});
+
 function assertQuick(label: string, run: () => unknown, limit = 2000): void {
   const started = performance.now();
   run();
