@@ -300,13 +300,6 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: `$1${marker("authorization")}`,
   },
   {
-    // A cookie header's value runs to the end of the line, spaces and `;` included.
-    // It opens with a name and `=`, which `cookie == null` and `cookie = jar.get()` do not.
-    type: "cookie",
-    pattern: /\b(cookie["'`]?[ \t]*[:=][ \t]*["'`]?)(?!\[ISY_REDACTED)(?=[^\s"'`=;,$<{]{1,256}=[^=])[^"'`\r\n]{8,}/gi,
-    replacement: `$1${marker("cookie")}`,
-  },
-  {
     // Any scheme: a password in a URL is one whatever speaks it — rediss,
     // amqps, https to a bare IP. The scheme is capped because `\b` lets a match
     // start inside a dotted or dashed run: unbounded, every start rescans the
@@ -373,6 +366,17 @@ export const BUILTIN_RULES: RedactionRule[] = [
     type: "assignment",
     pattern: new RegExp(String.raw`${KEY_END}(["']?\]?\s*[=:]\s*["']?)(?=(?:(?!${KEY_END}\]?[=:])[^\s"']){0,256}?${GENERATED_RUN})${SECRET_VALUE}`, "g"),
     replacement: `KEY$1${marker("assignment")}`,
+  },
+  {
+    // A cookie header's value runs to the end of the line, spaces and `;` included, or to a quote.
+    // It opens with a name and `=`, which `cookie == null` and `cookie = jar.get()` do not.
+    //
+    // After every rule that goes by a name, as this one takes whatever stands in its way:
+    // ahead of them, `--cookie=k=v --password='…'` lost the name and kept what it named. So its
+    // first pair may be a marker by now, and what follows still goes.
+    type: "cookie",
+    pattern: /\b(cookie["'`]?[ \t]*[:=][ \t]*["'`]?)(?:(?!\[ISY_REDACTED)(?=[^\s"'`=;,$<{]{1,256}=[^=])|(?=\[ISY_REDACTED:\w+\][ \t]*[^\s"'`]))[^"'`\r\n]{8,}/gi,
+    replacement: `$1${marker("cookie")}`,
   },
   {
     // The quote opens before the name or after its colon, and only one of the two

@@ -840,6 +840,28 @@ test("masks what an Authorization or Cookie header carries, whatever its scheme 
   });
 });
 
+test("a cookie's value does not take a name and leave what the name holds", () => {
+  const value = "Zq8vR2mK9xLpWq7E";
+  const cookie = marker("cookie");
+  const assignment = marker("assignment");
+  const cut: [string, string][] = [
+    [`curl --cookie=k=v https://x && export TOKEN='${value}'`, `curl --cookie=${cookie}'${assignment}'`],
+    [`curl --cookie=k=v --password='${value}' https://x`, `curl --cookie=${cookie}'${assignment}' https://x`],
+    [`Cookie: k=v --password='${value}'`, `Cookie: ${cookie}'${assignment}'`],
+    [`--cookie=k=v; export TOKEN='${value}'`, `--cookie=${cookie}'${assignment}'`],
+    [`Cookie: a=b; token = "${value}"`, `Cookie: ${cookie}"${assignment}"`],
+    [`Cookie: a=b db.password='${value}'`, `Cookie: ${cookie}'${assignment}'`],
+    [`Cookie: a=b mysql://u:'${value}'@h`, `Cookie: ${cookie}`],
+    // The name rules read `Cookie` as a name too and take the first pair, so the rest is left to this one.
+    [`Cookie: sid=${value}; theme=${value}`, `Cookie: ${cookie}`],
+    [`Cookie: token=${value}; theme=${value}`, `Cookie: ${cookie}`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });
