@@ -886,6 +886,29 @@ test("a value that ends on a secret's name takes what that name holds too", () =
   }
 });
 
+test("a cookie's marker goes on only into pairs, and leaves a flag, a URL or the next command to their rules", () => {
+  const value = "Zq8vR2mK9xLpWq7E";
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    [`curl --cookie=cookies.txt -u "bob:${value}" https://x`, `curl --cookie=${m} -u "bob:${m}" https://x`],
+    [`curl --cookie=cookies.txt --user "bob:${value}" https://x`, `curl --cookie=${m} --user "bob:${m}" https://x`],
+    [`curl --cookie=cookies.txt -b "k=${value}" https://x`, `curl --cookie=${m} -b "${m}" https://x`],
+    [`curl --cookie=cookies.txt https://x/?a=b -u "bob:${value}"`, `curl --cookie=${m} https://x/?a=b -u "bob:${m}"`],
+    [`curl --cookie=cookies.txt https://x && sshpass -p "${value}" ssh h`, `curl --cookie=${m} https://x && sshpass -p "${m}" ssh h`],
+    [`curl --cookie=cookies.txt https://x && mysql -u root -p"${value}" db`, `curl --cookie=${m} https://x && mysql -u root -p"${m}" db`],
+    [`curl --cookie=session_id https://x && docker login -u a -p "${value}" r`, `curl --cookie=${m} https://x && docker login -u a -p "${m}" r`],
+    [`curl --cookie=session_id https://x && git reset --hard`, `curl --cookie=${m} https://x && git reset --hard`],
+    // The pairs after a marker are still the cookie's.
+    [`Cookie: session_token=${value}; theme=${value}`, `Cookie: ${marker("cookie")}`],
+    [`Cookie: a@b.co=${value}; s=${value}`, `Cookie: ${marker("cookie")}`],
+    [`Set-Cookie: session_token=${value}; Path=/; HttpOnly`, `Set-Cookie: ${marker("cookie")}`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });

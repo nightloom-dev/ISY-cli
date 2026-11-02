@@ -385,10 +385,12 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // It opens with a name and `=`, which `cookie == null` and `cookie = jar.get()` do not.
     //
     // After every rule that goes by a name, as this one takes whatever stands in its way:
-    // ahead of them, `--cookie=k=v --password='…'` lost the name and kept what it named. So its
-    // first pair may be a marker by now, and what follows still goes.
+    // ahead of them, `--cookie=k=v --password='…'` lost the name and kept what it named. So a
+    // marker may stand for its first pair, or for that pair's name, and the rest still goes where
+    // it is a pair. A flag, a URL or the next command is none (`--cookie=cookies.txt -u "bob:…"`),
+    // and is left to the rules after this one.
     type: "cookie",
-    pattern: /\b(cookie["'`]?[ \t]*[:=][ \t]*["'`]?)(?:(?!\[ISY_REDACTED)(?=[^\s"'`=;,$<{]{1,256}=[^=])|(?=\[ISY_REDACTED:\w+\][ \t]*[^\s"'`]))[^"'`\r\n]{8,}/gi,
+    pattern: /\b(cookie["'`]?[ \t]*[:=][ \t]*["'`]?)(?:(?!\[ISY_REDACTED)(?=[^\s"'`=;,$<{]{1,256}=[^=])|(?=\[ISY_REDACTED:\w+\](?:=[^=]|[ \t;]*(?!-)[^\s"'`=;,$<{\/:?]{1,256}=[^=])))[^"'`\r\n]{8,}/gi,
     replacement: `$1${marker("cookie")}`,
   },
   {
