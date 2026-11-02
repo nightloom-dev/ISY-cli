@@ -92,26 +92,32 @@ function saysItFailed(use: ToolUse): boolean {
 }
 
 /**
- * The first failing call of each record, worked out once: every edit asks about the
- * records before it, thousands of edits can ask about 100000 calls, and output can run
- * to megabytes. The parse is over by the time a detector runs, so what a call came to
- * no longer changes.
+ * A session's shell calls by record, and the first of them to fail once an edit has
+ * asked. Only what an edit reaches is read, and each record once: every block of a record
+ * can carry that record's one output, which can run to megabytes, and thousands of edits
+ * can ask about 100000 calls. The parse is over by the time a detector runs, so what a
+ * call came to no longer changes.
  */
-const failingCalls = new WeakMap<ParsedSession, Map<number, ToolUse>>();
+const shellCalls = new WeakMap<ParsedSession, Map<number, { calls: ToolUse[]; failing?: ToolUse | null }>>();
 
 function failedBefore(session: ParsedSession, recordIndex: number): ToolUse | undefined {
-  let failing = failingCalls.get(session);
-  if (failing === undefined) {
-    failing = new Map();
+  let records = shellCalls.get(session);
+  if (records === undefined) {
+    records = new Map();
     for (const use of session.toolUses) {
-      if (use.name === "Bash" && !failing.has(use.recordIndex) && saysItFailed(use)) failing.set(use.recordIndex, use);
+      if (use.name !== "Bash") continue;
+      const record = records.get(use.recordIndex);
+      if (record === undefined) records.set(use.recordIndex, { calls: [use] });
+      else record.calls.push(use);
     }
-    failingCalls.set(session, failing);
+    shellCalls.set(session, records);
   }
-  // Earliest first, as a finding starts from it. Calls are in record order, as the parse pushes them.
+  // Earliest first, as a finding starts from it.
   for (let back = FAILURE_LOOKBACK_RECORDS; back >= 1; back -= 1) {
-    const use = failing.get(recordIndex - back);
-    if (use !== undefined) return use;
+    const record = records.get(recordIndex - back);
+    if (record === undefined) continue;
+    if (record.failing === undefined) record.failing = record.calls.find(saysItFailed) ?? null;
+    if (record.failing !== null) return record.failing;
   }
   return undefined;
 }

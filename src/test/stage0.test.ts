@@ -1278,6 +1278,35 @@ test("what edits ask of a session's calls comes to one look at each, however man
   }
 });
 
+test("the output of a call no edit reaches is never read", () => {
+  // Counted and not timed: a record's many blocks can each carry its one output of megabytes, so
+  // a read of it per call is half a minute from an upload of a few kilobytes.
+  const sed = { type: "tool_use", id: "edit", name: "Bash", input: { command: "sed -i x t/a.test.ts" } };
+  const calls = [bashCall("b0"), bashCall("b1")];
+  const results = calls.map((_, i) => ({ type: "tool_result", tool_use_id: `b${i}`, content: "1 test FAILED" }));
+  const gap = Array.from({ length: 12 }, () => [{ type: "text", text: "x" }]);
+  const forms: [string, unknown[][]][] = [
+    ["before its reach", [calls, results, ...gap, [sed]]],
+    ["after the edit", [[sed], calls, results]],
+  ];
+  for (const [label, contents] of forms) {
+    const session = padded(contents.map((content, i) => assistant(`g${i}`, i === 0 ? "pad19" : `g${i - 1}`, content)));
+    let reads = 0;
+    for (const use of session.toolUses) {
+      if (use.result === undefined) continue;
+      use.result = new Proxy(use.result, {
+        get(target, key, receiver) {
+          if (key === "stdout" || key === "stderr" || key === "text") reads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    }
+    assert.deepEqual(detectTestModifiedToPass(session), [], label);
+    assert.deepEqual(detectErrorSuppressed(session), [], label);
+    assert.equal(reads, 0, label);
+  }
+});
+
 function assertQuick(label: string, run: () => unknown, limit = 2000): void {
   const started = performance.now();
   run();
