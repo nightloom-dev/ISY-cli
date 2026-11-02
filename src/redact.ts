@@ -22,8 +22,6 @@ export interface RedactionRule {
   type: string;
   pattern: RegExp;
   replacement: string;
-  /** Goes over its own result once more when it cut something; a text with nothing to cut costs it one scan. */
-  again?: boolean;
 }
 
 /** `[pP][aA]…`: case by hand, so a rule can still tell a camelCase hump from a glued prefix. */
@@ -193,7 +191,8 @@ const PASSWORD_FLAG = String.raw`(?:\b(?<![.-])(?:${[
   onClient(String.raw`security\s+add-\w+-password`, String.raw`-w\s+`),
   String.raw`htpasswd\s+(?=-[a-zA-Z]*b)(?:-[a-zA-Z]*n[a-zA-Z]*\s+\S+\s+|-[a-zA-Z]+\s+\S+\s+\S+\s+)`,
   String.raw`sqlplus\s+(?:-\S+\s+)*[^\s/@"'-][^\s/@"']*\/`,
-  String.raw`smbclient\s+[^\s-]\S*\s+`,
+  // Not a second `smbclient`, which is the next command's: `apt install smbclient && smbclient -U a%b`.
+  String.raw`smbclient\s+[^\s-]\S*\s+(?!smbclient\b)`,
   String.raw`net\s+use\s+(?:\S+\s+){1,2}\/user:\S+\s+`,
   String.raw`vault\s+login\s+${GENERATED_WORD}`,
   String.raw`ngrok\s+(?:config\s+add-)?authtoken\s+`,
@@ -393,19 +392,14 @@ export const BUILTIN_RULES: RedactionRule[] = [
   {
     // One pass for both spellings, as each is a scan of every word for every client.
     //
-    // Twice, as a walk that stops at its client's next word leaves the password to that
-    // word, and a match of another kind can take that word first: `apt install smbclient
-    // && smbclient -U a%b` gives it to the first word's share and password. It is a marker
-    // by the second pass, which walks through to the flag.
-    //
-    // ponytail: two passes, as until nothing changes is a pass per flag on a line of one
-    // client and many flags. A client named twice around another whose match takes the
-    // flag itself still loses it (`plink a mysql plink -pw b`: `-p`, then `w`). Tracking
-    // each client's flags outside the pattern is the way up if such a line ever turns up.
+    // ponytail: one pass over the text, as a second doubles what any text with a password
+    // costs and goes over all it grew by. So a flag's second use stays (`curl -b k=a -b j=b`),
+    // and so does a flag a match of another kind took the way to: `ssh-keygen -t rsa && curl
+    // -N https://x -b k=b` loses `curl` to `-N`, `plink a mysql plink -pw b` loses `-pw` to
+    // `-p`. Tracking each client's flags outside the pattern is the way up.
     type: "assignment",
     pattern: new RegExp(String.raw`(${PASSWORD_FLAG})(?:(["'])${quotedTo(String.raw`\2`)}|(["']?)(?!\[ISY_REDACTED|(?<=\s)-)[^\s"'$][^\s"']*)`, "g"),
     replacement: `$1$2$3${marker("assignment")}`,
-    again: true,
   },
 ];
 
@@ -475,12 +469,10 @@ export function applyRules(
 ): string {
   let result = text;
   for (const rule of rules) {
-    for (let passes = rule.again ? 2 : 1; passes > 0; passes -= 1) {
-      const matches = result.match(rule.pattern);
-      if (!matches) break;
-      onMatch?.(rule.type, matches.length);
-      result = result.replace(rule.pattern, rule.replacement);
-    }
+    const matches = result.match(rule.pattern);
+    if (!matches) continue;
+    onMatch?.(rule.type, matches.length);
+    result = result.replace(rule.pattern, rule.replacement);
   }
   return result;
 }

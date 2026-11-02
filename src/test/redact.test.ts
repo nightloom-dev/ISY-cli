@@ -2645,19 +2645,37 @@ test("a walk from a client stops only where the rule could start again", () => {
     `zip ${room(199)} -P ${value}`,
     `curl ${room(150)} curl ${room(150)} -u a:${value}`,
     `zip ${room(150)} zip ${room(150)} -P ${value}`,
-    // A match of another kind takes the word the walk stopped at, and the second pass walks through.
+    // Not a first client's share and password, where a walk stopped at the second.
     `which smbclient && smbclient -U a%${value} //h/s`,
     `apt install smbclient && smbclient -U a%${value} //h/s`,
-    `curl x sshpass -p curl -b k=${value}`,
-    `curl a sshpass -p 'x curl y' -b k=${value}`,
-    `curl a zip b curl -P x -b k=${value}`,
-    `curl -s a && ssh-keygen -t rsa && curl -N https://x -b sid=${value}`,
   ]) {
     assert.ok(!applyRules(text, WALKING_RULES).includes(value), text);
   }
   // Too far from its client a flag stays someone else's.
   for (const text of [`curl ${room(200)} -u a:${value}`, `zip ${room(200)} -P ${value}`, `curl x\n${room(1)} -u a:${value}`, `zip x; -P ${value}`]) {
     assert.equal(applyRules(text, WALKING_RULES), text);
+  }
+});
+
+test("a rule goes over a text once to count and once to cut, however much it cut", () => {
+  // Counted and not timed: one pass more is the whole mask again on any text with a password in
+  // it, and over all that its markers grew the text by.
+  let scans = 0;
+  class Counted extends RegExp {
+    override [Symbol.match](text: string): RegExpMatchArray | null {
+      scans += 1;
+      return super[Symbol.match](text);
+    }
+    override [Symbol.replace](text: string, replacement: never): string {
+      scans += 1;
+      return super[Symbol.replace](text, replacement);
+    }
+  }
+  const text = "7z -pa -pb mysql -pa -pb curl -b k=a -b j=b ";
+  for (const rule of WALKING_RULES) {
+    scans = 0;
+    applyRules(text, [{ ...rule, pattern: new Counted(rule.pattern.source, rule.pattern.flags) }]);
+    assert.ok(scans <= 2, `${scans} scans`);
   }
 });
 
