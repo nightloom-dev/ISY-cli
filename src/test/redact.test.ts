@@ -2963,6 +2963,56 @@ test("a line too dear to parse is cut whole, and so is what comes past the sessi
   assert.equal(many.summary.counts.oversized, 2);
 });
 
+test("redaction may add so much to a session in all, and what comes past that goes whole", () => {
+  // Each `7z -pa ` is 24 characters more, against a limit of 16 MiB.
+  const grows = (length: number): string => "7z -pa ".repeat(Math.ceil(length / 7));
+  const said = (content: unknown): string => JSON.stringify({ type: "user", message: { role: "user", content } });
+  const content = (line: string): unknown => (JSON.parse(line) as { message: { content: unknown } }).message.content;
+  const large = grows(5_000_000);
+
+  // Whatever line the text stands in, the rest of the session stays.
+  for (const [line, cut] of [
+    [said(large), said(marker("oversized"))],
+    [large, marker("oversized")],
+    [JSON.stringify(large), JSON.stringify(marker("oversized"))],
+  ] as const) {
+    const one = redactLines([line, said("after")], { home: "/home/u" });
+    assert.deepEqual(one.lines, [cut, said("after")]);
+    assert.equal(one.summary.counts.oversized, 1);
+  }
+
+  // Added up over the lines of a session, and over the texts of a line.
+  const lines = redactLines(Array.from({ length: 5 }, () => said(grows(1_000_000))), { home: "/home/u" });
+  assert.deepEqual(lines.lines.map((line) => content(line) === marker("oversized")), [false, false, false, false, true]);
+  assert.ok(!lines.lines[0]!.includes("-pa "));
+  const texts = redactLines([said(Array.from({ length: 5 }, () => grows(1_000_000)))], { home: "/home/u" });
+  assert.deepEqual((content(texts.lines[0]!) as string[]).map((text) => text === marker("oversized")), [false, false, false, false, true]);
+
+  // What the rules take off makes room, as only what is kept costs anything.
+  const shrinks = said(`password=${"a".repeat(400_000)}`);
+  const room = redactLines([shrinks, shrinks, shrinks, said(large)], { home: "/home/u" });
+  assert.equal(String(content(room.lines[3]!)).slice(0, 8), "7z -p[IS");
+
+  // Found out ahead of the cut, whose result is what the heap runs out on.
+  const replace = String.prototype.replace;
+  let longest = 0;
+  String.prototype.replace = function (this: string, ...args: Parameters<typeof replace>) {
+    longest = Math.max(longest, this.length);
+    return replace.apply(this, args);
+  } as typeof replace;
+  try {
+    redactLines([said(large)], { home: "/home/u" });
+  } finally {
+    String.prototype.replace = replace;
+  }
+  assert.ok(longest < large.length, `a replace on ${longest} characters`);
+
+  // Too short to be worth a marker: the marker itself is what grows, which the line pays for.
+  const shorts = said(Array.from({ length: 1_500_000 }, () => "7z -pa "));
+  const short = redactLines([shorts, said("after")], { home: "/home/u" });
+  assert.deepEqual(short.lines, [marker("oversized"), said("after")]);
+});
+
 function dotenvThenSaid(value: string, said: string): string[] {
   return redactLines([
     JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: ".env" } }] } }),

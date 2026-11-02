@@ -426,6 +426,7 @@ interface RedactContext {
   learned: Set<string>;
   structures: Budget;
   dotenvCommands: Budget;
+  added: Budget;
   /**
    * Mutable: a transcript names its own working directory on every record, so a
    * caller that did not pass one still gets repository-relative paths. The
@@ -1179,24 +1180,42 @@ function fromBase(value: string, base: string | undefined): string {
 }
 
 /**
+ * What redaction may add to a session, in characters, net of what it takes off. A marker
+ * is longer than a short value, so `7z -pa ` comes to four times its length, and an upload
+ * of 400 KB outgrew the heap, on the cut itself as well as on all it kept.
+ *
+ * ponytail: one count for a session, so past it any text with a hit goes whole, however
+ * little it holds. A limit per text if a real session ever comes near.
+ */
+const ADDED_CHARS = 16 * 1024 * 1024;
+/** One, as millions of short texts past the limit would each pay for a stack trace. */
+const ADDS_TOO_MUCH = new RangeError("adds more than is left");
+
+/**
  * The rules, then the paths. A pattern that runs out of backtrack stack on a run of
  * millions of characters reports it as a RangeError, and then nothing says how much of
- * the text is a secret: all of it goes, as the session around it can still go out.
+ * the text is a secret: all of it goes, as the session around it can still go out. The
+ * same goes for a text that would take the session past `ADDED_CHARS`.
  */
 function scrubbed(text: string, context: RedactContext, key?: string): string {
   try {
-    const secretsGone = applyRules(text, context.rules, (type, amount) => count(context, type, amount));
+    const secretsGone = applyRules(text, context.rules, (type, amount) => {
+      count(context, type, amount);
+      // Ahead of the cut, whose result is what the heap runs out on. A match adds at most its marker.
+      if (amount * marker(type).length > context.added.left) throw ADDS_TOO_MUCH;
+    });
     // Paths last: a secret already replaced by its marker must not then be read
     // as a directory, and `[ISY_REDACTED:…]` carries no slash to be read as one.
     const onMask = (amount: number): void => count(context, "path", amount);
-    return key && PATH_KEYS.has(key)
+    const clean = key && PATH_KEYS.has(key)
       ? maskPath(fromBase(secretsGone, context.base), context.roots, onMask)
       : maskPaths(secretsGone, context.roots, onMask);
+    if (spend(context.added, clean.length - text.length)) return clean;
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    count(context, "oversized", 1);
-    return marker("oversized");
   }
+  count(context, "oversized", 1);
+  return marker("oversized");
 }
 
 function redactValue(value: unknown, context: RedactContext, key?: string): unknown {
@@ -1358,6 +1377,7 @@ function createContext(options: RedactOptions, invalid: string[]): RedactContext
     learned: new Set(),
     structures: { left: STRUCTURES },
     dotenvCommands: { left: DOTENV_COMMAND_CHARS },
+    added: { left: ADDED_CHARS },
     // The home directory is this machine's and is never in the transcript's
     // gift, so it is read here rather than passed by every caller.
     roots: resolveRoots({ cwd: options.cwd, home: options.home ?? homedir() }),
@@ -1403,6 +1423,16 @@ function redactOneLine(line: string, context: RedactContext): { line: string; un
   return { line: JSON.stringify(redactRecord(parsed, context)), unparsed: false };
 }
 
+function chargedLine(line: string, context: RedactContext): { line: string; unparsed: boolean } {
+  const left = context.added.left;
+  const result = redactOneLine(line, context);
+  // What its texts did not pay for: a cut by key name, and a marker past the limit, which
+  // is more than a text shorter than it, so that a line of such texts still grew threefold.
+  if (spend(context.added, result.line.length - line.length - (left - context.added.left))) return result;
+  count(context, "oversized", 1);
+  return { line: marker("oversized"), unparsed: true };
+}
+
 /**
  * A transcript's lines, redacted. With no `cwd`, paths are rooted at the first
  * record that names one; with no `home`, at the home that directory implies,
@@ -1422,7 +1452,7 @@ export function redactLines(
 
   for (const line of lines) {
     total += 1;
-    const result = redactOneLine(line, context);
+    const result = chargedLine(line, context);
     if (result.line.length === 0) continue;
     if (result.unparsed) unparsed += 1;
     output.push(result.line);
@@ -1450,7 +1480,7 @@ export async function redactLineStream(
 
   for await (const line of lines) {
     total += 1;
-    const result = redactOneLine(line, context);
+    const result = chargedLine(line, context);
     if (result.line.length === 0) continue;
     if (result.unparsed) unparsed += 1;
     output.push(result.line);
