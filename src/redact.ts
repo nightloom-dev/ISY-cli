@@ -112,6 +112,20 @@ const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\((?![^\s"'{}[\]<>]{0,256}\)[\w$
 const INNER_DOLLAR_OR_PAREN = String.raw`[$()](?=[^\s"'{}[\]<>])`;
 const LITERAL_DOLLAR = String.raw`\$(?=[^\s"]{0,256}\d)(?![{(])(?![A-Z_][A-Z0-9_]*\b)`;
 const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?<=")(?:${VALUE_CHAR}|${LITERAL_DOLLAR})(?:[^\s"$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=')(?:${VALUE_CHAR}|\$)(?:[^\s'$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=[\w.-]=)(?!=|${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}|[{}[\]<>](?=[^\s"'])){7,}|(?!${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}){7,}|${VALUE_CHAR}{8,})`;
+/**
+ * A value read to a space or a quote can end on the name of the next one: `Set-Cookie:
+ * session_token="…"`, `DB_PASS=DB_PASSWORD="…"`, `auth-cookie: api_key= …`. That name is then
+ * inside the match, where no rule after it looks, so the match goes on through the name's
+ * separator and over what it holds, as the name's own would have, closing quote and all, and
+ * again where that ends on a name. The rules after the plain assignment find such a name cut
+ * already, by its own match there, so only that rule and the authorization rule ahead of it go on.
+ *
+ * ponytail: the name is told by the word it ends with, as a copy of secretName() in both would
+ * take the patterns past the size a commit compiles in time (the size test in redact.test.ts),
+ * so what a name ending otherwise holds (`DB_PASS`, `TOKEN_PROD`) stays. Telling the name
+ * outside the pattern, once a match is found, is the way up.
+ */
+const RUNS_ON = String.raw`(?:(?<=${anyCase("(?:passw(?:or)?d|secret|token|key|base)")}["']?[=:]?)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}\k<q>?)*`;
 
 /**
  * A separator with a name before it, looked for from the separator back: from the front,
@@ -295,7 +309,7 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // word after it is, so it needs no shape. Before the assignment rule, which
     // would stop at the scheme. A variable or a placeholder is left as it is.
     type: "authorization",
-    pattern: /\b(authorization["'`]?[ \t]*[:=][ \t]*["'`]?[A-Za-z][A-Za-z0-9-]*[ \t]+)(?!\[ISY_REDACTED)[^\s"'`$<>{}()[\]]{8,}/gi,
+    pattern: new RegExp(/\b(authorization["'`]?[ \t]*[:=][ \t]*["'`]?[A-Za-z][A-Za-z0-9-]*[ \t]+)(?!\[ISY_REDACTED)[^\s"'`$<>{}()[\]]{8,}/.source + RUNS_ON, "gi"),
     replacement: `$1${marker("authorization")}`,
   },
   {
@@ -320,7 +334,7 @@ export const BUILTIN_RULES: RedactionRule[] = [
   {
     // The name may close a quote of its own: `"password": "…"`.
     type: "assignment",
-    pattern: new RegExp(String.raw`(${afterName(PLAIN_NAME, CLOSED, "[=:]")}\s*["']?|${beforeQuoted(PLAIN_NAME)})${SECRET_VALUE}`, "g"),
+    pattern: new RegExp(String.raw`(${afterName(PLAIN_NAME, CLOSED, "[=:]")}\s*["']?|${beforeQuoted(PLAIN_NAME)})${SECRET_VALUE}${RUNS_ON}`, "g"),
     replacement: `$1${marker("assignment")}`,
   },
   {

@@ -862,6 +862,30 @@ test("a cookie's value does not take a name and leave what the name holds", () =
   }
 });
 
+test("a value that ends on a secret's name takes what that name holds too", () => {
+  const value = "Zq8vR2mK9xLpWq7E";
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    [`curl -i https://x | grep 'Set-Cookie: session_token="${value}"; Path=/'`, `curl -i https://x | grep 'Set-Cookie: ${marker("cookie")}'`],
+    [`curl -H 'Authorization: access_token="${value}"' https://x`, `curl -H 'Authorization: ${m}' https://x`],
+    [`export DB_PASS=DB_PASSWORD="${value}"`, `export DB_PASS=${m}`],
+    [`curl -H 'Authorization: OAuth oauth_token="${value}", oauth_nonce="n"' https://x`, `curl -H 'Authorization: OAuth ${marker("authorization")}, oauth_nonce="n"' https://x`],
+    [`auth: password="${value}"`, `auth: ${m}`],
+    [`db_credentials:\n  password: ${value}`, `db_credentials:\n  ${m}`],
+    [`db_auth: password = ${value}`, `db_auth: ${m}`],
+    [`export TOKEN='abc12345&"api_key": "${value}"'`, `export TOKEN='${m}'`],
+    [`--token auth-cookie: api_key= -p${value}`, `--token ${m} ${m}`],
+    [`--password session.cookie=password= k=${value}`, `--password ${m}${m}`],
+    [`--token x-cookie: ${"x".repeat(200)}token= l=${value}`, `--token ${m} ${m}`],
+    // A name with no separator of its own after it holds nothing, and the next pair is its own.
+    [`{"auth": "password", "token": "${value}"}`, `{"auth": "${m}", "token": "${m}"}`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("leaves short assignment values alone", () => {
   assert.equal(redactOne("password = short"), "password = short");
 });
