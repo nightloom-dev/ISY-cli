@@ -119,7 +119,8 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\
  * separator and over what it holds, as the name's own would have, closing quote and all, and
  * again where that ends on a name. The rules after the plain assignment find such a name cut
  * already, by its own match there, so only that rule and those ahead of it that can take a name go on:
- * the authorization header's, and a bearer token's, which takes a separator doubled (`secret==`) too.
+ * the authorization header's, a bearer token's, which takes a separator doubled (`secret==`) too, and
+ * a token's, with the rest of a name glued on to it.
  * A quote right after a separator opens what the name holds rather than closing the step before:
  * taken as the close, it left the next step nothing to start from (`password=api_token: "…,api_key="…"`).
  *
@@ -128,7 +129,15 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\
  * so what a name ending otherwise holds (`DB_PASS`, `TOKEN_PROD`) stays. Telling the name
  * outside the pattern, once a match is found, is the way up.
  */
-const RUNS_ON = String.raw`(?:(?<=${anyCase("(?:passw(?:or)?d|secret|token|key|base)")}["']?[=:]*)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}(?:(?<![=:])\k<q>)?)*`;
+const NAME_END = anyCase("(?:passw(?:or)?d|secret|token|key|base)");
+const RUNS_ON = String.raw`(?:(?<=${NAME_END}["']?[=:]*)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}(?:(?<![=:])\k<q>)?)*`;
+
+/**
+ * The rest of a name glued on to a token whose shape stops inside it (`ghp_…2api-key==…`), so that
+ * the token's match reaches the name's end and goes on over what the name holds. Only where it goes
+ * on: a name taken with no value after it is one the assignment rule no longer sees.
+ */
+const NAME_TAIL = String.raw`(?:[\w.-]+(?<=${NAME_END})(?=["']?\s*[=:]\s*["']?${VALUE_CHAR}{8}))?${RUNS_ON}`;
 
 /**
  * A separator with a name before it, looked for from the separator back: from the front,
@@ -244,8 +253,10 @@ export const BUILTIN_RULES: RedactionRule[] = [
     replacement: marker("openai_key"),
   },
   {
+    // Open at the end for a refresh token's length, so it also takes a name glued on
+    // (`ghp_…passwd=…`): the rest of that name goes too, and what it holds (NAME_TAIL).
     type: "github_token",
-    pattern: /\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b/g,
+    pattern: new RegExp(String.raw`\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36,}\b` + NAME_TAIL, "g"),
     replacement: marker("github_token"),
   },
   {
@@ -285,16 +296,17 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // DigitalOcean, Hugging Face, PyPI, RubyGems, Docker, Supabase, Vercel, Atlassian, Linear,
     // Notion, Figma, Replicate, ElevenLabs, age. A fal.ai key, and a Telegram or a Discord bot
     // token, open with an id that is public and whose shape would be read at every word of
-    // every string, so they are found from what comes after it and the id stays.
+    // every string, so they are found from what comes after it and the id stays. A shape open at
+    // its end also takes a name glued on (`glpat-…-apikey=`), so the rest of it goes too (NAME_TAIL).
     type: "service_token",
     pattern: new RegExp(
-      String.raw`\b(?:gl(?:pat|dt)-[\w-]{20,}|xapp-\d-[A-Za-z0-9-]{20,}|hooks\.slack\.com\/\w+\/[\w/]{20,}|discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]{40,}` +
+      String.raw`(?:\b(?:gl(?:pat|dt)-[\w-]{20,}|xapp-\d-[A-Za-z0-9-]{20,}|hooks\.slack\.com\/\w+\/[\w/]{20,}|discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]{40,}` +
         String.raw`|gsk_[A-Za-z0-9]{40,}|xai-[A-Za-z0-9]{40,}|ya29\.[\w-]{40,}|1\/\/0[\w-]{40,}|whsec_[A-Za-z0-9+/]{24,}|SG\.[\w-]{16,}\.[\w-]{16,}` +
         String.raw`|key-[0-9a-f]{32}\b|SK[0-9a-f]{32}\b|shp(?:at|ss|ca|pa)_[0-9a-fA-F]{32}\b|do[pors]_v1_[0-9a-f]{64}\b|hf_[A-Za-z0-9]{30,}|pypi-[\w-]{50,}` +
         String.raw`|rubygems_[0-9a-f]{48}\b|dckr_pat_[\w-]{20,}|sbp_[0-9a-f]{40}\b|vercel_[A-Za-z0-9]{20,}|ATATT[\w-]{50,}|lin_api_[A-Za-z0-9]{30,}` +
         String.raw`|ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{40,}|figd_[\w-]{30,}|r8_[A-Za-z0-9]{30,}|sk_[0-9a-f]{48}\b|AGE-SECRET-KEY-1[A-Z0-9]{50,})` +
         String.raw`|:(?<=\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:)[0-9a-f]{32}\b|:(?<=\b\d{8,12}:)AA[\w-]{30,}` +
-        String.raw`|\.(?<=[\w-]{24}\.)[\w-]{6}\.(?=[\w-]{0,26}?${GENERATED_RUN})[\w-]{27,}`,
+        String.raw`|\.(?<=[\w-]{24}\.)[\w-]{6}\.(?=[\w-]{0,26}?${GENERATED_RUN})[\w-]{27,})${NAME_TAIL}`,
       "g",
     ),
     replacement: marker("service_token"),

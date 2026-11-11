@@ -918,6 +918,22 @@ test("a bearer token that takes a name goes on over what the name holds", () => 
   }
 });
 
+test("a token shape open at its end that takes a name goes on over what the name holds", () => {
+  const value = "Zq8vR2mK9xLpWq7E";
+  const cut: [string, string][] = [
+    [`ghp_${"a".repeat(36)}passwd=${value}`, marker("github_token")],
+    [`ghp_${"a".repeat(36)}2token:${value}]`, `${marker("github_token")}]`],
+    [`ghp_${"a".repeat(36)}2api-key==${value},`, marker("github_token")],
+    [`glpat-${"a".repeat(20)}-apikey= ${value}`, marker("service_token")],
+    [`xapp-1-${"a".repeat(20)}-api_key= ${value}}`, `${marker("service_token")}}`],
+    [`glpat-${"a".repeat(20)}TOKEN=\`${value}]`, `${marker("service_token")}]`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("a cookie's marker goes on only into pairs, and leaves a flag, a URL or the next command to their rules", () => {
   const value = "Zq8vR2mK9xLpWq7E";
   const m = marker("assignment");
@@ -2781,7 +2797,7 @@ test("the walks from a client's word add up to about the length of the line, how
 
 test("the rules stay small enough for a commit to compile them", () => {
   const size = BUILTIN_RULES.reduce((sum, rule) => sum + rule.pattern.source.length, 0);
-  assert.ok(size < 18_300, `${size} characters of pattern`);
+  assert.ok(size < 19_100, `${size} characters of pattern`);
 });
 
 test("a credential's name is looked for from its separator, so a word with none costs one scan", () => {
