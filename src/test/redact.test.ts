@@ -886,6 +886,23 @@ test("a value that ends on a secret's name takes what that name holds too", () =
   }
 });
 
+test("a quote after a name's separator opens what the name holds, and the run goes on into it", () => {
+  const value = "Zq8vR2mK9xLpWq7E";
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    [`token='access_token: "auth_token="${value}""'`, `token='${m}"'`],
+    [`password=api_token: "abc12345,api_key="${value}"`, `password=${m}`],
+    [`Authorization: OAuth oauth_consumer_key="ck_abcdefgh,oauth_token="${value}"`, `Authorization: OAuth ${marker("authorization")}`],
+    [`Cookie: _authToken":"auth_token="${value})`, `Cookie: ${m})`],
+    [`Cookie: secret=refresh_token="my-token="${value}"`, `Cookie: ${m}`],
+    [`token=SECRET_KEY_BASE'='api-key='${value}`, `token=${m}`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("a cookie's marker goes on only into pairs, and leaves a flag, a URL or the next command to their rules", () => {
   const value = "Zq8vR2mK9xLpWq7E";
   const m = marker("assignment");

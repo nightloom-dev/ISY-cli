@@ -119,13 +119,15 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\
  * separator and over what it holds, as the name's own would have, closing quote and all, and
  * again where that ends on a name. The rules after the plain assignment find such a name cut
  * already, by its own match there, so only that rule and the authorization rule ahead of it go on.
+ * A quote right after a separator opens what the name holds rather than closing the step before:
+ * taken as the close, it left the next step nothing to start from (`password=api_token: "…,api_key="…"`).
  *
  * ponytail: the name is told by the word it ends with, as a copy of secretName() in both would
  * take the patterns past the size a commit compiles in time (the size test in redact.test.ts),
  * so what a name ending otherwise holds (`DB_PASS`, `TOKEN_PROD`) stays. Telling the name
  * outside the pattern, once a match is found, is the way up.
  */
-const RUNS_ON = String.raw`(?:(?<=${anyCase("(?:passw(?:or)?d|secret|token|key|base)")}["']?[=:]?)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}\k<q>?)*`;
+const RUNS_ON = String.raw`(?:(?<=${anyCase("(?:passw(?:or)?d|secret|token|key|base)")}["']?[=:]?)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}(?:(?<![=:])\k<q>)?)*`;
 
 /**
  * A separator with a name before it, looked for from the separator back: from the front,
