@@ -118,9 +118,10 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\
  * inside the match, where no rule after it looks, so the match goes on through the name's
  * separator and over what it holds, as the name's own would have, closing quote and all, and
  * again where that ends on a name. The rules after the plain assignment find such a name cut
- * already, by its own match there, so only that rule and those ahead of it that can take a name go on:
- * the authorization header's, a bearer token's, which takes a separator doubled (`secret==`) too, and
- * a token's, with the rest of a name glued on to it.
+ * already, by its own match there, so only that rule goes on, with those ahead of it that can take a
+ * name (the authorization header's, a bearer token's, which takes a separator doubled (`secret==`) too,
+ * and a token's, with the rest of a name glued on to it) and the camelCase one after it, whose name the
+ * plain rule does not read (`apiKey: 'accessToken": '…'`).
  * A quote right after a separator opens what the name holds rather than closing the step before:
  * taken as the close, it left the next step nothing to start from (`password=api_token: "…,api_key="…"`).
  *
@@ -325,9 +326,12 @@ export const BUILTIN_RULES: RedactionRule[] = [
   {
     // Whatever the scheme (`Basic`, `Token`, `Digest`): the header says what the
     // word after it is, so it needs no shape. Before the assignment rule, which
-    // would stop at the scheme. A variable or a placeholder is left as it is.
+    // would stop at the scheme. A variable or a placeholder is left as it is. A
+    // backtick right after a separator opens a value (Basic secret=:credentials=`…`):
+    // stopped there, the credential was the names and left the value. Not a name
+    // with a separator of its own, which the assignment rule still has to see.
     type: "authorization",
-    pattern: new RegExp(/\b(authorization["'`]?[ \t]*[:=][ \t]*["'`]?[A-Za-z][A-Za-z0-9-]*[ \t]+)(?!\[ISY_REDACTED)[^\s"'`$<>{}()[\]]{8,}/.source + RUNS_ON, "gi"),
+    pattern: new RegExp(/\b(authorization["'`]?[ \t]*[:=][ \t]*["'`]?[A-Za-z][A-Za-z0-9-]*[ \t]+)(?!\[ISY_REDACTED)[^\s"'`$<>{}()[\]]{8,}(?:(?<=[=:])`(?![\w.-]+["']?\s*[=:])[^\s"'`$<>{}()[\]]+)?/.source + RUNS_ON, "gi"),
     replacement: `$1${marker("authorization")}`,
   },
   {
@@ -362,7 +366,7 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // (`accessToken: aB3…`) — and not in `adminPassword = someVariable`. One look for
     // `=` and `:`, as a commit compiles every copy of a name in here again.
     type: "assignment",
-    pattern: new RegExp(String.raw`(${afterName(CAMEL_NAME, String.raw`(?:(?=[=])|${CLOSED}(?=:))`, "[=:]")}(?:(?<==)|\s*["'])|${beforeQuoted(CAMEL_NAME)}|${afterName(CAMEL_ENDING, "", ":")}[ \t]+(?=[^\s"']{0,256}?${GENERATED_RUN}))${SECRET_VALUE}`, "g"),
+    pattern: new RegExp(String.raw`(${afterName(CAMEL_NAME, String.raw`(?:(?=[=])|${CLOSED}(?=:))`, "[=:]")}(?:(?<==)|\s*["'])|${beforeQuoted(CAMEL_NAME)}|${afterName(CAMEL_ENDING, "", ":")}[ \t]+(?=[^\s"']{0,256}?${GENERATED_RUN}))${SECRET_VALUE}${RUNS_ON}`, "g"),
     replacement: `$1${marker("assignment")}`,
   },
   {
