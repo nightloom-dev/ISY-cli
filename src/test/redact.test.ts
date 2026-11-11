@@ -903,6 +903,21 @@ test("a quote after a name's separator opens what the name holds, and the run go
   }
 });
 
+test("a bearer token that takes a name goes on over what the name holds", () => {
+  const value = "Zq8vR2mK9xLpWq7E";
+  const m = marker("bearer_token");
+  const cut: [string, string][] = [
+    [`TOKEN_TYPE=Bearer\nAWS_S3_SECRET=${value}`, `TOKEN_TYPE=Bearer\n${m}`],
+    [`Authorization: Bearer x1_password="${value}"`, `Authorization: Bearer ${m}`],
+    [`Bearer 2api-key:${value}`, `Bearer ${m}`],
+    [`bearer 2API_KEY==${value}'`, `bearer ${m}'`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("a cookie's marker goes on only into pairs, and leaves a flag, a URL or the next command to their rules", () => {
   const value = "Zq8vR2mK9xLpWq7E";
   const m = marker("assignment");
@@ -2766,7 +2781,7 @@ test("the walks from a client's word add up to about the length of the line, how
 
 test("the rules stay small enough for a commit to compile them", () => {
   const size = BUILTIN_RULES.reduce((sum, rule) => sum + rule.pattern.source.length, 0);
-  assert.ok(size < 18_000, `${size} characters of pattern`);
+  assert.ok(size < 18_300, `${size} characters of pattern`);
 });
 
 test("a credential's name is looked for from its separator, so a word with none costs one scan", () => {

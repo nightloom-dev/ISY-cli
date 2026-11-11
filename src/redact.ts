@@ -118,7 +118,8 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\
  * inside the match, where no rule after it looks, so the match goes on through the name's
  * separator and over what it holds, as the name's own would have, closing quote and all, and
  * again where that ends on a name. The rules after the plain assignment find such a name cut
- * already, by its own match there, so only that rule and the authorization rule ahead of it go on.
+ * already, by its own match there, so only that rule and those ahead of it that can take a name go on:
+ * the authorization header's, and a bearer token's, which takes a separator doubled (`secret==`) too.
  * A quote right after a separator opens what the name holds rather than closing the step before:
  * taken as the close, it left the next step nothing to start from (`password=api_token: "…,api_key="…"`).
  *
@@ -127,7 +128,7 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\
  * so what a name ending otherwise holds (`DB_PASS`, `TOKEN_PROD`) stays. Telling the name
  * outside the pattern, once a match is found, is the way up.
  */
-const RUNS_ON = String.raw`(?:(?<=${anyCase("(?:passw(?:or)?d|secret|token|key|base)")}["']?[=:]?)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}(?:(?<![=:])\k<q>)?)*`;
+const RUNS_ON = String.raw`(?:(?<=${anyCase("(?:passw(?:or)?d|secret|token|key|base)")}["']?[=:]*)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}(?:(?<![=:])\k<q>)?)*`;
 
 /**
  * A separator with a name before it, looked for from the separator back: from the front,
@@ -302,8 +303,11 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // After every shape a bearer token can have, so a JWT or a GitHub token
     // keeps its own label and its marker is not marked again. Twenty characters
     // for a word alone, or eight with a digit: `Bearer authentication` is prose.
+    // Eight with a digit also take a name glued on or on the next line
+    // (`Bearer x1_password="…"`, `TOKEN_TYPE=Bearer` over `AWS_S3_SECRET=…`), so the
+    // token goes on over what that name holds.
     type: "bearer_token",
-    pattern: /\b(Bearer\s+)(?!\[ISY_REDACTED)(?:(?=[A-Za-z._~+/-]*\d)[A-Za-z0-9._~+/-]{8,}|[A-Za-z0-9._~+/-]{20,})=*/gi,
+    pattern: new RegExp(/\b(Bearer\s+)(?!\[ISY_REDACTED)(?:(?=[A-Za-z._~+/-]*\d)[A-Za-z0-9._~+/-]{8,}|[A-Za-z0-9._~+/-]{20,})=*/.source + RUNS_ON, "gi"),
     replacement: `$1${marker("bearer_token")}`,
   },
   {
