@@ -33,6 +33,10 @@ const MAX_LINES = 6;
 const MAX_PER_CATEGORY = 2;
 /** The longest Claude Code lets a shell call run, so how long one can read as running. */
 const SHELL_CALL_MS = 10 * 60_000;
+/** How long Claude Code lets a shell call run that names no timeout of its own. */
+const SHELL_CALL_DEFAULT_MS = 2 * 60_000;
+/** Between a call being written and its command starting: hooks, a quick approval. */
+const SHELL_CALL_SLACK_MS = 30_000;
 /**
  * What telling sessions apart may add to a hook someone is waiting on, at every
  * pick of a rebase. Time is checked between reads and only size before one, so
@@ -48,8 +52,25 @@ function isRunning(use: ToolUse): boolean {
   return (
     (use.name === "Bash" || use.name === "PowerShell") &&
     use.result === undefined &&
-    Date.now() - Date.parse(use.timestamp ?? "") < SHELL_CALL_MS
+    Date.now() - Date.parse(use.timestamp ?? "") < shellCallLimit(use)
   );
+}
+
+/**
+ * How long Claude Code lets this call run before it ends it: its own `timeout`, else
+ * the default, two minutes unless `BASH_DEFAULT_TIMEOUT_MS` says otherwise. Past
+ * that, a call with no answer was ended unanswered: a session killed at its
+ * permission prompt leaves one forever, and in 2.1.322 the call of the session
+ * really committing is written only once it is answered, so the dead one would
+ * take every commit in the tree for ten minutes.
+ *
+ * ponytail: the clock starts at the call, not at its approval, so a commit approved
+ * after a long prompt falls to the other ways of telling sessions apart.
+ */
+function shellCallLimit(use: ToolUse): number {
+  const own = use.input.timeout;
+  const fallback = Number(process.env.BASH_DEFAULT_TIMEOUT_MS) || SHELL_CALL_DEFAULT_MS;
+  return Math.min(typeof own === "number" && own > 0 ? own : fallback, SHELL_CALL_MS) + SHELL_CALL_SLACK_MS;
 }
 
 /** A call that wrote files without naming them the way an edit tool does. */

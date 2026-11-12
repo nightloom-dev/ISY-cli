@@ -1765,6 +1765,26 @@ test("a shell call that has not answered yet is the agent making this commit", a
   await run("git", ["switch", "-q", "-c", "topic"], { cwd: dead });
   await commitFile(dead, "nothing-it-edited.txt");
   assert.match((await runCommit({ noUpload: true }, dead)).skipped ?? "", /another branch/);
+
+  // Killed at its permission prompt four minutes ago: past the two Claude Code allows a call.
+  const killed = await newRepo("isy-commit-running-killed-");
+  const killedPath = await writeSession(killed, "sess-killed", "left-pad");
+  const fourMinutesAgo = new Date(Date.now() - 4 * 60_000).toISOString();
+  await appendTurn(killedPath, "sess-killed", shell("t-commit", "git switch -c topic && git commit -am topic"), fourMinutesAgo);
+  await onBranch(killedPath, "main");
+  await run("git", ["switch", "-q", "-c", "topic"], { cwd: killed });
+  await commitFile(killed, "nothing-it-edited.txt");
+  assert.match((await runCommit({ noUpload: true }, killed)).skipped ?? "", /another branch/);
+
+  // The same age with a ten-minute timeout of its own is still running.
+  const slow = await newRepo("isy-commit-running-slow-");
+  const slowPath = await writeSession(slow, "sess-slow", "left-pad");
+  const call = shell("t-commit", "git switch -c topic && git commit -am topic");
+  await appendTurn(slowPath, "sess-slow", { ...call, input: { ...call.input, timeout: 600_000 } }, fourMinutesAgo);
+  await onBranch(slowPath, "main");
+  await run("git", ["switch", "-q", "-c", "topic"], { cwd: slow });
+  await commitFile(slow, "nothing-it-edited.txt");
+  assert.equal((await runCommit({ noUpload: true }, slow)).skipped, undefined);
 });
 
 test("a commit goes to the session making it, though others wrote after it", async () => {
