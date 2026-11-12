@@ -193,6 +193,16 @@ test("a workflow's agents go in by time after the Workflow call whose result nam
   }
 });
 
+test("a workflow agent messaged after its run keeps both files, though they share an id", async () => {
+  // Claude Code 2.1.31x: the run's file under workflows/, the later turns in a second file beside the session's.
+  const { dir, path } = await session([said("a", null, "hello")]);
+  await subagent(dir, "same", [said("r1", null, "in the run")], undefined, join("workflows", "wf_1"));
+  await subagent(dir, "same", [said("m1", null, "after the message")]);
+
+  const records = (await collect(sessionLines(path))).map((line) => JSON.parse(line) as Record<string, unknown>);
+  assert.deepEqual(records.map((record) => record.uuid).sort(), ["a", "m1", "r1"]);
+});
+
 test("a subagent whose call is nowhere still counts, after the session", async () => {
   const { dir, path } = await session([said("a", null, "hello")]);
   await subagent(dir, "stray", [said("s1", null, "work")], { toolUseId: "toolu_elsewhere" });

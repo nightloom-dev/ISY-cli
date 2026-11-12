@@ -244,6 +244,8 @@ export async function* sessionLines(sessionPath: string): AsyncGenerator<string>
     byCall.set(agent.toolUseId, [...(byCall.get(agent.toolUseId) ?? []), agent]);
   }
   const unlinked = agents.filter((agent) => agent.toolUseId === undefined);
+  // By file, not by id: a workflow agent messaged after its run carries on
+  // under the same id in a second file, and both hold its work.
   const placed = new Set<string>();
 
   /** The subagents a record starts: by the call it makes, or by the result that names one whose meta file names no call. */
@@ -253,7 +255,7 @@ export async function* sessionLines(sessionPath: string): AsyncGenerator<string>
       for (const agent of byCall.get(call) ?? []) started.push({ agent, call });
     }
     for (const agent of unlinked) {
-      if (placed.has(agent.agentId)) continue;
+      if (placed.has(agent.path)) continue;
       const call = answeredCall(record, agent);
       if (call !== undefined) started.push({ agent, call });
     }
@@ -273,8 +275,8 @@ export async function* sessionLines(sessionPath: string): AsyncGenerator<string>
       yield { line: source.subagent ? asSidechain(line, record, source.call) : line, at };
 
       for (const { agent, call } of startedBy(record)) {
-        if (placed.has(agent.agentId)) continue;
-        placed.add(agent.agentId);
+        if (placed.has(agent.path)) continue;
+        placed.add(agent.path);
         await running.add(merged(subagentLines(agent.path), { subagent: true, call }, at));
       }
     }
@@ -283,8 +285,8 @@ export async function* sessionLines(sessionPath: string): AsyncGenerator<string>
 
   for await (const { line } of merged(fileLines(sessionPath), { subagent: false }, -Infinity)) yield line;
   for (const agent of agents) {
-    if (placed.has(agent.agentId)) continue;
-    placed.add(agent.agentId);
+    if (placed.has(agent.path)) continue;
+    placed.add(agent.path);
     for await (const { line } of merged(subagentLines(agent.path), { subagent: true, call: agent.toolUseId }, -Infinity)) {
       yield line;
     }
