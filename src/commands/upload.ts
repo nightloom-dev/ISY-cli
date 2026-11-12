@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { detectAgent, presentAgents, sessionsInTree } from "../agents/index.js";
 import type { Agent, AgentId, HookInput } from "../agents/index.js";
 import { DEFAULT_API_BASE_URL, buildTranscriptFields, uploadSession } from "../api.js";
@@ -416,7 +417,9 @@ export async function runUpload(
       ? await changedSessions(workingDir, state)
       : await (async (): Promise<Target[]> => {
           const path = await agent.transcriptFor(hook, workingDir);
-          return path ? [{ agent, path }] : [];
+          // Claude Code names the file of a session closed before its first
+          // prompt, and never writes it: nothing to send, and nothing failed.
+          return path && existsSync(path) ? [{ agent, path }] : [];
         })();
 
   if (targets.length === 0) {
