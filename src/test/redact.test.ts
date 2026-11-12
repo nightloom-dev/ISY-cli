@@ -947,9 +947,17 @@ test("a backtick after a separator in an Authorization credential opens a value,
   const a = marker("authorization");
   const m = marker("assignment");
   const cut: [string, string][] = [
-    [`Authorization: Basic  secret==\`${value}\``, `Authorization: Basic  ${a}\``],
+    [`Authorization: Basic  secret==\`${value}\``, `Authorization: Basic  ${a}`],
     [`Authorization: Basic SECRET=:credentials=\`${value}'`, `Authorization: Basic ${a}'`],
     ["headers: { Authorization: `Basic dXNlcjpwYXNz` }", `headers: { Authorization: \`Basic ${a}\` }`],
+    // Padding is no name's separator, a backtick no end to the value, and a name that ends the value takes what it holds with it.
+    [`curl -H "Authorization: Basic secret=:credentials=\`${value}==\`" https://x`, `curl -H "Authorization: Basic ${a}" https://x`],
+    [`Authorization: Basic password=x,secret_value=\`${value}=\``, `Authorization: Basic ${a}`],
+    [`Authorization: Token secret=refresh_token=\`x-api-key=${value}\`,${value}`, `Authorization: Token ${a}`],
+    [`Authorization: Token password=\`${value},auth=\`${value}\``, `Authorization: Token ${a}`],
+    [`curl -H "Authorization: Token password=\`${value},pass=\`${value}\`"`, `curl -H "Authorization: Token ${a}"`],
+    [`Authorization: Basic PASSWORD=\`Pwd="${value}"`, `Authorization: Basic ${a}"`],
+    [`Authorization: Basic PASSWORD=\`Pwd = ${value}`, `Authorization: Basic ${a}`],
     [`apiKeyProd: 'accessToken": '${value}'`, `apiKeyProd: '${m}`],
     [`adminPassword'='accessToken": "${value}"`, `adminPassword'='${m}`],
     [`export _authToken='accessToken": "${value}"`, `export _authToken='${m}`],

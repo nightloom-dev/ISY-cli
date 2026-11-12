@@ -330,10 +330,12 @@ export const BUILTIN_RULES: RedactionRule[] = [
     // word after it is, so it needs no shape. Before the assignment rule, which
     // would stop at the scheme. A variable or a placeholder is left as it is. A
     // backtick right after a separator opens a value (Basic secret=:credentials=`…`):
-    // stopped there, the credential was the names and left the value. Not a name
-    // with a separator of its own, which the assignment rule still has to see.
+    // stopped there, the credential was the names and left the value. That value
+    // runs on as an assigned one does, over backticks too (`…,auth=`…``), and where
+    // it ends on a name, before or after the name's separator (`Pwd="…"`), over what
+    // the name holds, as no rule after this one sees the name inside it.
     type: "authorization",
-    pattern: new RegExp(/\b(authorization["'`]?[ \t]*[:=][ \t]*["'`]?[A-Za-z][A-Za-z0-9-]*[ \t]+)(?!\[ISY_REDACTED)[^\s"'`$<>{}()[\]]{8,}(?:(?<=[=:])`(?![\w.-]+["']?\s*[=:])[^\s"'`$<>{}()[\]]+)?/.source + RUNS_ON, "gi"),
+    pattern: new RegExp(/\b(authorization["'`]?[ \t]*[:=][ \t]*["'`]?[A-Za-z][A-Za-z0-9-]*[ \t]+)(?!\[ISY_REDACTED)[^\s"'`$<>{}()[\]]{8,}(?:(?<=[=:])`[^\s"'{}()[\]<>$]+(?:(?:(?<=[=:])|["']?\s*[=:])\s*["']?[^\s"'{}()[\]<>$]{8,})?)?/.source + RUNS_ON, "gi"),
     replacement: `$1${marker("authorization")}`,
   },
   {
