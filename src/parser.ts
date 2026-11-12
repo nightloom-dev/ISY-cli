@@ -47,6 +47,7 @@ const KNOWN_RECORD_TYPES = new Set([
   "queue-operation",
   "last-prompt",
   "bridge-session",
+  "session-owner",
   "pr-link",
   "frame-link",
   "worktree-state",

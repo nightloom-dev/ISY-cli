@@ -2211,6 +2211,20 @@ test("bridge and artifact records go up without the account and organisation the
   ]);
 });
 
+test("session-owner records, and account ids on any record, go up without the ids", () => {
+  // What Claude Code 2.1.322 writes at session start, and a type no release has written yet.
+  const records = [
+    { type: "session-owner", sessionId: "s1", accountUuid: "1b4e28ba-2fa1-11d2-883f-0016d3cca427", organizationUuid: "6fa459ea-ee8a-3ca4-894e-db77e160355e" },
+    { type: "brand-new-owner", sessionId: "s1", ownerAccountUuid: "1b4e28ba-2fa1-11d2-883f-0016d3cca427", organisation_uuid: "6fa459ea-ee8a-3ca4-894e-db77e160355e", kept: 1 },
+  ];
+  const { lines } = summaryFor(records);
+
+  assert.deepEqual(lines.map((line) => JSON.parse(line) as Record<string, unknown>), [
+    { type: "session-owner", sessionId: "s1" },
+    { type: "brand-new-owner", sessionId: "s1", kept: 1 },
+  ]);
+});
+
 test("a turn loses the harness fields beside it, and a dotenv write its second copy", () => {
   // What Claude Code 2.1.31x writes beside a call and beside its result.
   const write = { file_path: "/repo/.env", content: "STRIPE_LIVE=pk_live_totally_real" };

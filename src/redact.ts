@@ -1317,9 +1317,9 @@ function learnRoot(record: Record<string, unknown>, context: RedactContext): voi
  * context blocks sent beside the conversation — memory, CLAUDE.md, the email
  * again — and `api-request` the parameters, whose `safeguards` hand a
  * classifier the account's user name, home directory and permission rules.
- * `bridge-session` and `artifact-autoreact-ledger` are cut the same way: one
- * names the account and organisation that own the session's bridge, the other
- * the account. The parser reads none of them past their type, so only the
+ * `bridge-session`, `session-owner` (2.1.322) and `artifact-autoreact-ledger`
+ * are cut the same way: the first two name the account and organisation that
+ * own the session or its bridge, the last the account. The parser reads none of them past their type, so only the
  * fields that name them go — and the ones that say a subagent made the request
  * (`subagents.ts:asSidechain`), or it is counted as the session's own.
  */
@@ -1341,6 +1341,7 @@ const STRIPPED_RECORD_TYPES = new Set([
   "api-request-shape",
   "api-request-blob",
   "bridge-session",
+  "session-owner",
   "artifact-autoreact-ledger",
 ]);
 
@@ -1377,10 +1378,17 @@ const HARNESS_FIELDS = [
   "mcpMeta",
 ];
 
+/**
+ * The account and organisation ids, on whatever record type a release of Claude
+ * Code next puts them: `session-owner` arrived in 2.1.322 with both, under the
+ * same names `bridge-session` and the ledger use.
+ */
+const ACCOUNT_ID_FIELD = /^(?:owner)?(?:account|organi[sz]ation)_?uuid$/i;
+
 function stripHarnessFields(record: Record<string, unknown>, context: RedactContext): void {
   let stripped = false;
-  for (const field of HARNESS_FIELDS) {
-    if (!(field in record)) continue;
+  for (const field of Object.keys(record)) {
+    if (!HARNESS_FIELDS.includes(field) && !ACCOUNT_ID_FIELD.test(field)) continue;
     delete record[field];
     stripped = true;
   }
