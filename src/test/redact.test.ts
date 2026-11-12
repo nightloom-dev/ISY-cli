@@ -935,6 +935,9 @@ test("a token shape open at its end that takes a name goes on over what the name
     [`accessToken='accessToken': '${value},xapp-1-${value}zpqABCDEFGHIJpwd:=${value}`, `accessToken='${marker("assignment")}${marker("service_token")}`],
     [`Bearer t0ken99_secret=x-api-key=${value}/+,xapp-1-${value}ABCDEFGHIJauth-cookie=:${value}`, `Bearer ${marker("bearer_token")}${marker("service_token")}`],
     [`Cookie: password=${value}_,glpat-${value}abcdefghij_DB_PASS=${value}zpq`, `Cookie: ${marker("assignment")}${marker("service_token")}`],
+    // The name's value stops short of a bearer token, which its own rule cuts after the token's.
+    [`sk_${"0a".repeat(24)}.Cookie : x\`authorization:Bearer ${value}`, `${marker("service_token")}Bearer ${marker("bearer_token")}`],
+    [`sk_${"0a".repeat(24)}-accessToken:\t\`${value}&Proxy-Authorization=Bearer ${value}`, `${marker("service_token")}Bearer ${marker("bearer_token")}`],
   ];
   for (const [text, expected] of cut) {
     assert.equal(redactOne(text), expected);
@@ -2851,7 +2854,7 @@ test("the walks from a client's word add up to about the length of the line, how
 
 test("the rules stay small enough for a commit to compile them", () => {
   const size = BUILTIN_RULES.reduce((sum, rule) => sum + rule.pattern.source.length, 0);
-  assert.ok(size < 19_900, `${size} characters of pattern`);
+  assert.ok(size < 19_950, `${size} characters of pattern`);
 });
 
 test("a credential's name is looked for from its separator, so a word with none costs one scan", () => {

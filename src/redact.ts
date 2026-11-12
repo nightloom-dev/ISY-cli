@@ -146,8 +146,10 @@ const RUNS_ON = String.raw`(?:(?<=${NAME_END}["']?[=:]*)(?:(?<=[=:])|["']?\s*[=:
  * value: a name taken with no value after it is one the assignment rule no longer sees. Any name, not
  * only one RUNS_ON reads: the shape takes the name it is glued to whatever the name ends with
  * (`glpat-…2auth=…`, `xapp-…TOKEN_PROD:=…`), so a value left after it had nothing to cut it.
+ * The value stops short of `Bearer` and a space, which a token's rule, ahead of the bearer
+ * token's, would otherwise take from it (`…-accessToken:…&Proxy-Authorization=Bearer …`).
  */
-const NAME_TAIL = String.raw`(?:[\w.-]*["']?\s*[=:]\s*["']?${VALUE_CHAR}{8,})?${RUNS_ON}`;
+const NAME_TAIL = String.raw`(?:[\w.-]*["']?\s*[=:]\s*["']?(?:(?!${anyCase("bearer")}\s)${VALUE_CHAR}){8,})?${RUNS_ON}`;
 
 /**
  * A separator with a name before it, looked for from the separator back: from the front,
