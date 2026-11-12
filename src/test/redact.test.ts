@@ -927,6 +927,14 @@ test("a token shape open at its end that takes a name goes on over what the name
     [`glpat-${"a".repeat(20)}-apikey= ${value}`, marker("service_token")],
     [`xapp-1-${"a".repeat(20)}-api_key= ${value}}`, `${marker("service_token")}}`],
     [`glpat-${"a".repeat(20)}TOKEN=\`${value}]`, `${marker("service_token")}]`],
+    // A name that ends otherwise, taken by the shape whole or in part.
+    [`secret: glpat-${"a".repeat(20)}2auth=${value}`, `secret: ${marker("service_token")}`],
+    [`GITLAB_TOKEN=glpat-${"a".repeat(20)}-pwd:${value}`, `GITLAB_TOKEN=${marker("service_token")}`],
+    [`"secret": xapp-1-${value}zpqABCDEFGHIJTOKEN_PROD:=${value}_`, `"secret": ${marker("service_token")}`],
+    // A value before the token stops at its marker, so the token is what takes the name's value.
+    [`accessToken='accessToken': '${value},xapp-1-${value}zpqABCDEFGHIJpwd:=${value}`, `accessToken='${marker("assignment")}${marker("service_token")}`],
+    [`Bearer t0ken99_secret=x-api-key=${value}/+,xapp-1-${value}ABCDEFGHIJauth-cookie=:${value}`, `Bearer ${marker("bearer_token")}${marker("service_token")}`],
+    [`Cookie: password=${value}_,glpat-${value}abcdefghij_DB_PASS=${value}zpq`, `Cookie: ${marker("assignment")}${marker("service_token")}`],
   ];
   for (const [text, expected] of cut) {
     assert.equal(redactOne(text), expected);
