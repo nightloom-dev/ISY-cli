@@ -12,17 +12,18 @@ one by commit SHA, and the result is a single comment on that pull request.
 ## Install
 
 ```sh
-npm install -g @nightloom/isy
-isy init
+npx @nightloom/isy init
 ```
 
 `isy init` opens the browser, takes a key from it and writes it to
 `~/.isy/config.json`. It also installs the session hooks for every agent CLI it
 finds on the machine, and the git hooks of the repository you ran it in.
 
-`npx @nightloom/isy init` does the same with nothing installed globally. The
-hooks are written as `npx @nightloom/isy …` either way, and on such a machine
-every `isy …` here runs as `npx @nightloom/isy …`.
+The hooks are written as `npx @nightloom/isy …`, and with nothing installed
+globally every `isy …` here runs as `npx @nightloom/isy …`, which picks up new
+releases on its own. `npm install -g @nightloom/isy` puts `isy` on your PATH,
+but npx then runs that copy, hooks included, until you update it with
+`npm install -g @nightloom/isy@latest`.
 
 Two steps are left before a first analysis:
 
