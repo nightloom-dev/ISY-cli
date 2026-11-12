@@ -968,6 +968,26 @@ test("a backtick after a separator in an Authorization credential opens a value,
   }
 });
 
+test("a value with a token in it goes as a whole, the rest around the token's marker too", () => {
+  const value = "Zq8vR2mK9xLpWq7E";
+  const m = marker("assignment");
+  const cut: [string, string][] = [
+    [`my_SECRET_KEY" = glpat-${value}abcdefghij,${value}_ `, `my_SECRET_KEY" = ${m} `],
+    [`private_key: glpat-${value}abcdefghij&\`${value} `, `private_key: ${m} `],
+    [`password: \`hf_${value}bbbbbbbbbbbbbbbbbbbbbbbbb\`\`&glpat-${value}/+abcdefghij-token `, `password: ${m} `],
+    [`--api-key ghp_${"a".repeat(36)},${value}`, `--api-key ${m}`],
+    // The same where a value runs on over a name into one (RUNS_ON).
+    [`password=abc_secret: ghp_${"a".repeat(36)},${value}`, `password=${m}`],
+    // A value that ends on its marker was cut whole, and stays as it is.
+    [`token=${marker("jwt")}`, `token=${marker("jwt")}`],
+    [`"token": "${marker("service_token")}"`, `"token": "${marker("service_token")}"`],
+  ];
+  for (const [text, expected] of cut) {
+    assert.equal(redactOne(text), expected);
+    assert.equal(redactOne(expected), expected, "a second pass changes nothing");
+  }
+});
+
 test("a cookie's marker goes on only into pairs, and leaves a flag, a URL or the next command to their rules", () => {
   const value = "Zq8vR2mK9xLpWq7E";
   const m = marker("assignment");
@@ -2831,7 +2851,7 @@ test("the walks from a client's word add up to about the length of the line, how
 
 test("the rules stay small enough for a commit to compile them", () => {
   const size = BUILTIN_RULES.reduce((sum, rule) => sum + rule.pattern.source.length, 0);
-  assert.ok(size < 19_300, `${size} characters of pattern`);
+  assert.ok(size < 19_900, `${size} characters of pattern`);
 });
 
 test("a credential's name is looked for from its separator, so a word with none costs one scan", () => {

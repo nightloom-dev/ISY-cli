@@ -108,10 +108,17 @@ const CALL = String.raw`(?<!["'])[A-Za-z_][\w.]*\((?![^\s"'{}[\]<>]{0,256}\)[\w$
  * that no all-caps name spells. With no space after an `=` it takes `{}[]<>` too,
  * short of one closing around the assignment. Spaced from its name and unquoted it is
  * code as often as not (`token = tokens[index]`), so the limits above hold there.
+ *
+ * A token's rule runs before the rules that go by a name and ends at the token's shape, so a
+ * value with a token in it (`api_key=glpat-…,…`, `secret: "ghp_…&…"`) reaches them as markers
+ * with the rest of the value around them, and nothing else has a name for that rest. It is the
+ * value still, whatever its length, as long as some of it follows a marker: a value that ends
+ * on a marker was cut whole. RUNS_ON reads a value so too.
  */
+const MARKED_VALUE = String.raw`(?:${VALUE_CHAR}*\[ISY_REDACTED:\w+\])+${VALUE_CHAR}+`;
 const INNER_DOLLAR_OR_PAREN = String.raw`[$()](?=[^\s"'{}[\]<>])`;
 const LITERAL_DOLLAR = String.raw`\$(?=[^\s"]{0,256}\d)(?![{(])(?![A-Z_][A-Z0-9_]*\b)`;
-const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?<=")(?:${VALUE_CHAR}|${LITERAL_DOLLAR})(?:[^\s"$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=')(?:${VALUE_CHAR}|\$)(?:[^\s'$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=[\w.-]=)(?!=|${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}|[{}[\]<>](?=[^\s"'])){7,}|(?!${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}){7,}|${VALUE_CHAR}{8,})`;
+const SECRET_VALUE = String.raw`(?:${MARKED_VALUE}|(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\d[\d.,eE+-]*(?![^\s"'{}()[\]<>$]))(?:(?<=")(?:${VALUE_CHAR}|${LITERAL_DOLLAR})(?:[^\s"$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=')(?:${VALUE_CHAR}|\$)(?:[^\s'$()]|${INNER_DOLLAR_OR_PAREN}){7,}|(?<=[\w.-]=)(?!=|${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}|[{}[\]<>](?=[^\s"'])){7,}|(?!${CALL})${VALUE_CHAR}(?:${VALUE_CHAR}|${INNER_DOLLAR_OR_PAREN}){7,}|${VALUE_CHAR}{8,}))`;
 /**
  * A value read to a space or a quote can end on the name of the next one: `Set-Cookie:
  * session_token="…"`, `DB_PASS=DB_PASSWORD="…"`, `auth-cookie: api_key= …`. That name is then
@@ -131,7 +138,7 @@ const SECRET_VALUE = String.raw`(?!\[ISY_REDACTED)(?!(?=-?\d)(?<=["']\s*:\s*)-?\
  * outside the pattern, once a match is found, is the way up.
  */
 const NAME_END = anyCase("(?:passw(?:or)?d|secret|token|key|base)");
-const RUNS_ON = String.raw`(?:(?<=${NAME_END}["']?[=:]*)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)${VALUE_CHAR}{8,}(?:(?<![=:])\k<q>)?)*`;
+const RUNS_ON = String.raw`(?:(?<=${NAME_END}["']?[=:]*)(?:(?<=[=:])|["']?\s*[=:])\s*(?<q>["']?)(?:${MARKED_VALUE}|${VALUE_CHAR}{8,})(?:(?<![=:])\k<q>)?)*`;
 
 /**
  * The rest of a name glued on to a token whose shape stops inside it (`ghp_…2api-key==…`), so that
