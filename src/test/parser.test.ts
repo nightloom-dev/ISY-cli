@@ -277,9 +277,14 @@ test("a subagent decides neither where the session ran nor when it ended", () =>
 
 const corpus = join(homedir(), ".claude", "projects");
 
-/** Object lines in a file: what one subagent adds to its session once spliced in. */
+/**
+ * Sidechain lines in a file: what one subagent adds to its session's
+ * `sidechainRecords` once spliced in. Not every line it holds: the
+ * `api-request` records newer builds write beside a subagent's turns carry no
+ * `isSidechain`, and the session's count rightly leaves them out.
+ */
 async function recordCount(path: string): Promise<number> {
-  return (await readFile(path, "utf8")).split("\n").filter((line) => line.trim().startsWith("{")).length;
+  return (await readFile(path, "utf8")).split("\n").filter((line) => line.includes('"isSidechain":true')).length;
 }
 
 test("parses real Claude Code transcripts", { skip: !existsSync(corpus) }, async () => {
