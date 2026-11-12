@@ -94,6 +94,18 @@ test("takes the session identity off session_meta and drops its system prompt", 
   assert.doesNotMatch(session.records.map((r) => json(r)).join(""), /You are Codex/);
 });
 
+test("names the model of each turn on its assistant records, as Claude Code does", () => {
+  const turn = (model: string) => ({ type: "turn_context", timestamp: "2026-08-20T10:00:01Z", payload: { model, cwd: "/repo" } });
+  const records = toClaudeRecords([json(META), json(say("user", "go")), json(turn("gpt-5.6-luna")), json(say("assistant", "done")), json(turn("gpt-5.6")), json(exec("c1", "ls"))])
+    .map((line) => JSON.parse(line) as { type: string; message: { model?: string } });
+
+  assert.deepEqual(records.map((record) => [record.type, record.message.model]), [
+    ["user", undefined],
+    ["assistant", "gpt-5.6-luna"],
+    ["assistant", "gpt-5.6"],
+  ]);
+});
+
 test("turns a shell call and its output into a Bash tool use", () => {
   const session = convert([
     META,

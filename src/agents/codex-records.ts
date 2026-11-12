@@ -418,6 +418,8 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
   let sessionId = options.sessionId;
   let cwd = options.cwd;
   let version = options.version;
+  /** The model of the turn under way, which only `turn_context` names. */
+  let model: string | undefined;
 
   /** Call ids of `exec` scripts: only their output can name a running cell. */
   const scripts = new Set<string>();
@@ -430,6 +432,8 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
 
   const emit = (record: Record<string, unknown>): void => {
     const uuid = `codex-${index}`;
+    // Where Claude Code puts it, so the report names the model as it does for Claude.
+    if (model && record.type === "assistant" && isObject(record.message)) record.message = { ...record.message, model };
     out.push(
       JSON.stringify({
         ...record,
@@ -470,8 +474,13 @@ export function toClaudeRecords(rollout: Iterable<string>, options: CodexOptions
       continue;
     }
 
+    if (parsed.type === "turn_context") {
+      model = asString(payload.model) ?? model;
+      continue;
+    }
+
     // `event_msg` restates what `response_item` already records, and
-    // `turn_context` / `world_state` are bookkeeping.
+    // `world_state` is bookkeeping.
     if (parsed.type !== "response_item") continue;
 
     const kind = asString(payload.type);
