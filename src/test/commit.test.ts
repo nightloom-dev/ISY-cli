@@ -675,6 +675,17 @@ test("uploads a session that ended without a commit of its own", async () => {
   assert.equal(uploads.length, 2);
 });
 
+test("a date sends the sessions active since then and leaves older ones on disk", async () => {
+  const cwd = await newRepo("isy-commit-since-");
+  await writeSession(cwd, "sess-recent", "left-pad");
+  await age(await writeSession(cwd, "sess-old", "ms"), 10);
+
+  const report = await runUpload({ silent: true, all: true, since: Date.now() - 5 * 24 * 60 * 60 * 1000 }, cwd);
+
+  assert.equal(report.sent, 1);
+  assert.equal(uploads.length, 1);
+});
+
 test("does not send a transcript the server already has", async () => {
   const cwd = await newRepo("isy-commit-unchanged-");
   await writeSession(cwd, "sess-once", "left-pad");

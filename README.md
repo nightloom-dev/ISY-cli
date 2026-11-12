@@ -44,6 +44,7 @@ From there on nothing has to be run by hand.
 | `isy check` | Hook health, parked alerts, pending uploads |
 | `isy upload` | Upload the current session |
 | `isy sweep` | Upload every session that grew since last time |
+| `isy upload --since 2026-10-01` | Upload this repository's sessions active since a date, such as the ones from before ISY was installed; an open pull request on their branch gets analysed |
 | `isy notes` | Print this branch's findings as prompts for a coding agent |
 | `isy analyze <dir>` | Run the local detectors over transcripts, upload nothing |
 | `isy settings` | Read or write the analysis settings on your account |

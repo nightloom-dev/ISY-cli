@@ -10,7 +10,7 @@ import type { GitMetadata, GitResult } from "../git.js";
 import type { DiscoveredSession, IsyConfig } from "../types.js";
 import { errorMessage, logError, logLine } from "../log.js";
 import { parseLines } from "../parser.js";
-import { SWEEP_WINDOW_MS, packageVersion } from "../paths.js";
+import { SWEEP_WINDOW_MS, lastActive, packageVersion } from "../paths.js";
 import {
   MAX_ATTEMPTS,
   abandon,
@@ -30,6 +30,7 @@ import { sessionFingerprint } from "../subagents.js";
 import type { ClientState, CommitMark } from "../state.js";
 
 export const TOTAL_BUDGET_MS = 30_000;
+const BACKFILL_BUDGET_MS = 10 * 60_000;
 
 export type { HookInput } from "../agents/index.js";
 
@@ -208,11 +209,13 @@ interface Target {
  * matches, so an unchanged transcript is never read — and a session that ended
  * without a commit is still picked up here, however long ago it ended.
  */
-async function changedSessions(cwd: string, state: ClientState): Promise<Target[]> {
+async function changedSessions(cwd: string, state: ClientState, since?: number): Promise<Target[]> {
   const targets: Target[] = [];
 
   for (const agent of await presentAgents()) {
     for await (const file of sessionsInTree(agent, cwd)) {
+      // Newest first, so the first one older than the date ends the list.
+      if (since !== undefined && lastActive(file) < since) break;
       if (looksUnchanged(state[file.path] ?? {}, file)) continue;
       targets.push({ agent, path: file.path, file, cwd: file.cwd });
     }
@@ -375,7 +378,7 @@ async function passOver(target: Target, payload: UploadPayload): Promise<void> {
 }
 
 export async function runUpload(
-  options: { silent: boolean; agent?: string; all?: boolean; hook?: boolean; sweep?: boolean },
+  options: { silent: boolean; agent?: string; all?: boolean; since?: number; hook?: boolean; sweep?: boolean },
   cwd: string,
 ): Promise<UploadReport> {
   const report: UploadReport = {
@@ -387,7 +390,8 @@ export async function runUpload(
     drained: 0,
     deduplicated: false,
   };
-  const deadline = Date.now() + TOTAL_BUDGET_MS;
+  // Nobody's hook waits on a backfill someone typed: it gets the time its sessions take.
+  const deadline = Date.now() + (options.since === undefined ? TOTAL_BUDGET_MS : BACKFILL_BUDGET_MS);
 
   const config = await readConfig();
   if (!config.token) {
@@ -414,7 +418,7 @@ export async function runUpload(
   const targets = options.sweep
     ? await sweptSessions(state, report)
     : options.all
-      ? await changedSessions(workingDir, state)
+      ? await changedSessions(workingDir, state, options.since)
       : await (async (): Promise<Target[]> => {
           const path = await agent.transcriptFor(hook, workingDir);
           // Claude Code names the file of a session closed before its first

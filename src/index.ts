@@ -33,7 +33,7 @@ const COMMANDS = new Set([
 ]);
 const USAGE =
   "Usage: isy <init|status|logout> [--silent] [--json] [--token <token>]\n" +
-  "       isy upload [--silent] [--hook] [--all] [--agent <claude|kimi|codex>]\n" +
+  "       isy upload [--silent] [--hook] [--all] [--since <date>] [--agent <claude|kimi|codex>]\n" +
   "       isy sweep [--silent] [--json]\n" +
   "       isy commit [--hook] [--json]\n" +
   "       isy check [--ping] [--json] [--hook] [--agent <claude|kimi|codex>]\n" +
@@ -67,6 +67,7 @@ function parse() {
         hook: { type: "boolean", default: false },
         ping: { type: "boolean", default: false },
         all: { type: "boolean", default: false },
+        since: { type: "string" },
         agent: { type: "string" },
         fix: { type: "boolean", default: false },
         scan: { type: "boolean", default: false },
@@ -92,6 +93,7 @@ async function run(
     hook: boolean;
     ping: boolean;
     all: boolean;
+    since?: string;
     agent?: string;
     fix: boolean;
     scan: boolean;
@@ -159,8 +161,12 @@ async function run(
         return;
       }
 
+      // A date sends every session of this repository active since then: the
+      // way to bring in the work of before ISY was installed.
+      const since = values.since === undefined ? undefined : Date.parse(values.since);
+      if (since !== undefined && Number.isNaN(since)) fail("--since takes a date, such as 2026-10-01", values.silent);
       const report = await runUpload(
-        { silent: values.silent, agent: values.agent, all: values.all },
+        { silent: values.silent, agent: values.agent, all: values.all || since !== undefined, since },
         process.cwd(),
       );
       if (!values.silent) console.log(formatUploadReport(report));
