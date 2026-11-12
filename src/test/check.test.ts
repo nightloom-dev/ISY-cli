@@ -175,7 +175,7 @@ test("the session start hook prints one JSON line the client can display", async
 
   assert.equal(printed.length, 1);
   const payload: unknown = JSON.parse(printed[0]!);
-  assert.match((payload as { systemMessage: string }).systemMessage, /ISY \d+\.\d+\.\d+ active/);
+  assert.match((payload as { systemMessage: string }).systemMessage, /ISY \d+\.\d+\.\d+(?:-[\w.]+)? active/);
 });
 
 test("the session start hook stays silent rather than breaking the session", async () => {
