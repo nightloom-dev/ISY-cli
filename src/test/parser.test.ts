@@ -797,6 +797,35 @@ test("a session that committed counts as editing files, however the files change
   assert.equal(hasEdits(call("a", "git commit -m x"), failed), false);
 });
 
+test("a call the session stopped without never ran, and one still open may yet", () => {
+  const call = (id: string, name: string, input: object) =>
+    assistant(id, null, [{ type: "tool_use", id: `toolu_${id}`, name, input }]);
+  // Claude Code writes it when a turn ends and when it exits: killed at its
+  // permission prompt, a session leaves the call open behind it, and two of these.
+  const stopped = { type: "cost-state", sessionId: "s1", totalCostUSD: 0.1 };
+  const hasEdits = (...records: unknown[]) => parseLines(jsonl(records)).meta.hasFileEdits;
+
+  for (const [name, input] of [
+    ["Bash", { command: "printf x >> src/text.js" }],
+    ["Bash", { command: "git add -A && git commit -m x" }],
+    ["Edit", { file_path: "/repo/a.ts", old_string: "a", new_string: "b" }],
+    ["StrReplaceFile", { path: "a.ts" }],
+    ["Agent", { prompt: "fix it" }],
+  ] as const) {
+    assert.equal(hasEdits(call("a", name, input), stopped, stopped), false, name);
+    // Still running: `isy commit` reads the session from inside its `git commit`,
+    // and the sweep uploads one in the middle of a call.
+    assert.equal(hasEdits(call("a", name, input)), true, name);
+    assert.equal(hasEdits(stopped, call("a", name, input)), true, name);
+    // Answered after all: it ran.
+    assert.equal(hasEdits(call("a", name, input), stopped, toolResult("b", "a", "toolu_a")), true, name);
+  }
+
+  // A subagent goes on working past its session's turn.
+  const edit = { file_path: "/repo/a.ts", old_string: "a", new_string: "b" };
+  assert.equal(hasEdits({ ...call("s", "Edit", edit), isSidechain: true, parentToolUseID: "toolu_x" }, stopped), true);
+});
+
 test("counts reasoning only when there is text in it", () => {
   const session = parseLines(jsonl([
     assistant("a", null, [{ type: "thinking", thinking: "", signature: "EqMock==" }]),

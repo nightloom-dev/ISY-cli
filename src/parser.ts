@@ -78,8 +78,9 @@ interface ParseState {
   thinkingBlocks: number;
   hiddenThinkingBlocks: number;
   editToolUses: number;
-  shellWrote: boolean;
-  /** A call the parser cannot see into that could have written a file (`mayWrite`). */
+  /** Calls that could have written a file: an edit, a shell write, one the parser cannot see into (`mayWrite`). */
+  writers: ToolUse[];
+  /** A line the parser could not read, which could have held any call. */
   opaqueWrite: boolean;
   /** A subagent's result says it edited files, whether or not its own records came along. */
   delegatedEdits: boolean;
@@ -116,7 +117,7 @@ function createState(): ParseState {
     thinkingBlocks: 0,
     hiddenThinkingBlocks: 0,
     editToolUses: 0,
-    shellWrote: false,
+    writers: [],
     opaqueWrite: false,
     delegatedEdits: false,
     delegated: new Set(),
@@ -818,6 +819,7 @@ function pushToolUse(
 
   if (EDIT_TOOLS.has(name)) {
     state.editToolUses += 1;
+    state.writers.push(use);
     pushFileEdits(state, use);
   }
   if (LOOKUP_TOOLS.has(name)) pushLookup(state, use);
@@ -825,17 +827,17 @@ function pushToolUse(
     const { command } = use.input;
     if (command.length <= COMMAND_CHARS && spend(state.shell, command.length)) {
       for (const path of shellReadPaths(command, state.shell)) state.filesRead.add(path);
-      if (shellWrites(command)) state.shellWrote = true;
+      if (shellWrites(command)) state.writers.push(use);
       pushShellEdits(state, use, command, record.cwd);
     } else {
       // Not read, which does not say nothing was written. The call keeps no command,
       // so that nothing after this reads it either.
-      state.opaqueWrite = true;
+      state.writers.push(use);
       use.input = {};
     }
   }
 
-  if (mayWrite(name, use.input)) state.opaqueWrite = true;
+  if (mayWrite(name, use.input)) state.writers.push(use);
 }
 
 function pushBlocks(state: ParseState, record: TranscriptRecord, recordIndex: number): void {
@@ -909,10 +911,11 @@ const DELEGATION_TOOLS = new Set(["Agent", "Task", "AgentSwarm", "TowerSpawn"]);
  * the file gone — carries nothing else of it. What it did cannot be seen, so
  * it may have edited. A call that failed started nothing.
  */
-function delegatedUnseen(state: ParseState): boolean {
+function delegatedUnseen(state: ParseState, stop: number): boolean {
   return state.toolUses.some(
     (use) =>
       DELEGATION_TOOLS.has(use.name) &&
+      ran(use, stop) &&
       use.result?.isError !== true &&
       !state.delegated.has(use.id) &&
       !state.counted.has(use.id),
@@ -924,16 +927,44 @@ function delegatedUnseen(state: ParseState): boolean {
  * files got there, and a formatter, a generator or a script writes nothing
  * `shellWrites` can read. A call that failed committed nothing.
  */
-function committedFromShell(state: ParseState): boolean {
+function committedFromShell(state: ParseState, stop: number): boolean {
   return state.toolUses.some((use) => {
     const { command } = use.input;
     return (
       use.name === "Bash" &&
+      ran(use, stop) &&
       typeof command === "string" &&
       use.result?.isError !== true &&
       gitCommands(command).includes("commit")
     );
   });
+}
+
+/**
+ * Where the session last stopped: Claude Code writes `cost-state` when a turn ends
+ * and when it exits. A subagent's record never is one.
+ */
+function lastStop(records: TranscriptRecord[]): number {
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    if (records[i]!.type === "cost-state" && records[i]!.isSidechain !== true) return i;
+  }
+  return -1;
+}
+
+/**
+ * Whether a call ran, or may still be running. One with no result is taken as
+ * running — `isy commit` reads the session from inside its `git commit`, and the
+ * sweep uploads a session in the middle of a call — unless the session stopped
+ * after it: no call it ran stays open across a stop, and a session killed at a
+ * permission prompt leaves exactly that behind. A subagent can go on working past
+ * its session's turn, so its calls are not judged by the session's stops.
+ *
+ * ponytail: a call killed while it ran leaves the same trace and reads as never
+ * run, as nothing in the transcript tells the two apart. Look again if Claude Code
+ * starts recording when a call starts.
+ */
+function ran(use: ToolUse, stop: number): boolean {
+  return use.result !== undefined || use.isSidechain || use.recordIndex > stop;
 }
 
 /**
@@ -1104,6 +1135,7 @@ function finish(state: ParseState): ParsedSession {
   }
 
   const byUuid = buildByUuid(state.records);
+  const stop = lastStop(state.records);
 
   return {
     sessionId,
@@ -1128,14 +1160,13 @@ function finish(state: ParseState): ParsedSession {
       // shell counts, a call the parser cannot see into is "cannot tell", which
       // must not read as "edited nothing", and so is a subagent that says it
       // edited, or whose work never came back to say. So does a commit the agent
-      // ran, whatever changed the files in it.
+      // ran, whatever changed the files in it. A call that never ran does not (`ran`).
       hasFileEdits:
-        state.editToolUses > 0 ||
-        state.shellWrote ||
+        state.writers.some((use) => ran(use, stop)) ||
         state.opaqueWrite ||
         state.delegatedEdits ||
-        delegatedUnseen(state) ||
-        committedFromShell(state),
+        delegatedUnseen(state, stop) ||
+        committedFromShell(state, stop),
       sidechainRecords,
     },
     skipped: state.skipped,
