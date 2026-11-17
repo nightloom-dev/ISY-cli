@@ -328,7 +328,7 @@ async function sendOne(
       report.unplaced = (report.unplaced ?? 0) + 1;
       return;
     }
-    payload.git = own.metadata;
+    payload.git = { ...own.metadata, own: true };
   }
 
   if (await isAbandoned(payload.sessionId, payload.contentHash)) {

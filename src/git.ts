@@ -13,6 +13,11 @@ export interface GitMetadata {
   branch: string;
   headSha: string;
   recentShas: string[];
+  /**
+   * Set by a backfill alone: the branch and head are the session's own, not the
+   * checkout's, so the server may file a session it already holds under them.
+   */
+  own?: true;
 }
 
 export type GitFailure = "not-a-repository" | "no-commits" | "no-remote";

@@ -43,7 +43,7 @@ const uploads: {
   contentHash: string;
   commits?: unknown;
   transcript?: string;
-  git?: { branch: string; headSha: string; recentShas: string[] };
+  git?: { branch: string; headSha: string; recentShas: string[]; own?: true };
 }[] = [];
 
 const saved = {
@@ -743,6 +743,8 @@ test("a date sends each session on its own branch and head, wherever the checkou
   // The push hook files a session under the checkout, as it always has.
   await runUpload({ silent: true, all: true }, cwd);
   assert.deepEqual(uploads.map((upload) => upload.git?.branch), ["pr", "pr"]);
+  // What a checkout says is never vouched for: the server keeps a stored session where it is.
+  assert.deepEqual(uploads.map((upload) => upload.git?.own), [undefined, undefined]);
   uploads.length = 0;
   // Never uploaded, and its transcript names no branch.
   await writeSession(cwd, "sess-nowhere", "chalk");
@@ -755,6 +757,8 @@ test("a date sends each session on its own branch and head, wherever the checkou
   assert.equal(sent.get("sess-feature")?.branch, "feature");
   assert.equal(sent.get("sess-feature")?.headSha, feature);
   assert.equal(sent.get("sess-feature")?.recentShas.includes(pr), false);
+  // Marked as its own, so the server moves the copy it filed under "pr".
+  assert.equal(sent.get("sess-feature")?.own, true);
   // Deleted here, still known from origin.
   assert.equal(sent.get("sess-gone")?.branch, "gone");
   assert.equal(sent.get("sess-gone")?.headSha, gone);
