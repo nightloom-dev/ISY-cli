@@ -44,7 +44,10 @@ database or to a model.
   registry before it starts anything, and on its defaults a commit waited 70
   seconds offline and 16 minutes on a network that never answers. A line someone
   waits on asks nothing while a version is cached, and an update reaches it
-  through the lines that run in the background, so those must keep asking.
+  through the lines that run in the background, so those must keep asking. A
+  global install stops all of that: npx runs it ahead of its own copy whatever
+  the registry says, so the update notice never tells an npx copy to make one
+  (`update.ts:updateCommand`).
 - **The parser must survive unknown fields and record types.** Transcript
   formats are undocumented and move between CLI versions. Log and skip; never
   throw. On the server a transcript is also a stranger's, read in the process that

@@ -32,8 +32,14 @@ export function isNewer(latest: string | undefined, current: string): boolean {
  * package manager; anything else is a source checkout, where pulling and
  * rebuilding is the only honest answer — and where `npm install -g` would
  * quietly replace the checkout the developer is working in.
+ *
+ * npx's own copy is replaced by any npx run of the bare name that asks the
+ * registry, and the hooks run that same copy. A global install is the one
+ * thing that stops it: npx then runs the global copy instead, hooks included,
+ * whatever the registry says, and only `npm install -g` moves it on.
  */
 export function updateCommand(dir: string = import.meta.dirname): string {
+  if (dir.includes(`${sep}_npx${sep}`)) return "npx @nightloom/isy --version";
   return dir.includes(`${sep}node_modules${sep}`)
     ? "npm install -g @nightloom/isy@latest"
     : "git pull && npm install && npm run build";
