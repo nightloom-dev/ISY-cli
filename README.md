@@ -35,6 +35,25 @@ Two steps are left before a first analysis:
 
 From there on nothing has to be run by hand.
 
+## What's new in 1.0.8
+
+- `isy upload --since <date>` sends each old session under the branch it was
+  made on, with that branch's commits, wherever you run it from. Before, every
+  session went under the branch checked out at that moment and could land on
+  the wrong pull request. Run it once more after updating: sessions filed that
+  way move to their own pull request. A session whose branch is not known is
+  left out and counted.
+- A git hook that git will not run is no longer reported as installed: one
+  without its execute bit, or a shell hook saved with CRLF line endings.
+  `isy status`, `isy check` and `isy health` say so, and the next session or
+  `isy init` repairs it.
+- A session that was stopped before its first edit ran is no longer counted
+  among the sessions analysed on a pull request.
+- The update notice no longer tells a copy run through npx to install isy
+  globally.
+
+Earlier versions: [releases](https://github.com/nightloom-dev/ISY-cli/releases).
+
 ## Commands
 
 | Command | What it does |
