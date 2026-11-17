@@ -89,6 +89,14 @@ function takesBlock(contents: string): boolean {
 }
 
 /**
+ * A shebang saved with CRLF names an interpreter called "sh\r": git cannot run
+ * the hook, and no line of it has run since it was saved that way.
+ */
+function carriageReturn(contents: string): boolean {
+  return /^#![^\n]*\r\n/.test(contents);
+}
+
+/**
  * Where a new block goes: straight after the shebang, ahead of whatever the
  * user's own script does.
  *
@@ -199,9 +207,11 @@ async function oneState(
   const contents = await readHook(path);
   if (contents === undefined) return "missing";
   // Nothing is missing from a hook that takes no block, and `isy init` cannot add it.
-  if (existingBlock(contents) !== (takesBlock(contents) ? block(hook.command) : undefined)) return "missing";
+  if (!takesBlock(contents)) return existingBlock(contents) === undefined ? "installed" : "missing";
   // A hook git will not execute is not installed, whatever the file says.
-  return !takesBlock(contents) || (await executable(path)) ? "installed" : "not-executable";
+  if (existingBlock(contents) !== undefined && carriageReturn(contents)) return "not-executable";
+  if (existingBlock(contents) !== block(hook.command)) return "missing";
+  return (await executable(path)) ? "installed" : "not-executable";
 }
 
 /** "installed" only with every hook in place and run by git: half-wired is not installed. */
@@ -260,13 +270,16 @@ async function installOne(
     return "not-shell";
   }
 
-  if (existing === desired) {
+  if (existing === desired && !carriageReturn(contents)) {
     // A hook git will not execute is not installed, whatever the file says.
     await chmod(path, 0o755);
     return "already-present";
   }
 
-  const next = existing === undefined ? insert(contents, desired) : contents.replace(existing, desired);
+  // A hook git cannot run goes back to LF whole: the user's lines were not running either.
+  const text = carriageReturn(contents) ? contents.replace(/\r\n/g, "\n") : contents;
+  const old = existingBlock(text);
+  const next = old === undefined ? insert(text, desired) : text.replace(old, desired);
 
   await replaceHook(path, next);
   await chmod(path, 0o755);
@@ -361,7 +374,7 @@ export async function repairGitHook(cwd: string): Promise<void> {
     const existing = existingBlock(contents);
     if (existing === undefined) continue;
     const stale =
-      (existing !== block(hook.command) || !(await executable(path))) &&
+      (existing !== block(hook.command) || !(await executable(path)) || carriageReturn(contents)) &&
       !isShared(location) &&
       !(await linkedIntoTree(path, location.gitDir));
     if (stale || !takesBlock(contents)) await installOne(cwd, hook);

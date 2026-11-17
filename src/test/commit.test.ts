@@ -21,6 +21,7 @@ import {
   PUSH_COMMAND,
   autoInstallGitHook,
   gitHookInstalled,
+  gitHookState,
   installGitHook,
   hooksLeftToTheUser,
   postCommitPath,
@@ -355,6 +356,29 @@ test("a hook git will not execute is not installed, and whatever a hook runs nex
     for (const path of paths) assert.equal((await stat(path)).mode & 0o777, 0o755, label);
     assert.equal(await gitHookInstalled(fresh), true, label);
   }
+});
+
+test("a hook saved with CRLF is not installed, and whatever a hook runs next makes it one git can run", async () => {
+  const fresh = await newRepo("isy-hook-crlf-");
+  await installGitHook(fresh);
+  const commit = (await postCommitPath(fresh))!;
+  const unix = `${await readFile(commit, "utf8")}echo mine\n`;
+  // An editor saved it whole, or only the lines isy did not write were left that way.
+  for (const saved of [unix.replaceAll("\n", "\r\n"), unix.replace("\n", "\r\n").replace("mine\n", "mine\r\n")]) {
+    await writeFile(commit, saved);
+    assert.equal(await gitHookState(fresh), "not-executable");
+
+    await cli(fresh, ["check", "--hook"]);
+
+    assert.equal(await readFile(commit, "utf8"), unix);
+    assert.equal((await stat(commit)).mode & 0o777, 0o755);
+    assert.equal(await gitHookInstalled(fresh), true);
+  }
+  // And git runs it: the commit is not met with "cannot exec".
+  await writeFile(join(fresh, "a.txt"), "a");
+  await run("git", ["add", "a.txt"], { cwd: fresh });
+  const { stderr } = await run("git", ["commit", "-q", "-m", "a"], { cwd: fresh });
+  assert.doesNotMatch(stderr, /cannot exec/);
 });
 
 test("bringing a block up to date adds none that is not there, and leaves a shared directory alone", async () => {
