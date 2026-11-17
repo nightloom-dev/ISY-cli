@@ -3,7 +3,7 @@ import { series } from "./check.js";
 import type { AgentId } from "../agents/index.js";
 import { DEFAULT_API_BASE_URL } from "../api.js";
 import { readConfig } from "../config.js";
-import { gitHookInstalled, gitHooksDir, hooksLeftToTheUser } from "../githook.js";
+import { gitHookState, gitHooksDir, hooksLeftToTheUser } from "../githook.js";
 import { packageVersion, projectSlug } from "../paths.js";
 import { countQueue } from "../queue.js";
 import { updateNotice } from "../update.js";
@@ -55,7 +55,7 @@ export interface StatusReport {
     /** Across every CLI installed here. */
     sessions: number;
     /** The per-repository git hooks that start the fast loop. */
-    gitHook: "installed" | "missing" | "not-a-repository";
+    gitHook: "installed" | "missing" | "not-executable" | "not-a-repository";
     /** Hooks written in another language: they take no block, and `isy init` says what to add. */
     gitHooksLeft: string[];
   };
@@ -116,11 +116,7 @@ export async function collectStatus(cwd: string): Promise<StatusReport> {
     : undefined;
 
   const gitHook: StatusReport["project"]["gitHook"] =
-    (await gitHooksDir(cwd)) === undefined
-      ? "not-a-repository"
-      : (await gitHookInstalled(cwd))
-        ? "installed"
-        : "missing";
+    (await gitHooksDir(cwd)) === undefined ? "not-a-repository" : await gitHookState(cwd);
 
   const newest = agents
     .map((entry) => entry.latest)
@@ -184,11 +180,13 @@ export function formatStatus(report: StatusReport): string {
     lines.push(
       row(
         "git hooks",
-        report.project.gitHook !== "installed"
-          ? "missing — run isy init here to analyse on every commit and push"
-          : report.project.gitHooksLeft.length > 0
-            ? `installed, except ${series(report.project.gitHooksLeft)}: not a shell script, isy init says what to add`
-            : "installed",
+        report.project.gitHook === "not-executable"
+          ? "not executable, so git skips them — run isy init here"
+          : report.project.gitHook !== "installed"
+            ? "missing — run isy init here to analyse on every commit and push"
+            : report.project.gitHooksLeft.length > 0
+              ? `installed, except ${series(report.project.gitHooksLeft)}: not a shell script, isy init says what to add`
+              : "installed",
       ),
     );
   }

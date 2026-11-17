@@ -10,7 +10,9 @@ import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { claudeAgent } from "../agents/index.js";
 import { writeConfig } from "../config.js";
+import { collectCheck, formatCheck } from "../commands/check.js";
 import { formatCommit, runCommit, wordsOf } from "../commands/commit.js";
+import { collectStatus, formatStatus } from "../commands/status.js";
 import { collectGitMetadata, currentBranch } from "../git.js";
 import { readJournal } from "../log.js";
 import { formatUploadAlert, formatUploadReport, runUpload } from "../commands/upload.js";
@@ -325,6 +327,32 @@ test("whatever a hook runs next in a repository brings an older block up to date
     const begin = OLD_COMMIT_BLOCK.split("\n")[0];
     assert.equal(await readFile(commit, "utf8"), `#!/bin/sh\n${begin}\n${COMMIT_COMMAND}\n# isy:end\necho mine\n`, label);
     assert.equal(await readFile(push, "utf8"), `#!/bin/sh\n${begin}\n${PUSH_COMMAND}\n# isy:end\necho mine\n`, label);
+    assert.equal(await gitHookInstalled(fresh), true, label);
+  }
+});
+
+test("a hook git will not execute is not installed, and whatever a hook runs next makes it executable", async () => {
+  for (const args of [
+    ["check", "--hook"],
+    ["upload", "--hook"],
+    ["upload", "--silent", "--all"],
+  ]) {
+    const label = args.join(" ");
+    const fresh = await newRepo("isy-hook-mode-");
+    await installGitHook(fresh);
+    const paths = [(await postCommitPath(fresh))!, (await prePushPath(fresh))!];
+    for (const path of paths) await chmod(path, 0o644);
+
+    // git skips it with a hint to whoever commits, and the block in it is current.
+    assert.equal(await gitHookInstalled(fresh), false, label);
+    assert.match(formatStatus(await collectStatus(fresh)), /git hooks\s+not executable/, label);
+    const check = await collectCheck({ cwd: fresh });
+    assert.equal(check.ok, false, label);
+    assert.match(formatCheck(check, Date.now()), /git hooks not executable/, label);
+
+    await cli(fresh, args);
+
+    for (const path of paths) assert.equal((await stat(path)).mode & 0o777, 0o755, label);
     assert.equal(await gitHookInstalled(fresh), true, label);
   }
 });

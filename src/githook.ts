@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { workTreeTop } from "./git.js";
@@ -179,19 +180,43 @@ function withoutBlock(contents: string, existing: string): string {
   return contents.slice(0, start) + contents.slice(contents[stop] === "\n" ? stop + 1 : stop);
 }
 
-async function oneInstalled(cwd: string, hook: { name: string; command: string }): Promise<boolean> {
-  const path = await hookPath(cwd, hook.name);
-  if (!path) return false;
-  const contents = await readHook(path);
-  if (contents === undefined) return false;
-  // Nothing is missing from a hook that takes no block, and `isy init` cannot add it.
-  return existingBlock(contents) === (takesBlock(contents) ? block(hook.command) : undefined);
+/** Git skips a hook it cannot execute, with a hint to whoever commits, and runs nothing in it. */
+async function executable(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-/** True only with every hook in place: half-wired is not installed. */
+async function oneState(
+  cwd: string,
+  hook: { name: string; command: string },
+): Promise<"installed" | "missing" | "not-executable"> {
+  const path = await hookPath(cwd, hook.name);
+  if (!path) return "missing";
+  const contents = await readHook(path);
+  if (contents === undefined) return "missing";
+  // Nothing is missing from a hook that takes no block, and `isy init` cannot add it.
+  if (existingBlock(contents) !== (takesBlock(contents) ? block(hook.command) : undefined)) return "missing";
+  // A hook git will not execute is not installed, whatever the file says.
+  return !takesBlock(contents) || (await executable(path)) ? "installed" : "not-executable";
+}
+
+/** "installed" only with every hook in place and run by git: half-wired is not installed. */
+export async function gitHookState(cwd: string): Promise<"installed" | "missing" | "not-executable"> {
+  let state: "installed" | "not-executable" = "installed";
+  for (const hook of GIT_HOOKS) {
+    const one = await oneState(cwd, hook);
+    if (one === "missing") return one;
+    if (one === "not-executable") state = one;
+  }
+  return state;
+}
+
 export async function gitHookInstalled(cwd: string): Promise<boolean> {
-  for (const hook of GIT_HOOKS) if (!(await oneInstalled(cwd, hook))) return false;
-  return true;
+  return (await gitHookState(cwd)) === "installed";
 }
 
 /** The hooks that take no block, and what each would have to run: wiring them is the user's to do. */
@@ -317,11 +342,13 @@ async function linkedIntoTree(path: string, gitDir: string): Promise<boolean> {
 }
 
 /**
- * Bring the blocks an older isy wrote up to date where they stand, adding none:
- * what every run from a hook does first, so that an upgrade reaches a repository
- * the next time anything happens in it, with no `isy init` to go through. A block
- * that is only old waits in a shared file. One that breaks its hook comes out
- * wherever it is: the file goes back to what the user had, and a push stops failing.
+ * Bring the blocks an older isy wrote up to date where they stand, and the files
+ * git will not execute back to executable, adding none: what every run from a hook
+ * does first, so that an upgrade reaches a repository the next time anything
+ * happens in it, with no `isy init` to go through. A block that is only old, or
+ * only not executable, waits in a shared file: git tracks a file's mode too. One
+ * that breaks its hook comes out wherever it is: the file goes back to what the
+ * user had, and a push stops failing.
  */
 export async function repairGitHook(cwd: string): Promise<void> {
   const location = await hookLocation(cwd);
@@ -333,9 +360,11 @@ export async function repairGitHook(cwd: string): Promise<void> {
     if (contents === undefined) continue;
     const existing = existingBlock(contents);
     if (existing === undefined) continue;
-    const old =
-      existing !== block(hook.command) && !isShared(location) && !(await linkedIntoTree(path, location.gitDir));
-    if (old || !takesBlock(contents)) await installOne(cwd, hook);
+    const stale =
+      (existing !== block(hook.command) || !(await executable(path))) &&
+      !isShared(location) &&
+      !(await linkedIntoTree(path, location.gitDir));
+    if (stale || !takesBlock(contents)) await installOne(cwd, hook);
   }
 }
 

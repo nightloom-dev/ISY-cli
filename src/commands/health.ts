@@ -100,6 +100,15 @@ function checkProblems(check: CheckReport, verified: string[]): HealthProblem[] 
       unknown: "whether another tool rewrote the hook file",
       files: [],
     });
+  } else if (check.gitHook === "not-executable") {
+    problems.push({
+      id: "git-hook-not-executable",
+      summary: "an isy git hook in this repository is not executable, so git skips it and commits or pushes do not trigger an upload",
+      attempted: "check that git can execute the repository's post-commit and pre-push hooks",
+      evidence: "the hook file carries the isy block but has no execute permission",
+      unknown: "what took the permission away",
+      files: [],
+    });
   } else if (check.gitHook === "installed") {
     verified.push("the repository's post-commit and pre-push hooks carry the isy block, or are not shell scripts and were left alone");
   }

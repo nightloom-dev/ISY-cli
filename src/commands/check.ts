@@ -2,7 +2,7 @@ import { detectAgent, presentAgents } from "../agents/index.js";
 import type { AgentId } from "../agents/index.js";
 import { DEFAULT_API_BASE_URL, verifyToken } from "../api.js";
 import { readConfig } from "../config.js";
-import { gitHookInstalled, gitHooksDir } from "../githook.js";
+import { gitHookState, gitHooksDir } from "../githook.js";
 import { unresolvedErrors } from "../log.js";
 import { packageVersion } from "../paths.js";
 import { countQueue } from "../queue.js";
@@ -31,7 +31,7 @@ export interface CheckReport {
    * The per-repository post-commit hook. Undefined when the caller gave no
    * working directory to look in, which is not the same as it being absent.
    */
-  gitHook?: "installed" | "missing" | "not-a-repository";
+  gitHook?: "installed" | "missing" | "not-executable" | "not-a-repository";
   queue: { pending: number; failed: number };
   /**
    * Failures of unattended work that no later upload has answered for. The one
@@ -94,7 +94,7 @@ export async function collectCheck(
   let gitHook: CheckReport["gitHook"];
   if (options.cwd !== undefined) {
     if ((await gitHooksDir(options.cwd)) === undefined) gitHook = "not-a-repository";
-    else gitHook = (await gitHookInstalled(options.cwd)) ? "installed" : "missing";
+    else gitHook = await gitHookState(options.cwd);
   }
 
   const token = typeof config.token === "string" && config.token.length > 0 ? config.token : undefined;
@@ -132,7 +132,7 @@ export async function collectCheck(
     if (verified.ok && verified.githubLogin) report.githubLogin = verified.githubLogin;
   }
 
-  const incomplete = missingHooks.length > 0 || gitHook === "missing";
+  const incomplete = missingHooks.length > 0 || gitHook === "missing" || gitHook === "not-executable";
   if (incomplete) report.action = "run: isy init";
   else if (report.journalErrors > 0) report.action = "run: isy health";
   report.ok =
@@ -162,6 +162,7 @@ function missingDescription(report: CheckReport): string | undefined {
   // Reported separately from the CLI hooks: they live in the repository, not in
   // any one agent's config, and they are the piece that starts the whole loop.
   if (report.gitHook === "missing") parts.push("git hooks missing");
+  if (report.gitHook === "not-executable") parts.push("git hooks not executable");
 
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
