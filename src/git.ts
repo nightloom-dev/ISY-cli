@@ -77,22 +77,30 @@ async function headName(cwd: string): Promise<string | undefined> {
   return (await git(cwd, ["rev-parse", "--symbolic-full-name", "HEAD"]))?.replace(/^refs\/heads\//, "");
 }
 
-export async function collectGitMetadata(cwd: string): Promise<GitResult> {
+/**
+ * Where the checkout stands, or with `branch` where that branch stands: in this
+ * clone, or as origin last showed it once it is deleted here.
+ */
+export async function collectGitMetadata(cwd: string, branch?: string): Promise<GitResult> {
   const insideWorkTree = await git(cwd, ["rev-parse", "--is-inside-work-tree"]);
   if (insideWorkTree !== "true") return { ok: false, reason: "not-a-repository" };
 
-  const headSha = await git(cwd, ["rev-parse", "HEAD"]);
+  const headSha =
+    branch === undefined
+      ? await git(cwd, ["rev-parse", "HEAD"])
+      : ((await git(cwd, ["rev-parse", "--verify", "-q", `refs/heads/${branch}^{commit}`])) ??
+        (await git(cwd, ["rev-parse", "--verify", "-q", `refs/remotes/origin/${branch}^{commit}`])));
   if (!headSha) return { ok: false, reason: "no-commits" };
 
   const remoteUrl = await git(cwd, ["config", "--get", "remote.origin.url"]);
   const remote = remoteUrl ? normalizeRemote(remoteUrl) : undefined;
   if (!remote) return { ok: false, reason: "no-remote" };
 
-  const branch = (await headName(cwd)) ?? "HEAD";
-  const log = await git(cwd, ["log", "--format=%H", "-n", String(RECENT_SHA_COUNT)]);
+  const name = branch ?? (await headName(cwd)) ?? "HEAD";
+  const log = await git(cwd, ["log", "--format=%H", "-n", String(RECENT_SHA_COUNT), ...(branch === undefined ? [] : [headSha, "--"])]);
   const recentShas = log ? log.split("\n").map((line) => line.trim()).filter(Boolean) : [headSha];
 
-  return { ok: true, metadata: { remote, branch, headSha, recentShas } };
+  return { ok: true, metadata: { remote, branch: name, headSha, recentShas } };
 }
 
 /**

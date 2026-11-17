@@ -43,6 +43,12 @@ export interface SessionState {
    * is matched on, so it has to count as a change.
    */
   uploadedCommit?: string;
+  /**
+   * The branch that upload was filed under. A backfill sends a session under its
+   * own branch (`upload.ts:sendOne`), so one filed under another — by the push
+   * hook, or by an isy that sent the checkout's — has not been sent as it should.
+   */
+  uploadedBranch?: string;
   /** Candidate keys already printed, so a later commit does not repeat them. */
   shown?: string[];
   /** Record count at each commit, oldest first: maps a record index to a commit. */

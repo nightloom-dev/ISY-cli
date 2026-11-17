@@ -56,6 +56,8 @@ export interface UploadReport {
   scanned?: number;
   /** Sessions left out because their transcript could not be read. */
   unreadable?: number;
+  /** Sessions a backfill left out: which branch they worked on is not known here. */
+  unplaced?: number;
   /** The server's hourly upload allowance ran out; nothing was lost by it. */
   throttled?: boolean;
   /** Why the server refused the key. Nothing was lost by that either. */
@@ -216,7 +218,9 @@ async function changedSessions(cwd: string, state: ClientState, since?: number):
     for await (const file of sessionsInTree(agent, cwd)) {
       // Newest first, so the first one older than the date ends the list.
       if (since !== undefined && lastActive(file) < since) break;
-      if (looksUnchanged(state[file.path] ?? {}, file)) continue;
+      const known = state[file.path] ?? {};
+      // A backfill also sends again what went up under another branch than its own.
+      if (looksUnchanged(known, file) && (since === undefined || known.uploadedBranch === known.branch)) continue;
       targets.push({ agent, path: file.path, file, cwd: file.cwd });
     }
   }
@@ -296,6 +300,7 @@ async function sendOne(
   workingDir: string,
   fallbackSessionId: string,
   report: UploadReport,
+  ownGit?: (branch: string) => Promise<GitResult>,
 ): Promise<void> {
   const built = await buildPayload(
     target.agent,
@@ -312,6 +317,19 @@ async function sendOne(
   );
   if (!built) return;
   const { payload, gitBranch } = built;
+
+  // A backfill runs wherever it is typed, and the checkout's branch and HEAD say
+  // nothing about a session long over: the pull request they lead to is someone
+  // else's. Each goes up on its own branch, or not at all.
+  if (ownGit) {
+    const branch = namedBranch(state[target.path]?.branch, gitBranch);
+    const own = branch === undefined ? undefined : await ownGit(branch);
+    if (!own?.ok) {
+      report.unplaced = (report.unplaced ?? 0) + 1;
+      return;
+    }
+    payload.git = own.metadata;
+  }
 
   if (await isAbandoned(payload.sessionId, payload.contentHash)) {
     report.skipped = `session ${payload.sessionId} was given up on after ${MAX_ATTEMPTS} attempts`;
@@ -333,7 +351,8 @@ async function sendOne(
       ...current,
       uploadedHash: payload.contentHash,
       uploadedCommit: payload.commits?.at(-1)?.sha,
-      branch: namedBranch(current.branch, gitBranch, git.branch),
+      uploadedBranch: payload.git.branch,
+      branch: namedBranch(current.branch, gitBranch, payload.git.branch),
       ...seen,
     }));
     await updateConfig({ lastUploadAt: new Date().toISOString() });
@@ -373,6 +392,7 @@ async function passOver(target: Target, payload: UploadPayload): Promise<void> {
     ...current,
     rejectedHash: payload.contentHash,
     uploadedCommit: payload.commits?.at(-1)?.sha,
+    uploadedBranch: payload.git.branch,
     ...seen,
   }));
 }
@@ -437,13 +457,14 @@ export async function runUpload(
     return report;
   }
 
-  // One git call per directory, however many sessions ran in it.
+  // One git call per directory, however many sessions ran in it, and per branch.
   const repositories = new Map<string, GitResult>();
-  const gitFor = async (directory: string): Promise<GitResult> => {
-    const known = repositories.get(directory);
+  const gitFor = async (directory: string, branch?: string): Promise<GitResult> => {
+    const key = `${directory}\0${branch ?? ""}`;
+    const known = repositories.get(key);
     if (known) return known;
-    const result = await collectGitMetadata(directory);
-    repositories.set(directory, result);
+    const result = await collectGitMetadata(directory, branch);
+    repositories.set(key, result);
     return result;
   };
 
@@ -506,7 +527,8 @@ export async function runUpload(
     // server keys on, so each would replace the last.
     const sessionId = target.file?.sessionId ?? hook?.session_id ?? "unknown";
     try {
-      await sendOne(target, git.metadata, state, config, api, workingDir, sessionId, report);
+      const ownGit = options.since === undefined ? undefined : (branch: string) => gitFor(target.cwd ?? workingDir, branch);
+      await sendOne(target, git.metadata, state, config, api, workingDir, sessionId, report, ownGit);
     } catch (error) {
       // A `sudo` session's, owned by root, one deleted since the listing, or one
       // redaction throws on. That says nothing about the sessions behind it or the
@@ -518,6 +540,7 @@ export async function runUpload(
   }
 
   if (outside > 0) logLine(`upload: ${outside} changed session(s) ran outside a repository`);
+  if (report.unplaced) logLine(`upload: ${report.unplaced} session(s) left out, on no branch known here`);
 
   // "Nothing new to analyse" only when every session sent was already known.
   report.deduplicated = report.sent > 0 && report.fresh === 0;
@@ -540,6 +563,7 @@ export function formatUploadReport(report: UploadReport): string {
   if (report.drained > 0) parts.push(`${report.drained} queued session(s) sent`);
   if (report.abandoned > 0) parts.push(`${report.abandoned} session(s) given up on`);
   if (report.unreadable) parts.push(`${report.unreadable} session(s) could not be read, see isy health`);
+  if (report.unplaced) parts.push(`${report.unplaced} session(s) left out: which branch they worked on is not known here`);
 
   const line = parts.length > 0 ? `isy: ${parts.join(", ")}` : "isy: nothing to upload";
   // Its own line rather than another clause: this one is about the account, and

@@ -13,7 +13,7 @@ import { writeConfig } from "../config.js";
 import { formatCommit, runCommit, wordsOf } from "../commands/commit.js";
 import { collectGitMetadata, currentBranch } from "../git.js";
 import { readJournal } from "../log.js";
-import { formatUploadAlert, runUpload } from "../commands/upload.js";
+import { formatUploadAlert, formatUploadReport, runUpload } from "../commands/upload.js";
 import {
   COMMIT_COMMAND,
   PUSH_COMMAND,
@@ -36,7 +36,13 @@ let claudeConfig: string;
 let server: Server;
 let baseUrl: string;
 
-const uploads: { sessionId: string; contentHash: string; commits?: unknown; transcript?: string }[] = [];
+const uploads: {
+  sessionId: string;
+  contentHash: string;
+  commits?: unknown;
+  transcript?: string;
+  git?: { branch: string; headSha: string; recentShas: string[] };
+}[] = [];
 
 const saved = {
   home: process.env.ISY_HOME,
@@ -65,7 +71,7 @@ function record(entry: Record<string, unknown>): string {
  * Long enough to clear the stage 0 eligibility floor, with one manifest edit at
  * the end so `external_dependency` has something real to find.
  */
-function transcript(sessionId: string, cwd: string, dependency: string): string {
+function transcript(sessionId: string, cwd: string, dependency: string, gitBranch?: string): string {
   const lines = [
     record({
       type: "user",
@@ -73,6 +79,7 @@ function transcript(sessionId: string, cwd: string, dependency: string): string 
       parentUuid: null,
       sessionId,
       cwd,
+      ...(gitBranch === undefined ? {} : { gitBranch }),
       version: "2.0.0",
       timestamp: "2026-08-16T09:00:00Z",
       message: { role: "user", content: "go" },
@@ -134,11 +141,11 @@ function transcript(sessionId: string, cwd: string, dependency: string): string 
   return lines.join("\n");
 }
 
-async function writeSession(cwd: string, sessionId: string, dependency: string): Promise<string> {
+async function writeSession(cwd: string, sessionId: string, dependency: string, gitBranch?: string): Promise<string> {
   const dir = join(claudeConfig, "projects", projectSlug(cwd));
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${sessionId}.jsonl`);
-  await writeFile(path, transcript(sessionId, cwd, dependency));
+  await writeFile(path, transcript(sessionId, cwd, dependency, gitBranch));
   return path;
 }
 
@@ -677,13 +684,63 @@ test("uploads a session that ended without a commit of its own", async () => {
 
 test("a date sends the sessions active since then and leaves older ones on disk", async () => {
   const cwd = await newRepo("isy-commit-since-");
-  await writeSession(cwd, "sess-recent", "left-pad");
-  await age(await writeSession(cwd, "sess-old", "ms"), 10);
+  await writeSession(cwd, "sess-recent", "left-pad", "main");
+  await age(await writeSession(cwd, "sess-old", "ms", "main"), 10);
 
   const report = await runUpload({ silent: true, all: true, since: Date.now() - 5 * 24 * 60 * 60 * 1000 }, cwd);
 
   assert.equal(report.sent, 1);
   assert.equal(uploads.length, 1);
+});
+
+test("a date sends each session on its own branch and head, wherever the checkout stands", async () => {
+  const cwd = await newRepo("isy-commit-since-own-");
+  const commitOn = async (branch: string): Promise<string> => {
+    await run("git", ["checkout", "-q", "-b", branch, "main"], { cwd });
+    await writeFile(join(cwd, `${branch}.txt`), branch);
+    await run("git", ["add", "."], { cwd });
+    await run("git", ["commit", "-q", "-m", branch], { cwd });
+    return (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+  };
+  const feature = await commitOn("feature");
+  const gone = await commitOn("gone");
+  await run("git", ["update-ref", `refs/remotes/origin/gone`, gone], { cwd });
+  const pr = await commitOn("pr");
+  await run("git", ["branch", "-q", "-D", "gone"], { cwd });
+  // Standing on another pull request's branch, as a backfill typed anywhere does.
+  await writeSession(cwd, "sess-feature", "left-pad", "feature");
+  await writeSession(cwd, "sess-gone", "ms", "gone");
+  const since = Date.now() - 24 * 60 * 60 * 1000;
+
+  // The push hook files a session under the checkout, as it always has.
+  await runUpload({ silent: true, all: true }, cwd);
+  assert.deepEqual(uploads.map((upload) => upload.git?.branch), ["pr", "pr"]);
+  uploads.length = 0;
+  // Never uploaded, and its transcript names no branch.
+  await writeSession(cwd, "sess-nowhere", "chalk");
+
+  const report = await runUpload({ silent: true, all: true, since }, cwd);
+
+  // Sent before under the checkout's branch, so not "nothing new": each goes again,
+  // on its own branch, with that branch's commits and none of the checkout's.
+  const sent = new Map(uploads.map((upload) => [upload.sessionId, upload.git]));
+  assert.equal(sent.get("sess-feature")?.branch, "feature");
+  assert.equal(sent.get("sess-feature")?.headSha, feature);
+  assert.equal(sent.get("sess-feature")?.recentShas.includes(pr), false);
+  // Deleted here, still known from origin.
+  assert.equal(sent.get("sess-gone")?.branch, "gone");
+  assert.equal(sent.get("sess-gone")?.headSha, gone);
+  // No branch recorded anywhere: left out and counted rather than filed under "pr".
+  assert.equal(sent.has("sess-nowhere"), false);
+  assert.equal(report.sent, 2);
+  assert.equal(report.unplaced, 1);
+  assert.match(formatUploadReport(report), /1 session\(s\) left out/);
+
+  uploads.length = 0;
+  const again = await runUpload({ silent: true, all: true, since }, cwd);
+  assert.equal(again.sent, 0);
+  assert.equal(again.unplaced, 1);
+  assert.equal(uploads.length, 0);
 });
 
 test("does not send a transcript the server already has", async () => {
